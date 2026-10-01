@@ -1,0 +1,497 @@
+================================================================================
+          INVENTARIO COMPLETO DE ARCHIVOS Y PROGRAMAS DEL REPOSITORIO
+                       PROYECTO: DISEÑADOR DE PIXEL ART
+================================================================================
+Repositorio: seba5010/dise-ador-de-pixel-art
+Ruta local:  D:\escritorio\diseñador de pixel art
+Propósito:   Suite integral de generación, entrenamiento, normalización, control
+             de calidad y ensamble de spritesheets de personajes en Pixel Art
+             con Inteligencia Artificial (Stable Diffusion + U-Net + ControlNet).
+Fecha:       01 de Octubre, 2026
+================================================================================
+
+ESTRUCTURA GENERAL DEL REPOSITORIO:
+- Programas y Scripts Ejecutables en Raíz: 23 scripts Python + 10 lanzadores Batch (.bat)
+- Aplicación Web y Servidor de Monitoreo: 5 archivos (HTML, JS, JSON, Python)
+- Módulos del Motor Central (pixel_ai_engine/): 8 módulos Python
+- Pesos y Modelos Neuronales (checkpoints/): 2 modelos de inferencia en Git + 4 checkpoints locales
+- Plantillas y Guías Estructurales: 17 archivos (ControlNet y edición manual)
+- Spritesheets y Personajes Base (personajes/): 27 hojas maestras (Alex, Amaro, Conny, Dana, Tori)
+- Hojas Generadas y Salidas (output/): 14 spritesheets y vistas previas
+- Muestras de Auditoría y Entrenamiento (training_samples/): 141 imágenes de control
+- Dataset de Frames Individuales (dataset_frames_individuales/): 1243 frames organizados
+- Framework Base Portable (stable-diffusion-webui-forge-main/): 1495 archivos
+- Documentos Técnicos y Bitácoras: 8 documentos Markdown (.md)
+- Archivos Pesados de Soporte (>100MB): Modelos LoRA, ControlNet Canny, cachés y entorno CUDA
+
+================================================================================
+SECCIÓN 1: PROGRAMAS PRINCIPALES Y SCRIPTS PYTHON EN LA RAÍZ
+================================================================================
+
+[01] train.py
+     - Tipo: Script Python principal (Entrenamiento general).
+     - Función: Punto de entrada para el entrenamiento de redes neuronales de pixel art.
+       Gestiona el bucle de entrenamiento, selección de fases (Fase 1: 16x4 con Conny/Dana,
+       Fase 2: 8x12 con Alex/Amaro), cálculo de funciones de pérdida (L1 + Perceptual +
+       Adversarial + Alpha/Color) y guardado automático de checkpoints periódicos.
+
+[02] train_dos_fases_1500.py
+     - Tipo: Script Python de pipeline automatizado completo.
+     - Función: Ejecuta una rutina de entrenamiento de 2 fases encadenadas (hasta 1500-2000 épocas).
+       Fase 1: Pulido de alta definición en rejilla 16x4 (64 frames) focalizado en detalles de 1px.
+       Fase 2: Transfer learning hacia rejilla canónica 8x12 (96 animaciones completas).
+       Incluye control de parada temprana, prevención de colapso y validación continua.
+
+[03] pulir_fase1.py
+     - Tipo: Script Python de afinamiento y super-resolución.
+     - Función: Toma el checkpoint base de la Fase 1 (alrededor de la época 500-700) y aplica
+       un ajuste fino de hiperparámetros (tasa de aprendizaje reducida, peso adversarial
+       controlado de 0.15) para forzar bordes duros de 1px, limpieza de ruido y definición
+       anatómica sin distorsionar las proporciones maestras.
+
+[04] generate_character_sheet.py
+     - Tipo: Script Python principal de inferencia (Generador de Spritesheets).
+     - Función: Recibe como entrada una imagen frontal o spritesheet base de un nuevo
+       personaje y genera automáticamente la hoja completa de animaciones (16x4 o 8x12)
+       utilizando el modelo neuronal entrenado (best_generator.pt) y el módulo de mejora.
+
+[05] pipeline_hibrido_tori.py
+     - Tipo: Script Python de síntesis híbrida.
+     - Función: Diseñado para personajes complejos como Tori (vestimenta con capucha y silueta
+       más ancha). Combina generación guiada con plantillas de pose, destilación de frames
+       originales, re-escalado canónico y post-procesado morfológico de píxeles.
+
+[06] fase3_revision_critica.py
+     - Tipo: Script Python de elevación estética y revisión crítica.
+     - Función: Implementa la 'Fase 3' del diseño: analiza pixel a pixel las hojas generadas,
+       corrige asimetrías en ojos, empareja tonos de piel según la paleta del personaje,
+       limpia píxeles flotantes (stray pixels) y genera vistas previas ampliadas con zoom 4x.
+
+[07] finalize_generated_sheets.py
+     - Tipo: Script Python de ensamble geométrico final.
+     - Función: Toma las hojas generadas por la IA y las ajusta a la cuadrícula canónica
+       estricta (724x2172 px o 1024x1536 px), asegurando que cada celda de sprite quede
+       centrada con su punto de anclaje en el suelo sin cortes en los bordes de la celda.
+
+[08] extract_individual_frames.py
+     - Tipo: Script Python de segmentación de dataset.
+     - Función: Procesa los spritesheets de Alex, Amaro, Conny, Dana y Tori, cortando cada
+       animación en frames individuales etiquetados con su fila, columna, dirección y acción
+       (caminar, idle, cocinar, pensar, caja, celebrar) hacia dataset_frames_individuales/.
+
+[09] normalize_spritesheets.py
+     - Tipo: Script Python de normalización geométrica general.
+     - Función: Convierte spritesheets en bruto a la plantilla estándar canónica de 724x2172 píxeles,
+       estandarizando espacios entre celdas, transparencias alfa y alineaciones de cabeza y pies.
+
+[10] normalize_8x12_dynamic.py
+     - Tipo: Script Python de normalización dinámica para rejilla 8x12.
+     - Función: Detecta dinámicamente la caja delimitadora (bounding box) de cada sprite en celdas
+       de 128x128 píxeles y lo ancla en el piso de la celda de forma consistente en toda la animación.
+
+[11] normalize_8x12_cv2_mold.py
+     - Tipo: Script Python de normalización asistida por visión artificial (OpenCV).
+     - Función: Utiliza máscaras binarias y detección de contornos mediante OpenCV para encajar
+       sprites en un molde predeterminado, corrigiendo deformaciones de escala.
+
+[12] normalize_8x12_global.py
+     - Tipo: Script Python de normalización con escala global uniforme.
+     - Función: Aplica un único factor de escala global a todos los frames del personaje para
+       garantizar que no haya variaciones involuntarias de estatura entre diferentes animaciones.
+
+[13] normalize_8x12_local.py
+     - Tipo: Script Python de ajuste local celda por celda.
+     - Función: Ajusta el centrado horizontal y vertical de forma individual frame a frame,
+       especialmente útil para frames de movimiento lateral con brazos extendidos.
+
+[14] audit_frames_8x12.py
+     - Tipo: Script Python de auditoría de frames.
+     - Función: Inspecciona y genera un reporte en CSV/JSON con las dimensiones exactas,
+       posiciones de centro de masa y niveles de transparencia de cada uno de los 96 frames.
+
+[15] audit_quality_8x12.py
+     - Tipo: Script Python de auditoría de calidad métrica.
+     - Función: Evalúa la fidelidad del pixel art midiendo cantidad de colores únicos, presencia
+       de píxeles semitransparentes indebidos (anti-aliasing borroso) y consistencia cromática.
+
+[16] audit_problem_sheets.py
+     - Tipo: Script Python de diagnóstico de sprites problemáticos.
+     - Función: Genera paneles de auditoría visual lado a lado (Original vs Generado vs Diferencia)
+       para las hojas y filas reportadas con fallos de anatomía o ropa.
+
+[17] repair_problem_sheets.py
+     - Tipo: Script Python de reparación de hojas con anomalías.
+     - Función: Aplica parches correctivos sobre spritesheets dañados (recuperando frames
+       deformados desde las fuentes maestras originales) sin alterar el resto de la hoja.
+
+[18] sample_frames_8x12.py
+     - Tipo: Script Python de muestreo y validación visual.
+     - Función: Extrae un conjunto representativo de celdas clave (frente, perfil, espalda,
+       acción de trabajo) para verificación rápida por parte del diseñador humano.
+
+[19] check_dims.py
+     - Tipo: Script Python de diagnóstico de dimensiones.
+     - Función: Comprueba las resoluciones exactas en píxeles de plantillas, marcos y hojas maestras,
+       verificando que cumplan con los múltiplos requeridos (ej. 1024x1536, 724x2172, 341x1024).
+
+[20] check_syntax.py
+     - Tipo: Script Python de prueba de sintaxis.
+     - Función: Compila internamente con py_compile los módulos centrales para garantizar que
+       no existan errores de sintaxis antes de lanzar entrenamientos largos en segundo plano.
+
+[21] create_blank_canonical_grid.py
+     - Tipo: Script Python generador de lienzos base.
+     - Función: Genera plantillas y cuadrículas transparentes o con guías visuales (marcos y líneas)
+       en blanco con la geometría canónica exacta requerida por el pipeline.
+
+[22] test_pipeline.py
+     - Tipo: Script Python de integración y testeo rápido.
+     - Función: Carga el modelo actual, ejecuta una pasada completa de prueba (inferencia +
+       enhancer + guardado de imagen) y reporta si todos los módulos funcionan armónicamente.
+
+[23] monitor_server.py
+     - Tipo: Script Python servidor HTTP local.
+     - Función: Servidor ligero basado en http.server que expone en http://localhost:8787
+       el panel de control visual en tiempo real (monitor.html) con métricas y previews.
+
+================================================================================
+SECCIÓN 2: SCRIPTS DE EJECUCIÓN POR LOTES (.BAT) EN LA RAÍZ
+================================================================================
+
+[01] run_train.bat
+     - Tipo: Menú interactivo en consola Windows.
+     - Función: Ofrece opciones numeradas para:
+       1) Entrenar Fase 1 (16x4 con Conny y Dana).
+       2) Entrenar Fase 2 (8x12 con Alex y Amaro).
+       3) Iniciar el servidor de monitoreo web.
+       4) Salir.
+
+[02] run_train_dos_fases_1500.bat
+     - Tipo: Lanzador automatizado de pipeline completo.
+     - Función: Ejecuta train_dos_fases_1500.py con 800 épocas para Fase 1, 1100 para Fase 2
+       y batch size de 8, corriendo el pulido, la transferencia y la elevación final.
+
+[03] run_train_fase1_16x4.bat
+     - Tipo: Lanzador directo de Fase 1.
+     - Función: Inicia directamente el entrenamiento de la base pequeña (16x4 / 64 frames)
+       guardando resultados en checkpoints/base_generator_16x4.pt.
+
+[04] run_train_fase2_8x12.bat
+     - Tipo: Lanzador directo de Fase 2.
+     - Función: Inicia la transferencia de conocimiento hacia la plantilla completa de 8x12
+       (poses de cocina, pensar, servir, celebrar) guardando en checkpoints/best_generator.pt.
+
+[05] run_train_infinite.bat
+     - Tipo: Lanzador de entrenamiento continuo con auto-reanudación.
+     - Función: Lanza en paralelo el servidor del monitor web e inicia el bucle de entrenamiento
+       con batch size 16 hasta interrupción manual (Ctrl+C), guardando cada 10 épocas.
+
+[06] run_pulir_fase1.bat
+     - Tipo: Lanzador de optimización de detalles finos.
+     - Función: Ejecuta pulir_fase1.py para reanudar el modelo de Fase 1 y aplicar los filtros
+       anti-colapso y texturizado nítido de 1px.
+
+[07] run_generate.bat
+     - Tipo: Lanzador interactivo de generación para usuarios.
+     - Función: Permite ingresar el nombre o ruta de un personaje para generar su spritesheet
+       completo de manera sencilla sin comandos manuales.
+
+[08] run_monitor.bat
+     - Tipo: Lanzador de interfaz web.
+     - Función: Configura la terminal con codificación UTF-8 (chcp 65001), abre el navegador
+       en http://localhost:8787/monitor.html y arranca monitor_server.py.
+
+[09] run_dims.bat
+     - Tipo: Lanzador de comprobación de resoluciones.
+     - Función: Ejecuta check_dims.py para verificar la compatibilidad de dimensiones de plantillas.
+
+[10] run_check.bat
+     - Tipo: Lanzador de comprobación rápida.
+     - Función: Ejecuta comprobaciones generales de sanidad del entorno de Python.
+
+================================================================================
+SECCIÓN 3: MOTOR DE INTELIGENCIA ARTIFICIAL (pixel_ai_engine/)
+================================================================================
+
+[01] pixel_ai_engine/__init__.py
+     - Tipo: Módulo de inicialización del paquete.
+     - Función: Declara la carpeta como paquete de Python e importa los componentes clave.
+
+[02] pixel_ai_engine/config.py
+     - Tipo: Módulo de configuración global del motor.
+     - Función: Centraliza rutas de carpetas, resoluciones de trabajo (16x4, 8x12, 128x128 px
+       por celda), hiperparámetros de entrenamiento (learning rate, betas de Adam, pesos de pérdidas)
+       y paletas cromáticas canónicas de cada personaje.
+
+[03] pixel_ai_engine/models.py
+     - Tipo: Arquitecturas de redes neuronales y funciones de pérdida personalizadas.
+     - Función: Implementa:
+       * Generador U-Net con conexiones residuales y normalización adaptativa.
+       * Discriminador PatchGAN multiescala de alta resolución.
+       * Pérdidas compuestas: Pérdida L1, Pérdida Perceptual (VGG), Pérdida de Color y
+         Pérdida de Borde Duro (especial para preservar estética de pixel art).
+
+[04] pixel_ai_engine/dataset.py
+     - Tipo: Cargador de datos y preprocesamiento de imágenes.
+     - Función: Implementa clases PyTorch Dataset/DataLoader para cargar spritesheets y frames,
+       aplicar aumentos geométricos compatibles con pixel art (sin interpolaciones bilineales)
+       y gestionar la caché de tensores en memoria.
+
+[05] pixel_ai_engine/train.py
+     - Tipo: Motor interno de entrenamiento del paquete.
+     - Función: Contiene la lógica profunda del bucle de entrenamiento, retropropagación,
+       actualización del optimizador, registro de estadísticas en training_status.json y
+       generación de vistas previas en training_samples/.
+
+[06] pixel_ai_engine/enhancer.py
+     - Tipo: Módulo quirúrgico de post-procesamiento y mejora de Pixel Art.
+     - Función: Realiza operaciones morfológicas discretas sobre las imágenes generadas:
+       cuantización de color a la paleta maestra, binarización de canal alfa (sin transparencias
+       parciales), remoción de píxeles huérfanos aislados y refuerzo de contornos oscuros.
+
+[07] pixel_ai_engine/phase3_critical_enhancer.py
+     - Tipo: Módulo avanzado de revisión crítica de tercera etapa.
+     - Función: Aplica mejoras anatómicas refinadas: alineación perfecta de rasgos faciales
+       (ojos simétricos de 2x2 o 1x2 px), detección y corrección de orejas, ajuste de accesorios
+       (gorro de chef, delantal, botones) y armonización de volumen.
+
+[08] pixel_ai_engine/quality_gate.py
+     - Tipo: Puerta de control de calidad automática (Quality Gate).
+     - Función: Evalúa métricas numéricas sobre los sprites generados (IoU de silueta, PSNR,
+       SSIM contra la pose canónica y coherencia temporal entre frames contiguos). Si el sprite
+       no supera el umbral de calidad del 85-90%, activa alertas o repite el refinamiento.
+
+[09] pixel_ai_engine/generate_character_sheet.py
+     - Tipo: Módulo interno de inferencia y ensamblado de spritesheet.
+     - Función: Lógica de bajo nivel que toma una imagen de referencia, la proyecta a través
+       de la red generativa celda a celda y ensambla la matriz completa de animación.
+
+================================================================================
+SECCIÓN 4: APLICACIÓN WEB Y MONITOREO EN TIEMPO REAL
+================================================================================
+
+[01] monitor.html
+     - Tipo: Interfaz gráfica web interactiva (Frontend).
+     - Función: Dashboard web moderno con tema oscuro que muestra en tiempo real:
+       * Gráficos dinámicos de pérdida (Loss G, Loss D, Loss L1, etc.).
+       * Indicador de época actual, porcentaje de avance y tasa de aprendizaje.
+       * Galería visual interactiva con los previews de sprites generados por época.
+       * Tabla de estado de salud del modelo (evita sorpresas de colapso de gradiente).
+
+[02] monitor_server.py
+     - Tipo: Backend del monitor web (Servidor HTTP local).
+     - Función: Atiende peticiones en el puerto 8787, lee training_status.json y sirve los
+       archivos estáticos (HTML, JS, imágenes de training_samples/).
+
+[03] training_status.json
+     - Tipo: Base de datos de estado en JSON.
+     - Función: Almacena el snapshot actual del entrenamiento (última época, pérdidas,
+       estado del generador, tiempo transcurrido y ruta del último preview generado).
+
+[04] frame_map_8x12.json
+     - Tipo: Diccionario estructurado de metadatos de animación (8x12).
+     - Función: Mapea cada una de las 96 celdas (fila 0 a 7, columna 0 a 11) con su respectiva
+       animación, nombre de acción (idle, walk, cook, serve, etc.), dirección y número de frame.
+
+[05] frame_map_8x12.js
+     - Tipo: Módulo JavaScript complementario.
+     - Función: Exporta el mapa de frames para su uso interactivo dentro del navegador web.
+
+================================================================================
+SECCIÓN 5: MODELOS NEURONALES Y CHECKPOINTS (checkpoints/)
+================================================================================
+
+[01] checkpoints/best_generator.pt (Trackeado en Git - ~63 MB)
+     - Tipo: Pesos neuronales de inferencia (PyTorch state_dict).
+     - Función: El modelo generador óptimo obtenido en los entrenamientos, calibrado con
+       todas las poses maestras. Listo para producción y generación de nuevos personajes.
+
+[02] checkpoints/base_generator_16x4.pt (Trackeado en Git - ~63 MB)
+     - Tipo: Pesos neuronales de inferencia (PyTorch state_dict).
+     - Función: El modelo generador base obtenido en la Fase 1 (16x4), especializado en
+       las proporciones y anatomía fundamental previa a la transferencia de poses de cocina.
+
+[03] checkpoints/latest_checkpoint.pt (Local / Fuera de Git - 212.2 MB)
+     - Tipo: Checkpoint completo de entrenamiento.
+     - Función: Contiene pesos de G, D, estados del optimizador Adam y métricas para reanudar.
+
+[04] checkpoints/latest_checkpoint_16x4.pt (Local / Fuera de Git - 212.2 MB)
+     - Tipo: Checkpoint completo de Fase 1.
+     - Función: Estado completo para reanudar la Fase 1.
+
+[05] checkpoints/dataset_cache_256_8x12.pt (Local / Fuera de Git - 677.5 MB)
+     - Tipo: Caché binario de tensores preprocesados.
+     - Función: Acelera el entrenamiento cargando directamente los 96 frames en la VRAM de la GPU.
+
+[06] checkpoints/dataset_cache_256_16x4.pt (Local / Fuera de Git - 388.6 MB)
+     - Tipo: Caché binario de tensores de rejilla 16x4 (64 frames).
+
+================================================================================
+SECCIÓN 6: PLANTILLAS Y GUÍAS ESTRUCTURALES
+================================================================================
+
+Subcarpeta PLANTILLAS_CONTROLNET/:
+[01] PLANTILLAS_CONTROLNET/marco_16x4.png - Guía de líneas y rejilla para formato 16x4.
+[02] PLANTILLAS_CONTROLNET/marco_8x12.png - Guía de líneas y rejilla para formato 8x12.
+[03] PLANTILLAS_CONTROLNET/molde.png - Molde genérico de silueta anatómica.
+[04] PLANTILLAS_CONTROLNET/molde_16x4.png - Molde con siluetas anatómicas en 16x4.
+[05] PLANTILLAS_CONTROLNET/molde_8x12.png - Molde con siluetas anatómicas en 8x12.
+
+Subcarpeta plantillas_edicion_manual/:
+[06] plantillas_edicion_manual/cuadricula_8x12_1024x1536_fondo_cian.png - Cuadrícula con fondo de contraste cian.
+[07] plantillas_edicion_manual/cuadricula_8x12_1024x1536_transparente.png - Cuadrícula transparente para superposición.
+[08] plantillas_edicion_manual/lienzo_8x12_1024x1536_transparente.png - Lienzo limpio a resolución canónica.
+[09] plantillas_edicion_manual/marco_16x4_341x1024.png - Marco a resolución media.
+[10] plantillas_edicion_manual/marco_16x4_682x2048.png - Marco a alta resolución 2K.
+[11] plantillas_edicion_manual/marco_8x12_682x1024.png - Marco 8x12 compacto.
+[12] plantillas_edicion_manual/marco_8x12_1024x1536.png - Marco 8x12 canónico de trabajo.
+[13] plantillas_edicion_manual/molde_16x4_341x1024.png - Molde siluetas 16x4 medio.
+[14] plantillas_edicion_manual/molde_16x4_682x2048.png - Molde siluetas 16x4 alta resolución.
+[15] plantillas_edicion_manual/molde_8x12_682x1024.png - Molde siluetas 8x12 compacto.
+[16] plantillas_edicion_manual/molde_8x12_1024x1536.png - Molde siluetas 8x12 estándar.
+[17] plantillas_edicion_manual/Imagen de ChatGPT 26 sept 2026, 02_36_39.png - Muestra de referencia estética.
+
+Plantillas en Raíz:
+[18] plantilla_16x4.png - Plantilla canónica de referencia para sprites 16x4.
+[19] plantilla de los spritesheets.png - Plantilla canónica de referencia para sprites 8x12.
+[20] plantilla_de_los_spritesheets_16x4_BACKUP.png - Copia de seguridad de plantilla 16x4.
+[21] marco_16x4.png - Marco de cuadrícula 16x4 en raíz.
+[22] marco_8x12.png - Marco de cuadrícula 8x12 en raíz.
+[23] diseño de ropa de chef ropa blanca.png - Esquema cromático oficial de ropa de chef blanca.
+[24] diseño de ropa de chef ropa negra.png - Esquema cromático oficial de ropa de chef negra.
+
+================================================================================
+SECCIÓN 7: PERSONAJES Y SPRITESHEETS BASE (personajes/)
+================================================================================
+
+Contiene los spritesheets oficiales de los 5 personajes maestros:
+- Alex (personajes/alex/):
+  * alex_rbchef.png: Spritesheet completo de Alex con ropa blanca de chef.
+  * alex_rnchef.png: Spritesheet completo de Alex con ropa negra de chef.
+  * alex_rnormal.png: Spritesheet completo de Alex con ropa normal/casual.
+  * movimientos_rbchef.png, movimientos_rnchef.png, movimientos_rnormal.png: Hojas de movimientos.
+- Amaro (personajes/amaro/):
+  * amaro_rbchef.png, amaro_rnchef.png, amaro_rnormal.png y sus correspondientes hojas de movimientos.
+- Conny (personajes/conny/):
+  * conny_rbchef.png, conny_rnchef.png, conny_rnormal.png, conny ropa blanca chef.png y hojas de movimientos.
+- Dana (personajes/dana/):
+  * dana_rbchef.png, dana_rnchef.png, dana_rnormal.png y sus hojas de movimientos.
+- Tori (personajes/tori/):
+  * tori_rnormal.png: Spritesheet base de Tori (personaje especial con capucha/hoodie).
+  * tori_rnormal_vista_previa.png: Vista previa de validación visual de Tori.
+
+================================================================================
+SECCIÓN 8: HOJAS GENERADAS Y SALIDAS (output/)
+================================================================================
+
+Spritesheets completos resultantes de la inferencia del modelo y del post-procesado:
+[01] output/alex_rbchef_spritesheet_8x12.png
+[02] output/alex_rbchef_spritesheet_8x12_FASE3_ELEVADO.png (Versión con pulido quirúrgico)
+[03] output/alex_rbchef_spritesheet_8x12_FASE3_ELEVADO_vista_previa.png
+[04] output/alex_rbchef_spritesheet_8x12_vista_previa.png
+[05] output/test_tori_sheet_clean.png
+[06] output/test_tori_sheet_clean_preview.png
+[07] output/tori_spritesheet_8x12.png
+[08] output/tori_spritesheet_8x12_FASE3_ELEVADO.png
+[09] output/tori_spritesheet_8x12_FASE3_ELEVADO_vista_previa.png
+[10] output/tori_spritesheet_8x12_vista_previa.png
+[11] output/tori_spritesheet_best.png
+[12] output/tori_spritesheet_best_vista_previa.png
+[13] output/tori_spritesheet_latest.png
+[14] output/tori_spritesheet_latest_vista_previa.png
+
+================================================================================
+SECCIÓN 9: DATASET DE FRAMES INDIVIDUALES (dataset_frames_individuales/)
+================================================================================
+
+Total: 1243 archivos PNG individuales segmentados y etiquetados por pose y acción.
+Estructura por subdirectorios:
+- dataset_frames_individuales/00_MOLDES_POSES/: Máscaras y siluetas base de referencia anatómica.
+- dataset_frames_individuales/ALEX/: Todos los frames individuales de Alex (rbchef, rnchef, rnormal).
+- dataset_frames_individuales/AMARO/: Frames individuales de Amaro en todas sus variantes.
+- dataset_frames_individuales/CONNY/: Frames individuales de Conny (base clave para Fase 1).
+- dataset_frames_individuales/DANA/: Frames individuales de Dana (base clave para Fase 1).
+- dataset_frames_individuales/TORI/: Frames individuales de Tori segmentados por acción.
+
+================================================================================
+SECCIÓN 10: ARCHIVOS DE AUDITORÍA Y ENTRENAMIENTO (training_samples/)
+================================================================================
+
+Total: 141 archivos PNG generados durante el ciclo de vida del entrenamiento.
+Propósito:
+- Registro visual del avance por épocas (ej. preview_570_cell0.png, c0_epoch_700.png, etc.).
+- Comparativas ampliadas (zoom 4x) para audición de píxeles:
+  * comparativa_original_vs_ia_zoom4x.png
+  * comparativa_fase3_zoom4x.png
+  * side_by_side_raw_vs_enh_zoom4x.png
+  * tori_head_zone_zoom.png, etc.
+- Pruebas diagnósticas de celdas problemáticas (ojos, orejas, simetría y delantales).
+
+================================================================================
+SECCIÓN 11: PLATAFORMA BASE DE GENERACIÓN (stable-diffusion-webui-forge-main/)
+================================================================================
+
+Total: 1495 archivos.
+- Descripción: Fork optimizado de Stable Diffusion WebUI (Forge), diseñado para inferencia
+  rápida y gestión eficiente de memoria VRAM.
+- Funcionalidad en el proyecto:
+  * Provee el backend de difusión para el pipeline de generación guiada por texto y ControlNet.
+  * Contiene scripts de extensiones, manejadores de modelos (LoRA, ControlNet, VAE) y servidores web.
+
+================================================================================
+SECCIÓN 12: DOCUMENTACIÓN TÉCNICA Y BITÁCORAS (.md)
+================================================================================
+
+[01] DOCUMENTACION_ARCHIVOS_PESADOS.md
+     - Descripción técnica exhaustiva de los archivos mayores a 100 MB excluidos de Git
+       (pesos neuronales, cachés de tensores y runtime CUDA).
+
+[02] INFORME_ESTRUCTURA_Y_ARCHIVOS.md
+     - Informe de arquitectura del proyecto, flujo de trabajo entre módulos y roles de archivos.
+
+[03] BITACORA_TECNICA_APRENDIZAJE_Y_COLAPSO.md
+     - Bitácora de ingeniería que documenta las causas del colapso de gradiente en modelos
+       GAN de pixel art y las soluciones aplicadas (pesos de penalización y estabilización).
+
+[04] DIAGNOSTICO_AUDITORIA_FASE1.md
+     - Reporte de auditoría y diagnóstico de calidad de la Fase 1 (16x4 con Conny y Dana).
+
+[05] DIAGNOSTICO_AUDITORIA_FASE2.md
+     - Reporte de validación de la transferencia de aprendizaje a la cuadrícula 8x12 (poses de cocina).
+
+[06] DATASET_REORGANIZATION_STATUS.md
+     - Estado del proceso de reorganización, catalogación y limpieza del dataset de sprites.
+
+[07] SESSION_2026-09-26_8x12.md
+     - Registro de sesión técnica con decisiones de diseño sobre la plantilla canónica 8x12.
+
+[08] .gitignore
+     - Archivo de reglas de Git para excluir archivos pesados (>100MB), temporales y cachés.
+
+================================================================================
+SECCIÓN 13: ARCHIVOS PESADOS LOCALES (> 100 MB) EXTERNOS A GIT
+================================================================================
+
+Estos archivos residen en tu disco duro para el funcionamiento local y no se suben
+a GitHub por sobrepasar los límites de almacenamiento remoto:
+
+1. control_v11p_sd15_canny.pth (1.38 GB)
+   - Red ControlNet v1.1 entrenada para guía de bordes Canny en Stable Diffusion v1.5.
+2. pixel-art-xl-v1.1.safetensors (162.6 MB)
+   - Adaptador LoRA estilístico para forzar estética retro de pixel art puro.
+3. webui_forge_cu121_torch231.7z (1.74 GB)
+   - Paquete portable comprimido del entorno CUDA 12.1 y PyTorch 2.3.1.
+4. checkpoints/dataset_cache_256_8x12.pt (677.5 MB)
+   - Tensores de alta velocidad para entrenamiento en rejilla 8x12.
+5. checkpoints/dataset_cache_256_16x4.pt (388.6 MB)
+   - Tensores de alta velocidad para entrenamiento en rejilla 16x4.
+6. checkpoints/latest_checkpoint.pt (212.2 MB)
+   - Estado completo de entrenamiento (pesos + optimizador Adam) en rejilla 8x12.
+7. checkpoints/latest_checkpoint_16x4.pt (212.2 MB)
+   - Estado completo de entrenamiento (pesos + optimizador Adam) en rejilla 16x4.
+8. webui forger/ (~3.5 GB en librerías nativas .dll)
+   - Librerías de aceleración por hardware de Nvidia (torch_cuda.dll, cublasLt64_12.dll, etc.).
+
+================================================================================
+                        FIN DEL INVENTARIO GENERAL
+================================================================================
