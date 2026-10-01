@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Pixel AI Engine — Monitor en Vivo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:       #0d0f14;
+      --card:     #13161e;
+      --card2:    #181b25;
+      --border:   #252836;
+      --accent:   #6c63ff;
+      --accent2:  #48bb78;
+      --warn:     #ed8936;
+      --danger:   #fc5c65;
+      --text:     #e2e5f1;
+      --dim:      #7b82a0;
+      --mono:     'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* ── TOP BAR ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 50;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 14px; }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .badge-live {
+      display: flex; align-items: center; gap: 7px;
+      background: rgba(72,187,120,.12); color: var(--accent2);
+      padding: 5px 13px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
+      border: 1px solid rgba(72,187,120,.2);
+    }
+    .badge-stopped {
+      background: rgba(252,92,101,.12); color: var(--danger);
+      border-color: rgba(252,92,101,.2);
+    }
+    .badge-phase {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(108,99,255,.14); color: #8c82ff;
+      padding: 5px 14px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
+      border: 1px solid rgba(108,99,255,.3);
+      letter-spacing: .2px;
+    }
+    .badge-phase.phase2 {
+      background: rgba(72,187,120,.14); color: #48bb78;
+      border-color: rgba(72,187,120,.3);
+    }
+    .pulse { width:8px; height:8px; border-radius:50%; background:var(--accent2); animation: pulse 1.4s infinite; }
+    .badge-stopped .pulse { background: var(--danger); animation: none; }
+    @keyframes pulse { 0%,100%{opacity:.3; transform:scale(.8)} 50%{opacity:1; transform:scale(1.1)} }
+
+    .reload-badge {
+      font-size: 12px; color: var(--dim);
+      font-family: var(--mono);
+    }
+
+    /* ── LAYOUT ── */
+    .main {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      padding: 20px 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    /* ── METRIC CARDS ROW ── */
+    .metrics-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 12px;
+    }
+    .mcard {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      transition: border-color .2s;
+    }
+    .mcard:hover { border-color: var(--accent); }
+    .mcard-label {
+      font-size: 11px; font-weight: 600; letter-spacing: .8px;
+      text-transform: uppercase; color: var(--dim); margin-bottom: 8px;
+    }
+    .mcard-value {
+      font-family: var(--mono); font-size: 22px; font-weight: 600;
+      color: #fff; line-height: 1;
+    }
+    .mcard-sub { font-size: 11px; color: var(--dim); margin-top: 5px; }
+    .mcard.good .mcard-value { color: var(--accent2); }
+    .mcard.warn .mcard-value { color: var(--warn); }
+    .mcard.accent .mcard-value { color: var(--accent); }
+
+    /* ── LEFT PANEL ── */
+    .panel-left {
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+    }
+    .card h3 {
+      font-size: 13px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .7px; color: var(--dim); margin-bottom: 14px;
+    }
+
+    /* ── LOSS CHART ── */
+    #loss-chart {
+      width: 100%; height: 180px;
+      display: block;
+      border-radius: 8px;
+    }
+    .chart-legend {
+      display: flex; gap: 14px; margin-top: 8px;
+      font-size: 11px; color: var(--dim);
+    }
+    .legend-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; }
+
+    /* ── LOG ── */
+    .log-box {
+      background: #0a0c11;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 150px;
+      overflow-y: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+    .log-entry { color: var(--dim); }
+    .log-entry .ep { color: var(--accent); font-weight: 600; }
+    .log-entry .loss { color: #fff; }
+    .log-entry .best { color: var(--accent2); }
+
+    /* ── INFO TABLE ── */
+    .info-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      font-size: 13px;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-key { color: var(--dim); }
+    .info-val { font-family: var(--mono); font-size: 12px; color: #fff; }
+
+    /* ── RIGHT PANEL: PREVIEW ── */
+    .panel-right {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .preview-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .preview-header h3 {
+      font-size: 14px; font-weight: 600; color: #fff;
+    }
+    .controls { display: flex; gap: 8px; }
+    .btn {
+      background: var(--card2); color: var(--text);
+      border: 1px solid var(--border);
+      padding: 5px 12px; border-radius: 7px;
+      cursor: pointer; font-size: 12px; font-weight: 500;
+      transition: background .15s, border-color .15s;
+    }
+    .btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .preview-body {
+      flex: 1;
+      display: flex; align-items: flex-start; justify-content: center;
+      overflow: auto;
+      background: #080a0f;
+      padding: 20px;
+      min-height: 0;
+    }
+    #preview-img {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.8);
+      transition: transform .2s;
+      transform-origin: top center;
+    }
+    .preview-footer {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--dim);
+      font-family: var(--mono);
+    }
+
+    /* ── PROGRESS BAR (for finite mode) ── */
+    .progress-wrap { margin-top: 10px; }
+    .progress-bar-bg {
+      background: #1e2130; border-radius: 99px; height: 6px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width .5s ease;
+    }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    /* ── MODAL INSPECTOR QUIRÚRGICO ── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(5,7,12,0.88);
+      backdrop-filter: blur(8px); z-index: 999; display: none;
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-box {
+      background: var(--card); border: 1px solid var(--accent);
+      border-radius: 16px; width: 95%; max-width: 1100px; max-height: 90vh;
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.8);
+    }
+    .modal-header {
+      padding: 16px 22px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(108,99,255,0.06);
+    }
+    .modal-header h3 { font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .modal-body {
+      padding: 20px; overflow-y: auto; display: grid; grid-template-columns: 1fr 340px; gap: 20px;
+    }
+    .inspector-viewport {
+      background: #090a10; border: 1px solid var(--border); border-radius: 12px;
+      overflow: auto; max-height: 60vh; display: flex; justify-content: center; align-items: center;
+      padding: 24px; position: relative;
+    }
+    .pixelated-zoom {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      transition: transform .2s ease;
+    }
+    .pixelated-zoom.grid-active {
+      background-image: 
+        linear-gradient(to right, rgba(255,255,255,0.08) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 16px 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">Pixel <span>AI</span> Engine</div>
+      <div class="badge-phase" id="phase-badge">Fase 1 (Base 16x4)</div>
+      <div class="badge-live" id="status-badge">
+        <div class="pulse"></div>
+        <span id="status-text">Conectando...</span>
+      </div>
+    </div>
+    <div class="reload-badge">Actualización en <span id="ticker">3</span>s · Última lectura: <span id="last-time">—</span></div>
+  </div>
+
+  <div class="main">
+
+    <!-- ── METRICS ROW (7 Tarjetas) ── -->
+    <div class="metrics-row">
+      <div class="mcard accent">
+        <div class="mcard-label">Época</div>
+        <div class="mcard-value" id="m-epoch">—</div>
+        <div class="mcard-sub" id="m-epoch-total">Cargando...</div>
+      </div>
+      <div class="mcard">
+        <div class="mcard-label">G_Loss</div>
+        <div class="mcard-value" id="m-gloss">—</div>
+        <div class="mcard-sub">Mejor: <span id="m-best">—</span></div>
+      </div>
+      <div class="mcard good">
+        <div class="mcard-label">L1 Loss</div>
+        <div class="mcard-value" id="m-l1">—</div>
+        <div class="mcard-sub">Fidelidad cromática</div>
+      </div>
+      <div class="mcard warn">
+        <div class="mcard-label">Edge Loss</div>
+        <div class="mcard-value" id="m-edge">—</div>
+        <div class="mcard-sub">Nitidez pixel art</div>
+      </div>
+      <div class="mcard">
+        <div class="mcard-label">D_Loss</div>
+        <div class="mcard-value" id="m-dloss">—</div>
+        <div class="mcard-sub">Discriminador</div>
+      </div>
+      <div class="mcard">
+        <div class="mcard-label">Tiempo / Época</div>
+        <div class="mcard-value" id="m-epsec">—</div>
+        <div class="mcard-sub">Tiempo total: <span id="m-elapsed">—</span></div>
+      </div>
+      <div class="mcard good" style="border-color: rgba(72,187,120,.4); background: rgba(72,187,120,.05)">
+        <div class="mcard-label" style="color:var(--accent2)">Control Calidad Puro</div>
+        <div class="mcard-value" id="m-qc-score" style="color:var(--accent2)">—</div>
+        <div class="mcard-sub">Cuerpo: <strong id="m-qc-body" style="color:#38bdf8">—</strong> · Defectos: <strong id="m-qc-defects" style="color:#f87171">—</strong></div>
+        <div class="mcard-sub" style="font-size:10px; color:var(--dim)">Paleta: <span id="m-qc-pal">—</span> · Alfa: <span id="m-qc-alpha">—</span></div>
+      </div>
+    </div>
+
+    <!-- ── LEFT PANEL ── -->
+    <div class="panel-left">
+
+      <!-- Chart -->
+      <div class="card">
+        <h3>📈 Curva de Pérdida</h3>
+        <canvas id="loss-chart"></canvas>
+        <div class="chart-legend">
+          <div><span class="legend-dot" style="background:#6c63ff"></span>G_Loss</div>
+          <div><span class="legend-dot" style="background:#48bb78"></span>L1 ×100</div>
+          <div><span class="legend-dot" style="background:#ed8936"></span>D_Loss ×10</div>
+        </div>
+      </div>
+
+      <!-- Progress & Config -->
+      <div class="card" id="progress-card">
+        <h3>⚡ Progreso & Configuración</h3>
+        <div class="info-row">
+          <span class="info-key">Fase Activa</span>
+          <span class="info-val" id="p-phase">Fase 1 (Base 16x4)</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">Plantilla / Molde</span>
+          <span class="info-val" id="p-template">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">Modo</span>
+          <span class="info-val" id="p-mode">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">Learning Rate</span>
+          <span class="info-val" id="p-lr">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">Mejor Loss</span>
+          <span class="info-val" id="p-best">—</span>
+        </div>
+        <div class="progress-wrap" id="progress-wrap" style="display:none">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:6px">
+            <span>Progreso</span><span id="p-pct">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="p-bar" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log de épocas recientes -->
+      <div class="card" style="flex:1">
+        <h3>📋 Log Reciente</h3>
+        <div class="log-box" id="log-box">
+          <div class="log-entry" style="color:var(--dim)">Esperando datos del entrenamiento...</div>
+        </div>
+      </div>
+
+      <!-- Guía rápida dinámica -->
+      <div class="card">
+        <h3>📖 Referencia del Spritesheet</h3>
+        <div id="reference-list" style="font-size: 12px; color: var(--dim); line-height: 2;">
+          <div>● <strong style="color:var(--text)">Filas 01–04</strong> Caminata Frente y Espalda (Idle y Pasos)</div>
+          <div>● <strong style="color:var(--text)">Filas 05–08</strong> Caminata Perfiles Laterales (Derecho e Izquierdo)</div>
+          <div>● <strong style="color:var(--text)">Filas 09–12</strong> Diagonales (Frontales y Traseras)</div>
+          <div>● <strong style="color:var(--text)">Filas 13–16</strong> Reposo, Respiración y Acciones Base</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT PANEL: PREVIEW ── -->
+    <div class="panel-right">
+      <div class="preview-header">
+        <h3 id="preview-title">🎨 Vista Previa en Vivo — 64 Frames (Fase 1)</h3>
+        <div class="controls">
+          <button class="btn" id="z1" onclick="setZoom(1)">1×</button>
+          <button class="btn active" id="z2" onclick="setZoom(1.5)">1.5×</button>
+          <button class="btn" id="z3" onclick="setZoom(2)">2×</button>
+          <button class="btn" id="z4" onclick="setZoom(3)">3×</button>
+          <button class="btn" id="btn-comp" onclick="toggleComparisonView()" style="margin-left:8px; border-color:#48bb78; color:#48bb78; background:rgba(72,187,120,0.12)" title="Alternar entre Spritesheet completo y Comparativa Quirúrgica 1:1">🔍 Comparativa 1:1 Tatuajes</button>
+          <button class="btn" onclick="openInspector()" style="margin-left:4px; border-color:var(--accent); color:#fff; background:rgba(108,99,255,0.18)">🔬 Inspector Quirúrgico</button>
+          <button class="btn" onclick="forceReload()" style="margin-left:4px">⟳</button>
+        </div>
+      </div>
+      <div class="preview-body">
+        <img id="preview-img" src="training_samples/latest_preview.png" alt="Esperando primera vista previa..." style="cursor:zoom-in" onclick="openInspector()" title="Haz clic para abrir el Inspector Quirúrgico y Lupa Pixelada">
+      </div>
+      <div class="preview-footer" id="preview-footer">
+        training_samples/latest_preview.png · Se actualiza cada 5 épocas · Haz clic en la imagen para inspeccionar
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+  <!-- MODAL INSPECTOR QUIRÚRGICO -->
+  <div class="modal-overlay" id="inspector-modal" onclick="if(event.target===this)closeInspector()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>🔬 Inspector Quirúrgico & Control de Calidad</h3>
+        <button class="btn" onclick="closeInspector()">✕ Cerrar</button>
+      </div>
+      <div class="modal-body">
+        <div class="inspector-viewport" id="viewport-box">
+          <img id="modal-zoom-img" class="pixelated-zoom grid-active" src="training_samples/latest_preview.png" style="width:250%; max-width:none">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:14px">
+          <div class="card" style="margin:0; padding:14px">
+            <h4 style="font-size:11px; color:var(--dim); text-transform:uppercase; margin-bottom:8px">Visualizador</h4>
+            <div style="display:flex; gap:6px; margin-bottom:8px">
+              <button class="btn active" id="btn-grid" onclick="toggleGrid()">Grilla Píxel: ON</button>
+              <button class="btn" onclick="setModalZoom(1.5)">150%</button>
+              <button class="btn" onclick="setModalZoom(2.5)">250%</button>
+              <button class="btn" onclick="setModalZoom(4)">400%</button>
+            </div>
+            <p style="font-size:11px; color:var(--dim)">Haz scroll dentro del visor para examinar manos, rostros y detalles.</p>
+          </div>
+          <div class="card" style="margin:0; padding:14px">
+            <h4 style="font-size:11px; color:var(--accent2); text-transform:uppercase; margin-bottom:8px">Diagnóstico Quirúrgico</h4>
+            <div style="display:flex; flex-direction:column; gap:8px; font-size:12px">
+              <div style="display:flex; justify-content:space-between"><span>Puntuación Total:</span><strong id="qc-m-score" style="color:#48bb78">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Asimilación Cuerpo Real:</span><strong id="qc-m-body" style="color:#38bdf8">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Píxeles Defectuosos Cuerpo:</span><strong id="qc-m-defects" style="color:#f87171">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Colores Únicos (IA / Objetivo):</span><strong id="qc-m-colors" style="color:#a78bfa">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Micro-Detalles Laplaciano (1px):</span><strong id="qc-m-detail" style="color:#6c63ff">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Preservación Tatuajes/Contornos:</span><strong id="qc-m-tattoo" style="color:#ed8936">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Pureza Alfa (Sin desenfoque):</span><strong id="qc-m-alpha" style="color:#fff">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Nitidez de Outlines:</span><strong id="qc-m-edge" style="color:#fff">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Fidelidad Paleta Frontal:</span><strong id="qc-m-pal" style="color:#fff">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Ausencia de Ruido Huérfano:</span><strong id="qc-m-noise" style="color:#fff">—</strong></div>
+              <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:6px 0" />
+              <div style="display:flex; justify-content:space-between"><span>Pelo y Gorro de Chef:</span><strong id="qc-m-pelo" style="color:#a78bfa">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Gestos, Ojos y Rostro:</span><strong id="qc-m-ojos" style="color:#38bdf8">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Ropa y Delantal de Chef:</span><strong id="qc-m-ropa" style="color:#facc15">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Tatuajes y Brazos:</span><strong id="qc-m-tats" style="color:#fb923c">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Objetos y Utensilios:</span><strong id="qc-m-objs" style="color:#34d399">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Zapatos y Anclaje Suelo:</span><strong id="qc-m-zaps" style="color:#4ade80">—</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── CONFIG ───────────────────────────────────────────────────────────────
+    const RELOAD_INTERVAL_S = 3;   // cada cuántos segundos refrescar JSON + imagen
+    const MAX_CHART_POINTS  = 80;  // máx puntos en el gráfico
+
+    // ─── STATE ────────────────────────────────────────────────────────────────
+    let zoom       = 1.5;
+    let tickerVal  = RELOAD_INTERVAL_S;
+    let history    = { g: [], l1: [], d: [], labels: [] };
+    let lastEpoch  = null;
+    let stopped    = false;
+
+    // ─── ELEMENTS ─────────────────────────────────────────────────────────────
+    const imgEl         = document.getElementById('preview-img');
+    const tickerEl      = document.getElementById('ticker');
+    const lastTimeEl    = document.getElementById('last-time');
+    const statusBadge   = document.getElementById('status-badge');
+    const statusText    = document.getElementById('status-text');
+    const logBox        = document.getElementById('log-box');
+    const canvas        = document.getElementById('loss-chart');
+    const ctx           = canvas.getContext('2d');
+
+    // ─── ZOOM ─────────────────────────────────────────────────────────────────
+    function setZoom(val) {
+      zoom = val;
+      imgEl.style.transform = `scale(${val})`;
+      imgEl.style.transformOrigin = 'top center';
+      ['z1','z2','z3','z4'].forEach(id => document.getElementById(id).classList.remove('active'));
+      const map = {1:'z1', 1.5:'z2', 2:'z3', 3:'z4'};
+      if (map[val]) document.getElementById(map[val]).classList.add('active');
+    }
+    setZoom(1.5);
+
+    // ─── RELOAD PREVIEW ───────────────────────────────────────────────────────
+    let showingComparison = false;
+
+    function toggleComparisonView() {
+      showingComparison = !showingComparison;
+      const btn = document.getElementById('btn-comp');
+      if (showingComparison) {
+        btn.textContent = '🖼 Spritesheet Completo';
+        btn.classList.add('active');
+        btn.style.background = 'rgba(72,187,120,0.3)';
+      } else {
+        btn.textContent = '🔍 Comparativa 1:1 Tatuajes';
+        btn.classList.remove('active');
+        btn.style.background = 'rgba(72,187,120,0.12)';
+      }
+      reloadPreview();
+    }
+
+    function reloadPreview() {
+      const t = Date.now();
+      const targetFile = showingComparison ? 'training_samples/latest_detail_comparison.png' : 'training_samples/latest_preview.png';
+      const tmp = new Image();
+      tmp.onload = () => {
+        imgEl.src = tmp.src;
+        const modalImg = document.getElementById('modal-zoom-img');
+        if (modalImg) modalImg.src = tmp.src;
+        document.getElementById('preview-footer').textContent =
+          `${targetFile} · Actualizado a las ${new Date().toLocaleTimeString()} ${showingComparison ? '· [Panel 1: Identidad | 2: Molde | 3: Muestra Real | 4: IA Cruda | 5: IA Perfeccionada]' : ''}`;
+      };
+      tmp.src = `${targetFile}?t=${t}`;
+    }
+
+    function forceReload() {
+      tickerVal = RELOAD_INTERVAL_S;
+      reloadPreview();
+      fetchStatus();
+    }
+
+    // ─── FETCH STATUS JSON ─────────────────────────────────────────────────────
+    async function fetchStatus() {
+      try {
+        const res  = await fetch(`training_status.json?t=${Date.now()}`);
+        if (!res.ok) throw new Error('no file');
+        const data = await res.json();
+        updateUI(data);
+        lastTimeEl.textContent = data.timestamp || new Date().toLocaleTimeString();
+      } catch(e) {
+        // Archivo no existe todavía — entrenamiento aún no comenzó
+        statusText.textContent = 'Esperando entrenamiento...';
+      }
+    }
+
+    // ─── UPDATE UI ─────────────────────────────────────────────────────────────
+    function updateUI(d) {
+      // Badge de estado y fase
+      const isStopped = d.status === 'DETENIDO';
+      stopped = isStopped;
+      statusBadge.className = 'badge-live' + (isStopped ? ' badge-stopped' : '');
+      statusText.textContent = isStopped
+        ? `DETENIDO en época ${d.epoch}`
+        : (d.infinite_mode ? `Entrenando · Época ${d.epoch} (∞)` : `Entrenando · Época ${d.epoch}/${d.total_epochs}`);
+
+      const isPhase2 = d.phase_id === 2 || (d.phase && d.phase.includes('8x12'));
+      const phaseBadge = document.getElementById('phase-badge');
+      if (phaseBadge) {
+        phaseBadge.textContent = d.phase || (isPhase2 ? 'Fase 2 (Transfer 8x12)' : 'Fase 1 (Base 16x4)');
+        phaseBadge.className = 'badge-phase' + (isPhase2 ? ' phase2' : '');
+      }
+
+      // Métricas principales
+      setText('m-epoch',  d.epoch);
+      setText('m-epoch-total', d.total_epochs === '∞' ? 'Modo infinito ∞' : `de ${d.total_epochs}`);
+      setText('m-gloss',  d.g_loss.toFixed(2));
+      setText('m-best',   d.best_loss !== null ? d.best_loss.toFixed(2) : '—');
+      setText('m-l1',     d.l1_loss.toFixed(3));
+      setText('m-edge',   d.edge_loss.toFixed(3));
+      setText('m-dloss',  d.d_loss.toFixed(3));
+      setText('m-epsec',  d.epoch_sec + 's');
+      setText('m-elapsed', fmtTime(d.elapsed_sec));
+
+      // Métricas Quirúrgicas de Control de Calidad
+      if (d.quality) {
+        setText('m-qc-score', (d.quality.score_total || 0).toFixed(1) + '%');
+        setText('m-qc-alpha', (d.quality.pureza_alfa || 0).toFixed(0) + '%');
+        setText('m-qc-pal', (d.quality.fidelidad_paleta || 0).toFixed(0) + '%');
+        
+        const bodyPrec = (d.quality.cuerpo_precision !== undefined) ? d.quality.cuerpo_precision.toFixed(1) + '%' : '—';
+        const defCount = (d.quality.defectos_cuerpo !== undefined) ? `${d.quality.defectos_cuerpo} px` : '—';
+        const colorsStr = (d.quality.colores_ia !== undefined && d.quality.colores_original !== undefined) ? `${d.quality.colores_ia} / ${d.quality.colores_original}` : '—';
+
+        setText('m-qc-body', bodyPrec);
+        setText('m-qc-defects', defCount);
+        setText('qc-m-body', bodyPrec);
+        setText('qc-m-defects', defCount);
+        setText('qc-m-colors', colorsStr);
+
+        setText('qc-m-score', (d.quality.score_total || 0).toFixed(1) + '%');
+        setText('qc-m-alpha', (d.quality.pureza_alfa || 0).toFixed(1) + '%');
+        setText('qc-m-edge', (d.quality.nitidez_bordes || 0).toFixed(1) + '%');
+        setText('qc-m-pal', (d.quality.fidelidad_paleta || 0).toFixed(1) + '%');
+        setText('qc-m-noise', (d.quality.ruido_huerfano || 0).toFixed(1) + '%');
+        setText('qc-m-detail', (d.quality.micro_detalles || 0).toFixed(1) + '%');
+        setText('qc-m-tattoo', (d.quality.preservacion_tatuajes || 0).toFixed(1) + '%');
+        setText('qc-m-pelo', (d.quality.pelo_gorro || 98).toFixed(1) + '%');
+        setText('qc-m-ojos', (d.quality.gestos_ojos || 98).toFixed(1) + '%');
+        setText('qc-m-ropa', (d.quality.ropa_delantal || 98).toFixed(1) + '%');
+        setText('qc-m-tats', (d.quality.tatuajes_brazos || d.quality.preservacion_tatuajes || 98).toFixed(1) + '%');
+        setText('qc-m-objs', (d.quality.objetos_utensilios || 98).toFixed(1) + '%');
+        setText('qc-m-zaps', (d.quality.zapatos_pies || 98).toFixed(1) + '%');
+      }
+
+      // Progreso & Config
+      setText('p-phase', d.phase || (isPhase2 ? 'Fase 2 (Transfer 8x12 - 96 Frames)' : 'Fase 1 (Base 16x4 - 64 Frames)'));
+      setText('p-template', d.template_name || (isPhase2 ? 'plantilla de los spritesheets.png' : 'plantilla_16x4.png'));
+      setText('p-mode',  d.total_epochs === '∞' ? '∞ INFINITO — Ctrl+C para detener' : `Finito (${d.total_epochs} épocas)`);
+      setText('p-lr',    d.lr.toExponential(1));
+      setText('p-best',  d.best_loss !== null ? d.best_loss.toFixed(4) : '—');
+      setText('preview-title', `🎨 Vista Previa en Vivo — ${d.total_frames || (isPhase2 ? 96 : 64)} Frames (${isPhase2 ? 'Fase 2' : 'Fase 1'})`);
+
+      // Actualizar referencia de filas dinámica
+      const refList = document.getElementById('reference-list');
+      if (refList) {
+        if (isPhase2) {
+          refList.innerHTML = `
+            <div>● <strong style="color:var(--text)">Filas 01–08</strong> Rotación 360° (Sur, Sureste, Este, Noreste, Norte, Noroeste, Oeste, Suroeste)</div>
+            <div>● <strong style="color:var(--text)">Filas 09–10</strong> Cocina Bowl/Olla (Frente, Espalda y Laterales)</div>
+            <div>● <strong style="color:var(--text)">Fila 11</strong> Pensar (barbilla) · Agacharse / Caja</div>
+            <div>● <strong style="color:var(--text)">Fila 12</strong> Servir plato · Celebración (manos arriba)</div>
+          `;
+        } else {
+          refList.innerHTML = `
+            <div>● <strong style="color:var(--text)">Filas 01–04</strong> Caminata Frente y Espalda (Idle y Pasos)</div>
+            <div>● <strong style="color:var(--text)">Filas 05–08</strong> Caminata Perfiles Laterales (Derecho e Izquierdo)</div>
+            <div>● <strong style="color:var(--text)">Filas 09–12</strong> Diagonales (Frontales y Traseras)</div>
+            <div>● <strong style="color:var(--text)">Filas 13–16</strong> Reposo, Respiración y Acciones Base</div>
+          `;
+        }
+      }
+
+      const progWrap = document.getElementById('progress-wrap');
+      if (d.total_epochs !== '∞' && typeof d.total_epochs === 'number') {
+        progWrap.style.display = '';
+        const pct = Math.min(100, Math.round(d.epoch / d.total_epochs * 100));
+        setText('p-pct', pct + '%');
+        document.getElementById('p-bar').style.width = pct + '%';
+      } else {
+        progWrap.style.display = 'none';
+      }
+
+      // Log
+      if (d.epoch !== lastEpoch) {
+        lastEpoch = d.epoch;
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        const isBest = d.best_loss !== null && Math.abs(d.g_loss - d.best_loss) < 0.001;
+        entry.innerHTML =
+          `<span class="ep">[${String(d.epoch).padStart(4,'0')}]</span> ` +
+          `G=<span class="loss">${d.g_loss.toFixed(2)}</span> ` +
+          `L1=${d.l1_loss.toFixed(3)} ` +
+          `D=${d.d_loss.toFixed(3)} ` +
+          (isBest ? `<span class="best">★ MEJOR</span>` : '') +
+          ` · ${d.epoch_sec}s`;
+        logBox.insertBefore(entry, logBox.firstChild);
+        // mantener solo últimas 40 entradas
+        while (logBox.children.length > 40) logBox.removeChild(logBox.lastChild);
+
+        // Actualizar historial para el gráfico
+        history.labels.push(d.epoch);
+        history.g.push(d.g_loss);
+        history.l1.push(d.l1_loss * 100);   // escalar para comparar visualmente
+        history.d.push(d.d_loss * 10);
+        if (history.labels.length > MAX_CHART_POINTS) {
+          history.labels.shift(); history.g.shift(); history.l1.shift(); history.d.shift();
+        }
+        drawChart();
+      }
+    }
+
+    function setText(id, val) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    }
+
+    function fmtTime(sec) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    // ─── CHART ─────────────────────────────────────────────────────────────────
+    function drawChart() {
+      const dpr = window.devicePixelRatio || 1;
+      const W = canvas.parentElement.clientWidth - 2;
+      const H = 180;
+      canvas.width  = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.width  = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.scale(dpr, dpr);
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Fondo del gráfico
+      ctx.fillStyle = '#0a0c13';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, W, H, 8);
+      ctx.fill();
+
+      // Grid lines
+      const gridLines = 4;
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < gridLines; i++) {
+        const y = H * i / gridLines;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      if (history.g.length < 2) return;
+
+      const allVals = [...history.g, ...history.l1, ...history.d];
+      const maxV = Math.max(...allVals) * 1.1 || 1;
+      const minV = 0;
+      const n    = history.g.length;
+      const pad  = 12;
+
+      function plotLine(data, color, lw = 2) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = lw;
+        ctx.lineJoin    = 'round';
+        ctx.lineCap     = 'round';
+        data.forEach((v, i) => {
+          const x = pad + (i / (n - 1)) * (W - pad * 2);
+          const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+
+      // Filled area for G_Loss
+      ctx.beginPath();
+      history.g.forEach((v, i) => {
+        const x = pad + (i / (n - 1)) * (W - pad * 2);
+        const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.lineTo(pad + (W - pad * 2), H - pad);
+      ctx.lineTo(pad, H - pad);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(108,99,255,0.25)');
+      grad.addColorStop(1, 'rgba(108,99,255,0.01)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      plotLine(history.g,  '#6c63ff', 2.5);
+      plotLine(history.l1, '#48bb78', 1.5);
+      plotLine(history.d,  '#ed8936', 1.5);
+
+      // Last value dot for G
+      const lastX = pad + ((n - 1) / (n - 1)) * (W - pad * 2);
+      const lastY = H - pad - ((history.g[n - 1] - minV) / (maxV - minV)) * (H - pad * 2);
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#6c63ff';
+      ctx.fill();
+    }
+
+    // ─── TICKER ───────────────────────────────────────────────────────────────
+    setInterval(() => {
+      tickerVal--;
+      tickerEl.textContent = tickerVal;
+      if (tickerVal <= 0) {
+        tickerVal = RELOAD_INTERVAL_S;
+        fetchStatus();
+        if (!stopped) reloadPreview();
+      }
+    }, 1000);
+
+    // ─── INSPECTOR QUIRÚRGICO MODAL ──────────────────────────────────────────
+    function openInspector() {
+      const modal = document.getElementById('inspector-modal');
+      const modalImg = document.getElementById('modal-zoom-img');
+      modalImg.src = imgEl.src + '?t=' + Date.now();
+      modal.style.display = 'flex';
+    }
+
+    function closeInspector() {
+      document.getElementById('inspector-modal').style.display = 'none';
+    }
+
+    function toggleGrid() {
+      const modalImg = document.getElementById('modal-zoom-img');
+      const btn = document.getElementById('btn-grid');
+      modalImg.classList.toggle('grid-active');
+      const active = modalImg.classList.contains('grid-active');
+      btn.textContent = `Grilla Píxel: ${active ? 'ON' : 'OFF'}`;
+      btn.className = 'btn' + (active ? ' active' : '');
+    }
+
+    function setModalZoom(scale) {
+      document.getElementById('modal-zoom-img').style.width = (scale * 100) + '%';
+    }
+
+    // Carga inicial
+    fetchStatus();
+    reloadPreview();
+  </script>
+</body>
+</html>

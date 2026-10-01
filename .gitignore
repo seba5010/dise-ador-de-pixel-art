@@ -1,0 +1,30 @@
+# Archivos comprimidos y pesados (> 100MB)
+*.7z
+*.zip
+*.rar
+*.tar.gz
+
+# Modelos pesados externos (SD, ControlNet, LoRA)
+*.pth
+*.safetensors
+*.bin
+*.onnx
+
+# Entorno de ejecución portable
+webui forger/
+system/
+webui_forge_cu121_torch231/
+
+# Checkpoints y cachés de entrenamiento masivos (>100MB)
+checkpoints/*.pt
+!checkpoints/best_generator.pt
+training_samples/preview_epoch_*.png
+training_samples/latest_*.png
+
+# Python y sistema
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.idea/
+*.log
