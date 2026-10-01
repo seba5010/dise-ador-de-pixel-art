@@ -18,6 +18,7 @@ webui_forge_cu121_torch231/
 # Checkpoints y cachés de entrenamiento masivos (>100MB)
 checkpoints/*.pt
 !checkpoints/best_generator.pt
+!checkpoints/base_generator_16x4.pt
 training_samples/preview_epoch_*.png
 training_samples/latest_*.png
 
