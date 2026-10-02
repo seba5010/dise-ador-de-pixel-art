@@ -60,13 +60,13 @@ MOLD_DIRS = {
 # Configuración de poses de prueba y sus etiquetas anatómicas según LEEME_ACCIONES.md
 TEST_CONFIG = {
     "16x4": {
-        "poses": [1, 17, 33, 49],
-        "labels": ["FRENTE", "ESPALDA", "DERECHA", "IZQUIERDA"],
+        "poses": [1, 5, 9, 33],
+        "labels": ["FRENTE", "ESPALDA", "LATERAL", "COCINA"],
         "descriptions": [
             "Fila 01 - Frente / Sur",
-            "Fila 05 - Espalda / Norte",
-            "Fila 09 - Derecha / Este",
-            "Fila 13 - Izquierda / Oeste"
+            "Fila 02 - Espalda / Norte",
+            "Fila 03 - Lateral Izquierdo / Oeste",
+            "Fila 09 - Cocinar / Frente"
         ]
     },
     "8x12": {
@@ -549,12 +549,13 @@ def prepare_controlnet_pose(
         ox_m = (target_size - nw_m) // 2
         oy_m = max(8, target_size - nh_m - 16)
 
-    scaled_m = crop_m.resize((nw_m, nh_m), Image.Resampling.NEAREST)
+    scaled_m = crop_m.resize((nw_m, nh_m), Image.Resampling.BILINEAR)
     canvas_m = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
     canvas_m.paste(scaled_m, (ox_m, oy_m), scaled_m)
 
     m_gray = cv2.cvtColor(np.array(canvas_m)[:, :, :3], cv2.COLOR_RGB2GRAY)
-    canny_m = cv2.Canny(m_gray, 30, 100)
+    blurred = cv2.GaussianBlur(m_gray, (5, 5), 0)
+    canny_m = cv2.Canny(blurred, 30, 90)
     kernel = np.ones((3, 3), np.uint8)
     canny_m = cv2.dilate(canny_m, kernel, iterations=1)
     out_pil = Image.fromarray(canny_m, mode="L").convert("RGB")
@@ -647,6 +648,15 @@ def validate_frame(frame_img: Image.Image, frame_idx: int) -> Tuple[bool, str, s
 # 7.5 DIRECCIÓN SEMÁNTICA DE MOVIMIENTO Y ACCIÓN POR FRAME
 # ==============================================================================
 
+KNOWN_CHARACTER_DESCRIPTIONS = {
+    "tori": "young man, black baseball cap worn backwards, messy black hair, black and white plaid flannel overshirt, white hoodie underneath, khaki cargo pants, black sneakers",
+    "alex": "young man, black baseball cap, messy dark hair, olive green jacket, black graphic t-shirt, black cargo pants, black sneakers",
+    "amaro": "young man, dark hair, glasses, casual jacket, dark trousers, sneakers",
+    "conny": "young woman, dark hair, casual streetwear outfit",
+    "dana": "young woman, ponytail hair, casual streetwear outfit",
+}
+
+
 def get_frame_prompt_and_denoise(
     format_type: str,
     frame_idx: int,
@@ -657,15 +667,16 @@ def get_frame_prompt_and_denoise(
     Construye la dirección semántica (perspectiva/acción) y ajusta la fuerza de desruido
     según la fila canónica del spritesheet (LEEME_ACCIONES.md).
     """
+    char_desc = KNOWN_CHARACTER_DESCRIPTIONS.get(char_name.lower(), f"character {char_name}")
     base_style = (
-        f"2D pixel art videogame sprite of {char_name}, full body, clean hard pixel edges, "
+        f"<lora:pixel_f2:0.95>, pixel, 2D pixel art videogame sprite of {char_desc}, full body, clean hard pixel edges, "
         "same character as reference image, exact same clothing, exact same colors, "
-        "exact same hair, exact same skin tone, consistent character design, 16-bit retro style"
+        "exact same hair, exact same skin tone, consistent character design, 16-bit retro style, flat colors"
     )
     base_neg = (
         "different character, redesigned outfit, different hair, extra arms, extra legs, "
         "duplicate limbs, malformed hands, cropped feet, cropped head, photorealistic, "
-        "3d render, smooth painting, blurry, anti-aliasing, text, watermark, background objects"
+        "3d render, smooth painting, blurry, anti-aliasing, text, watermark, background objects, gradients, smooth shading"
     )
 
     if format_type == "8x12":
@@ -717,22 +728,70 @@ def get_frame_prompt_and_denoise(
 
     else:  # 16x4
         row = (frame_idx - 1) // 4 + 1
-        if 1 <= row <= 4:
+        if row == 1:
             action = "front view, facing camera, south view, walking forward animation cycle"
-            neg_add = "back view, facing away, rear view"
+            neg_add = "back view, rear view, side view"
             f_denoise = min(base_denoise, 0.52)
-        elif 5 <= row <= 8:
-            action = "back view, from behind, rear view, backside of body, facing away from camera, walking north"
-            neg_add = "facing camera, front view, front face, eyes, nose, mouth, front chest"
+        elif row == 2:
+            action = "back view, from behind, rear view, walking north, facing away from camera"
+            neg_add = "front view, facing camera, eyes, face, front chest"
             f_denoise = max(base_denoise, 0.65)
-        elif 9 <= row <= 12:
-            action = "side profile view facing right, looking right, walking east, side of body"
-            neg_add = "direct front view, facing camera, two front eyes, front chest"
+        elif row == 3:
+            action = "side profile view facing left, walking west, looking left"
+            neg_add = "front view, facing camera, two front eyes"
             f_denoise = max(base_denoise, 0.65)
-        else:
-            action = "side profile view facing left, looking left, walking west, side of body"
-            neg_add = "direct front view, facing camera, two front eyes, front chest"
+        elif row == 4:
+            action = "side profile view facing right, walking east, looking right"
+            neg_add = "front view, facing camera, two front eyes"
             f_denoise = max(base_denoise, 0.65)
+        elif row == 5:
+            action = "front view, facing camera, south view, standing idle breathing"
+            neg_add = "back view, rear view, walking"
+            f_denoise = min(base_denoise, 0.50)
+        elif row == 6:
+            action = "back view, from behind, rear view, standing idle breathing, facing north"
+            neg_add = "front view, facing camera, eyes, face"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 7:
+            action = "side profile view facing left, standing idle, looking left"
+            neg_add = "front view, facing camera, walking"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 8:
+            action = "side profile view facing right, standing idle, looking right"
+            neg_add = "front view, facing camera, walking"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 9:
+            action = "cooking action pose facing front, chef cooking movements, stirring bowl, hands active in front"
+            neg_add = "hands in pockets, standing still idle"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 10:
+            action = "cooking action pose from behind, back view, chef interacting with stove, facing north"
+            neg_add = "facing camera, front view"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 11:
+            action = "cooking action pose profile facing left, hands extended cooking, looking left"
+            neg_add = "facing camera, front view"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 12:
+            action = "cooking action pose profile facing right, hands extended cooking, looking right"
+            neg_add = "facing camera, front view"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 13:
+            action = "carrying dish or tray in hands facing front, walking forward holding plate"
+            neg_add = "empty hands, hands down"
+            f_denoise = max(base_denoise, 0.60)
+        elif row == 14:
+            action = "sitting down pose, knees bent sitting on chair or stool, front view"
+            neg_add = "standing tall, walking"
+            f_denoise = max(base_denoise, 0.60)
+        elif row == 15:
+            action = "thinking pose, waiting pose, hand on chin, contemplating"
+            neg_add = "hands down, walking"
+            f_denoise = max(base_denoise, 0.60)
+        else:  # row 16
+            action = "picking up object from floor, crouch down and lift box from ground"
+            neg_add = "standing straight up"
+            f_denoise = max(base_denoise, 0.60)
 
     full_prompt = f"{action}, {base_style}"
     full_neg = f"{neg_add}, {base_neg}"
