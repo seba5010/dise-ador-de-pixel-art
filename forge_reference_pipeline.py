@@ -10,6 +10,7 @@ NO reemplaza ni altera el Motor A (U-Net PyTorch personalizada existente).
 
 import os
 import sys
+import re
 import time
 import json
 import base64
@@ -43,7 +44,7 @@ from pixel_ai_engine.dataset import get_cell_coordinates, place_in_cell, foregro
 
 
 # ==============================================================================
-# 1. DETECCIÓN AUTOMÁTICA DE MODELOS Y FORGE
+# 1. CONFIGURACIÓN DE GRILLAS, MOLDES Y TEST
 # ==============================================================================
 
 POSSIBLE_FORGE_DIRS = [
@@ -56,9 +57,28 @@ MOLD_DIRS = {
     "8x12": PROJECT_ROOT / "dataset_frames_individuales" / "00_MOLDES_POSES" / "molde_8x12_96_poses",
 }
 
-TEST_POSES = {
-    "16x4": [1, 17, 33, 3],   # Frente (1), Espalda (17), Lateral Der (33), Acción/Paso (3)
-    "8x12": [1, 33, 17, 65],  # Frente/Sur (1), Espalda/Norte (33), Lateral Este (17), Cocina (65)
+# Configuración de poses de prueba y sus etiquetas anatómicas según LEEME_ACCIONES.md
+TEST_CONFIG = {
+    "16x4": {
+        "poses": [1, 17, 33, 49],
+        "labels": ["FRENTE", "ESPALDA", "DERECHA", "IZQUIERDA"],
+        "descriptions": [
+            "Fila 01 - Frente / Sur",
+            "Fila 05 - Espalda / Norte",
+            "Fila 09 - Derecha / Este",
+            "Fila 13 - Izquierda / Oeste"
+        ]
+    },
+    "8x12": {
+        "poses": [1, 33, 17, 65],
+        "labels": ["FRENTE", "ESPALDA", "LATERAL", "COCINA"],
+        "descriptions": [
+            "Fila 01 - Frente / Sur",
+            "Fila 05 - Espalda / Norte",
+            "Fila 03 - Derecha / Este",
+            "Fila 09 - Cocinar / Batir"
+        ]
+    }
 }
 
 GRID_CONFIGS = {
@@ -81,6 +101,46 @@ GRID_CONFIGS = {
 }
 
 
+# ==============================================================================
+# 2. VALIDACIÓN NUMÉRICA Y CARGA DE MOLDES
+# ==============================================================================
+
+def load_and_validate_molds(mold_dir: Path, expected_count: int) -> Dict[int, Path]:
+    """
+    Carga y valida rigurosamente los moldes según su número entero (1..N).
+    Evita depender del orden lexicográfico y asegura que no falte ninguna pose.
+    """
+    if not mold_dir.exists():
+        raise FileNotFoundError(f"[ERROR] Directorio de moldes no encontrado: {mold_dir}")
+
+    molds: Dict[int, Path] = {}
+    pattern = re.compile(r"pose_(\d+)")
+    for f in mold_dir.glob("pose_*.png"):
+        m = pattern.search(f.name)
+        if m:
+            num = int(m.group(1))
+            molds[num] = f
+
+    missing = []
+    for i in range(1, expected_count + 1):
+        if i not in molds:
+            missing.append(f"pose_{i:03d}")
+
+    if missing:
+        err_msg = (
+            f"[ERROR] Moldes incompletos en '{mold_dir.name}'.\n"
+            f"Se esperaban {expected_count} poses pero faltan {len(missing)}: "
+            f"{missing[:8]}" + ("..." if len(missing) > 8 else "")
+        )
+        raise FileNotFoundError(err_msg)
+
+    return molds
+
+
+# ==============================================================================
+# 3. DETECCIÓN AUTOMÁTICA DE MODELOS Y FORGE
+# ==============================================================================
+
 def detect_active_forge_installation() -> Optional[Path]:
     """Detecta la carpeta de Forge activa examinando ejecutables y modelos."""
     for fdir in POSSIBLE_FORGE_DIRS:
@@ -91,7 +151,7 @@ def detect_active_forge_installation() -> Optional[Path]:
 
 def detect_required_models(forge_dir: Optional[Path] = None) -> Dict[str, Optional[Path]]:
     """
-    Verifica la presencia de:
+    Verifica la presencia en disco de:
     1. SD 1.5 base: v1-5-pruned-emaonly.safetensors
     2. ControlNet Lineart: control_v11p_sd15_lineart.pth
     3. ControlNet Canny: control_v11p_sd15_canny.pth
@@ -146,7 +206,7 @@ def detect_required_models(forge_dir: Optional[Path] = None) -> Dict[str, Option
 def print_model_status(models: Dict[str, Optional[Path]]):
     """Muestra reporte claro y formateado de los modelos encontrados."""
     print("=" * 70)
-    print("  VERIFICACIÓN DE MODELOS (STABLE DIFFUSION 1.5 + CONTROLNET)")
+    print("  VERIFICACIÓN DE MODELOS EN DISCO (STABLE DIFFUSION 1.5 + CONTROLNET)")
     print("=" * 70)
     
     names = {
@@ -170,10 +230,14 @@ def print_model_status(models: Dict[str, Optional[Path]]):
     return all_ok
 
 
+# ==============================================================================
+# 4. COMUNICACIÓN Y VALIDACIÓN CON LA API DE FORGE
+# ==============================================================================
+
 def check_forge_api_connection(forge_url: str = "http://127.0.0.1:7860") -> Tuple[bool, str]:
     """
     Comprueba si el servidor web de Forge está iniciado y accesible.
-    Retorna (True, versión/info) o (False, mensaje de ayuda).
+    Retorna (True, mensaje_éxito) o (False, mensaje_de_ayuda).
     """
     try:
         r = requests.get(f"{forge_url}/sdapi/v1/sd-models", timeout=3)
@@ -197,33 +261,144 @@ def check_forge_api_connection(forge_url: str = "http://127.0.0.1:7860") -> Tupl
     return False, help_msg
 
 
-def get_forge_controlnet_model_name(forge_url: str, control_type: str) -> str:
-    """
-    Consulta a Forge la lista de nombres registrados de ControlNet
-    y encuentra la coincidencia exacta (con hash o sin hash).
-    """
-    pattern = f"control_v11p_sd15_{control_type.lower()}"
-    fallback = f"control_v11p_sd15_{control_type.lower()}"
+def get_forge_options(forge_url: str) -> Optional[Dict[str, Any]]:
+    """Consulta /sdapi/v1/options de Forge."""
     try:
-        r = requests.get(f"{forge_url}/controlnet/model_list", timeout=4)
+        r = requests.get(f"{forge_url}/sdapi/v1/options", timeout=5)
         if r.status_code == 200:
-            m_list = r.json().get("model_list", [])
-            for m in m_list:
-                if pattern in m.lower():
-                    return m
+            return r.json()
     except Exception:
         pass
-    return fallback
+    return None
+
+
+def get_forge_sd_models(forge_url: str) -> List[Dict[str, Any]]:
+    """Consulta /sdapi/v1/sd-models de Forge."""
+    try:
+        r = requests.get(f"{forge_url}/sdapi/v1/sd-models", timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return []
+
+
+def get_forge_controlnet_models(forge_url: str) -> List[str]:
+    """Consulta /controlnet/model_list de Forge."""
+    try:
+        r = requests.get(f"{forge_url}/controlnet/model_list", timeout=5)
+        if r.status_code == 200:
+            return r.json().get("model_list", [])
+    except Exception:
+        pass
+    return []
+
+
+def verify_forge_endpoints(forge_url: str) -> Tuple[bool, str]:
+    """Comprueba que todos los endpoints indispensables de Forge respondan con código 200."""
+    endpoints = ["/sdapi/v1/options", "/sdapi/v1/sd-models", "/controlnet/model_list"]
+    for ep in endpoints:
+        try:
+            r = requests.get(f"{forge_url}{ep}", timeout=5)
+            if r.status_code != 200:
+                return False, f"Endpoint indispensable '{ep}' respondió con código HTTP {r.status_code}."
+        except Exception as e:
+            return False, f"No se pudo conectar al endpoint indispensable '{ep}': {e}"
+    return True, "Endpoints OK"
+
+
+def ensure_sd15_checkpoint_loaded(forge_url: str, target_name: str = "v1-5-pruned-emaonly") -> Tuple[bool, str]:
+    """
+    Verifica cuál checkpoint está cargado en Forge y fuerza explícitamente SD 1.5.
+    Si tiene cargado otro modelo (ej: SDXL o checkpoint personalizado), lo cambia
+    mediante /sdapi/v1/options y espera a que Forge termine de cargarlo.
+    """
+    options = get_forge_options(forge_url)
+    if not options:
+        return False, "No se pudo consultar /sdapi/v1/options en Forge."
+
+    current_ckpt = options.get("sd_model_checkpoint", "")
+    print(f"[Checkpoint] Solicitado : {target_name}.safetensors")
+    print(f"[Checkpoint] Actual    : {current_ckpt or '(ninguno)'}")
+
+    # Comprobar si ya corresponde a SD 1.5
+    if target_name.lower() in current_ckpt.lower():
+        print(f"[Checkpoint] Estado    : [OK] SD 1.5 cargado")
+        return True, current_ckpt
+
+    # Si es diferente, buscar el título completo registrado en Forge
+    print(f"[Checkpoint] Modelo diferente detectado.")
+    print(f"[Checkpoint] Cambiando a Stable Diffusion 1.5...")
+    
+    sd_models = get_forge_sd_models(forge_url)
+    target_title = None
+    for m in sd_models:
+        title = m.get("title", "")
+        model_name = m.get("model_name", "")
+        if target_name.lower() in title.lower() or target_name.lower() in model_name.lower():
+            target_title = title
+            break
+
+    if not target_title:
+        # Fallback a nombre de archivo
+        target_title = f"{target_name}.safetensors"
+
+    try:
+        post_r = requests.post(f"{forge_url}/sdapi/v1/options", json={"sd_model_checkpoint": target_title}, timeout=30)
+        if post_r.status_code != 200:
+            return False, f"Error HTTP {post_r.status_code} al solicitar cambio de checkpoint."
+    except Exception as e:
+        return False, f"Excepción al solicitar cambio de checkpoint: {e}"
+
+    # Esperar hasta que Forge termine de cargarlo (hasta 45 segundos)
+    print("  [Cargando] Esperando a que Forge complete la carga del modelo...", end="", flush=True)
+    start_time = time.time()
+    while time.time() - start_time < 45:
+        time.sleep(2)
+        print(".", end="", flush=True)
+        opt = get_forge_options(forge_url)
+        if opt:
+            new_ckpt = opt.get("sd_model_checkpoint", "")
+            if target_name.lower() in new_ckpt.lower():
+                print(" [OK]")
+                print(f"[Checkpoint] [OK] Cambio completado exitosamente a: {new_ckpt}")
+                return True, new_ckpt
+
+    print(" [TIEMPO AGOTADO]")
+    return False, f"Forge no pudo cargar {target_name}.safetensors a tiempo."
+
+
+def verify_controlnet_in_api(forge_url: str, control_type: str) -> Tuple[bool, str]:
+    """
+    Verifica que el modelo ControlNet solicitado aparezca registrado en Forge.
+    No continúa silenciosamente con nombres inventados.
+    """
+    m_list = get_forge_controlnet_models(forge_url)
+    pattern = f"control_v11p_sd15_{control_type.lower()}"
+    matched = None
+    for m in m_list:
+        if pattern in m.lower():
+            matched = m
+            break
+
+    if not matched:
+        return False, (
+            f"[ERROR] El archivo ControlNet '{control_type}' existe en disco, pero Forge no lo tiene "
+            f"cargado/registrado en su API (/controlnet/model_list).\n"
+            f"Modelos reportados por Forge: {m_list}\n"
+            f"Reinicia Forge mediante 'webui forger\\run.bat' para que indexe la carpeta models/ControlNet/."
+        )
+    return True, matched
 
 
 # ==============================================================================
-# 2. GESTIÓN DE SEMILLAS E IDENTIDAD DETERMINISTA
+# 5. GESTIÓN DE SEMILLAS E IDENTIDAD DETERMINISTA
 # ==============================================================================
 
 def get_or_create_character_seed(char_name: str, char_forge_dir: Path, requested_seed: Optional[int] = None) -> int:
     """
     Obtiene o crea una semilla consistente para el personaje en <char_name>_seed.json.
-    Garantiza que todas las generaciones comiencen desde la misma base.
+    La semilla fija ayuda a reducir variación aleatoria, pero no garantiza identidad idéntica entre poses.
     """
     seed_file = char_forge_dir / f"{char_name}_seed.json"
     
@@ -251,7 +426,7 @@ def get_or_create_character_seed(char_name: str, char_forge_dir: Path, requested
 
 
 # ==============================================================================
-# 3. CONVERSIÓN Y PROCESAMIENTO DE IMÁGENES
+# 6. CONVERSIÓN Y PROCESAMIENTO DE IMÁGENES
 # ==============================================================================
 
 def pil_to_base64(img: Image.Image) -> str:
@@ -343,7 +518,7 @@ def prepare_controlnet_pose(pose_path: Path, control_type: str = "lineart", targ
 
 
 # ==============================================================================
-# 4. CONTROL DE CALIDAD Y EXTRACCIÓN DE TRANSPARENCIA
+# 7. CONTROL DE CALIDAD Y EXTRACCIÓN DE TRANSPARENCIA
 # ==============================================================================
 
 def remove_background_and_recover_alpha(img_generated: Image.Image, bg_tolerance: int = 25) -> Image.Image:
@@ -386,28 +561,27 @@ def remove_background_and_recover_alpha(img_generated: Image.Image, bg_tolerance
     return Image.fromarray(out_arr, mode="RGBA")
 
 
-def validate_frame(frame_img: Image.Image, frame_idx: int) -> Tuple[bool, str]:
+def validate_frame(frame_img: Image.Image, frame_idx: int) -> Tuple[bool, str, str]:
     """
     Verifica los requisitos mínimos de calidad de cada frame generado:
-    - Sprite visible y no vacío.
-    - No monocromático (ni todo negro ni todo blanco).
-    - Silueta de dimensiones anatómicas razonables.
+    Retorna (is_ok, status_level, message) donde status_level in ['PASS', 'WARNING', 'FAIL'].
     """
     arr = np.array(frame_img.convert("RGBA"))
     alpha = arr[:, :, 3]
     fg_count = int(np.count_nonzero(alpha > 30))
     total_pixels = arr.shape[0] * arr.shape[1]
     
-    if fg_count < 60:
-        return False, f"Frame {frame_idx:03d}: Alpha casi vacío ({fg_count} px visibles)."
+    # Fallos críticos (FAIL)
+    if fg_count < 40:
+        return False, "FAIL", f"Frame {frame_idx:03d}: Alpha casi vacío ({fg_count} px visibles)."
         
     if fg_count > int(total_pixels * 0.95):
-        return False, f"Frame {frame_idx:03d}: Alpha desbordado ({fg_count}/{total_pixels} px)."
+        return False, "FAIL", f"Frame {frame_idx:03d}: Alpha desbordado ({fg_count}/{total_pixels} px)."
 
     fg_rgb = arr[alpha > 30][:, :3]
     std_rgb = float(np.std(fg_rgb))
-    if std_rgb < 5.0:
-        return False, f"Frame {frame_idx:03d}: Sprite monocromático o corrupto (std={std_rgb:.1f})."
+    if std_rgb < 4.0:
+        return False, "FAIL", f"Frame {frame_idx:03d}: Sprite monocromático o corrupto (std={std_rgb:.1f})."
 
     coords = np.argwhere(alpha > 30)
     y0, x0 = coords.min(axis=0)
@@ -415,15 +589,18 @@ def validate_frame(frame_img: Image.Image, frame_idx: int) -> Tuple[bool, str]:
     fh = y1 - y0 + 1
     fw = x1 - x0 + 1
     
-    # Comprobar que no sea un punto diminuto
     if fh < 16 or fw < 8:
-        return False, f"Frame {frame_idx:03d}: Bounding box diminuto ({fw}x{fh} px)."
+        return False, "FAIL", f"Frame {frame_idx:03d}: Bounding box diminuto ({fw}x{fh} px)."
 
-    return True, "OK"
+    # Avisos menores (WARNING)
+    if fg_count < 100:
+        return True, "WARNING", f"Frame {frame_idx:03d}: Cobertura de píxeles reducida ({fg_count} px)."
+
+    return True, "PASS", "OK"
 
 
 # ==============================================================================
-# 5. LLAMADA A LA API DE FORGE (IMG2IMG + CONTROLNET)
+# 8. LLAMADA A LA API DE FORGE (IMG2IMG + CONTROLNET)
 # ==============================================================================
 
 def generate_single_frame_forge(
@@ -492,7 +669,7 @@ def generate_single_frame_forge(
 
 
 # ==============================================================================
-# 6. PIPELINE PRINCIPAL DE GENERACIÓN
+# 9. PIPELINE PRINCIPAL DE GENERACIÓN
 # ==============================================================================
 
 def run_forge_reference_pipeline(
@@ -536,33 +713,92 @@ def run_forge_reference_pipeline(
     canvas_h = cfg_grid["canvas_h"]
     mold_dir = cfg_grid["mold_dir"]
 
-    # 3. Detectar modelos locales
+    # 3. Detectar modelos locales en disco
     forge_dir = detect_active_forge_installation()
     models = detect_required_models(forge_dir)
     print_model_status(models)
 
-    # Verificar que el modelo ControlNet solicitado existe
     ctrl_key = "lineart" if control_type.lower() == "lineart" else "canny"
-    if not models.get(ctrl_key):
-        print(f"\n[ERROR] El modelo ControlNet requerido '{ctrl_key}' no se encuentra en las rutas del proyecto.")
-        return False
+    other_ctrl_key = "canny" if ctrl_key == "lineart" else "lineart"
 
+    has_sd15 = bool(models.get("sd15"))
+    has_req_ctrl = bool(models.get(ctrl_key))
+    has_other_ctrl = bool(models.get(other_ctrl_key))
+
+    # Resumen de requisitos del pipeline
+    print("\n" + "=" * 70)
+    print("  REQUISITOS DEL PIPELINE")
+    print("=" * 70)
+    print(f"  Stable Diffusion 1.5   : {'[OK]' if has_sd15 else '[FALTA]'}")
+    print(f"  ControlNet solicitado  : {control_type.upper()}")
+    print(f"  ControlNet {control_type.capitalize():<12}: {'[OK]' if has_req_ctrl else '[FALTA]'}")
+    print(f"  ControlNet {other_ctrl_key.capitalize():<12}: {'[DISPONIBLE]' if has_other_ctrl else '[NO REQUERIDO]'}")
+    print("-" * 70)
+
+    # 4. Estado de la API de Forge
+    is_alive, msg = check_forge_api_connection(forge_url)
+    if is_alive:
+        print(f"  Forge API              : ONLINE ({forge_url})")
+        options = get_forge_options(forge_url)
+        current_ckpt = options.get("sd_model_checkpoint", "") if options else "Desconocido"
+        ckpt_status = "OK" if "v1-5-pruned-emaonly" in current_ckpt.lower() else "DIFERENTE (se cambiará al generar)"
+        print(f"  Checkpoint activo      : {current_ckpt} [{ckpt_status}]")
+        
+        cn_ok, cn_info = verify_controlnet_in_api(forge_url, control_type)
+        if cn_ok:
+            print(f"  ControlNet API ({control_type}) : DETECTADO ({cn_info})")
+        else:
+            print(f"  ControlNet API ({control_type}) : NO REGISTRADO EN FORGE")
+    else:
+        print(f"  Forge API              : OFFLINE ({forge_url})")
+        print(f"  Modelos locales        : {'OK' if (has_sd15 and has_req_ctrl) else 'INCOMPLETOS'}")
+        print(f"  Generación             : Requiere iniciar Forge ('webui forger\\run.bat')")
+
+    print("=" * 70)
+
+    # Si se solicitó --check-only, validar requisitos obligatorios y salir con código claro
     if check_only:
-        print("[Check-Only] Comprobación de modelos finalizada con éxito.")
+        if not has_sd15:
+            print("\n[ERROR] Falta el modelo base Stable Diffusion 1.5 (v1-5-pruned-emaonly.safetensors).")
+            print("RESULTADO: ERROR - FALTAN MODELOS OBLIGATORIOS\n")
+            return False
+        if not has_req_ctrl:
+            print(f"\n[ERROR] Falta el modelo ControlNet solicitado '{control_type}'.")
+            print("RESULTADO: ERROR - FALTAN MODELOS OBLIGATORIOS\n")
+            return False
+
+        print("  RESULTADO: PIPELINE LISTO (Archivos y dependencias locales validados)\n")
         return True
 
-    # 4. Comprobar conectividad con Forge
-    is_alive, msg = check_forge_api_connection(forge_url)
+    # Para generación real, verificar que Forge está activo
     if not is_alive:
         print(msg)
         return False
-    print(f"[OK] {msg}")
 
-    # Obtener nombre exacto del modelo en Forge
-    cn_model_name = get_forge_controlnet_model_name(forge_url, control_type)
+    # Verificar endpoints indispensables de Forge
+    ep_ok, ep_msg = verify_forge_endpoints(forge_url)
+    if not ep_ok:
+        print(f"\n[ERROR] {ep_msg}")
+        return False
+
+    # Forzar explícitamente SD 1.5 en Forge
+    sd_loaded, sd_msg = ensure_sd15_checkpoint_loaded(forge_url, target_name="v1-5-pruned-emaonly")
+    if not sd_loaded:
+        print(f"\n[ERROR] Forge no pudo cargar v1-5-pruned-emaonly.safetensors: {sd_msg}")
+        return False
+
+    # Verificar que el modelo ControlNet seleccionado aparece en la API
+    cn_ok, cn_model_name = verify_controlnet_in_api(forge_url, control_type)
+    if not cn_ok:
+        print(f"\n{cn_model_name}")
+        return False
     print(f"[ControlNet] Modelo asignado en Forge: '{cn_model_name}' (Modo: {control_type.upper()})")
 
-    # 5. Carpetas de trabajo organizadas
+    # 5. Cargar y validar numéricamente los moldes
+    molds_map = load_and_validate_molds(mold_dir, total_frames)
+    print(f"[Moldes] {len(molds_map)}/{total_frames} moldes numéricos validados correctamente en {mold_dir.name}.")
+
+    # 6. Carpetas de trabajo organizadas
     base_out_dir = PROJECT_ROOT / "output" / char_name / "forge"
     raw_dir = base_out_dir / "raw"
     norm_dir = base_out_dir / "normalized"
@@ -572,11 +808,11 @@ def run_forge_reference_pipeline(
     for d in [raw_dir, norm_dir, failed_dir, previews_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    # 6. Semilla determinista
+    # 7. Semilla determinista
     base_seed = get_or_create_character_seed(char_name, base_out_dir, seed)
     print(f"[Semilla] Base para '{char_name}': {base_seed} (Estrategia: {seed_strategy})")
 
-    # 7. Preprocesar referencia frontal y paleta
+    # 8. Preprocesar referencia frontal y paleta
     ref_canvas, char_palette = prepare_reference_input(ref_path, target_size=resolution)
     ref_b64 = pil_to_base64(ref_canvas)
 
@@ -593,12 +829,16 @@ def run_forge_reference_pipeline(
         "background objects, complex background, blurry edges"
     )
 
-    # 8. Determinar frames a procesar
+    # 9. Determinar frames a procesar
     if test_mode:
-        frame_indices = TEST_POSES[format_type]
+        t_cfg = TEST_CONFIG[format_type]
+        frame_indices = t_cfg["poses"]
+        test_labels = t_cfg["labels"]
+        test_descs = t_cfg["descriptions"]
         print(f"\n{'*' * 70}")
-        print(f"  MODO TEST ACTIVO: Se generarán únicamente {len(frame_indices)} poses clave")
-        print(f"  Poses seleccionadas: {frame_indices} (Frente, Espalda, Lateral, Acción)")
+        print(f"  MODO TEST ACTIVO ({format_type}): Se generarán únicamente {len(frame_indices)} poses clave")
+        for p_num, p_lbl, p_dsc in zip(frame_indices, test_labels, test_descs):
+            print(f"    - Pose {p_num:02d} ({p_lbl}): {p_dsc}")
         print(f"{'*' * 70}\n")
     elif only_frame is not None:
         if only_frame < 1 or only_frame > total_frames:
@@ -609,14 +849,11 @@ def run_forge_reference_pipeline(
         frame_indices = list(range(1, total_frames + 1))
         print(f"\n[Generación Completa] Total de frames a procesar: {total_frames} ({format_type})")
 
-    # Listar moldes disponibles
-    mold_files = sorted(list(mold_dir.glob("pose_*.png")))
-    if len(mold_files) < total_frames:
-        raise FileNotFoundError(f"Se esperaban {total_frames} moldes en {mold_dir}, pero se encontraron {len(mold_files)}.")
-
     generated_frames_map: Dict[int, Image.Image] = {}
+    valid_frames: List[int] = []
+    failed_frames: List[int] = []
 
-    # 9. Bucle de generación frame por frame
+    # 10. Bucle de generación frame por frame
     for idx in frame_indices:
         f_num = idx
         norm_file = norm_dir / f"frame_{f_num:03d}.png"
@@ -626,10 +863,11 @@ def run_forge_reference_pipeline(
         if resume and norm_file.exists() and only_frame is None:
             try:
                 existing_img = Image.open(norm_file).convert("RGBA")
-                ok, _ = validate_frame(existing_img, f_num)
-                if ok:
+                ok, level, _ = validate_frame(existing_img, f_num)
+                if ok and level in ["PASS", "WARNING"]:
                     print(f"  [REANUDAR] Frame {f_num:03d}/{total_frames}: Ya existe y es válido. Omitiendo.")
                     generated_frames_map[f_num] = existing_img
+                    valid_frames.append(f_num)
                     continue
             except Exception:
                 pass
@@ -640,8 +878,8 @@ def run_forge_reference_pipeline(
         else:
             current_seed = base_seed
 
-        # Cargar molde correspondiente
-        pose_file = mold_files[f_num - 1]
+        # Cargar molde numérico correspondiente
+        pose_file = molds_map[f_num]
         ctrl_img, ctrl_module = prepare_controlnet_pose(pose_file, control_type=control_type, target_size=resolution)
         ctrl_b64 = pil_to_base64(ctrl_img)
 
@@ -691,30 +929,38 @@ def run_forge_reference_pipeline(
             normalized_frame = place_in_cell(enhanced, cell_w=cell_w, cell_h=cell_h)
             normalized_frame.save(norm_file)
 
-            # Quality Gate
-            valid_ok, valid_msg = validate_frame(normalized_frame, f_num)
+            # Quality Gate con niveles PASS, WARNING, FAIL
+            valid_ok, valid_level, valid_msg = validate_frame(normalized_frame, f_num)
             dt = time.time() - t0
 
-            if valid_ok:
+            if valid_level == "PASS":
                 print(f" OK ({dt:.1f}s)")
                 generated_frames_map[f_num] = normalized_frame
-            else:
-                print(f" [FALLO] {valid_msg} ({dt:.1f}s)")
-                # Guardar copia en failed/
-                normalized_frame.save(failed_dir / f"frame_{f_num:03d}.png")
-                # Se mantiene en el mapa para no romper el ensamble, pero queda registrado
+                valid_frames.append(f_num)
+            elif valid_level == "WARNING":
+                print(f" [AVISO] {valid_msg} ({dt:.1f}s)")
                 generated_frames_map[f_num] = normalized_frame
+                valid_frames.append(f_num)
+            else:  # FAIL
+                print(f" [FALLO] {valid_msg} ({dt:.1f}s)")
+                normalized_frame.save(failed_dir / f"frame_{f_num:03d}.png")
+                if norm_file.exists():
+                    try:
+                        norm_file.unlink()
+                    except Exception:
+                        pass
+                failed_frames.append(f_num)
 
         except Exception as e:
             print(f" ERROR: {e}")
+            failed_frames.append(f_num)
             return False
 
-    # 10. Si estamos en modo TEST, generar comparativa visual 4-poses
+    # 11. Modo TEST: Generar panel comparativo de validación de identidad
     if test_mode:
         print("\n[Modo Test] Creando panel comparativo de validación de identidad...")
-        test_panel_path = previews_dir / f"test_comparison_4poses_{control_type}.png"
+        test_panel_path = previews_dir / f"test_comparison_4poses_{format_type}_{control_type}.png"
         
-        # Celdas: Referencia + 4 poses
         preview_cell_size = 256
         panel_w = preview_cell_size * (len(frame_indices) + 1)
         panel_h = preview_cell_size + 40
@@ -726,15 +972,15 @@ def run_forge_reference_pipeline(
         panel.paste(ref_thumb, (8, 30), ref_thumb)
         draw.text((10, 8), "1. REFERENCIA ORIGINAL", fill=(20, 20, 20))
 
-        # 2. Pegar las 4 poses generadas
-        labels = ["2. FRENTE", "3. ESPALDA", "4. LATERAL", "5. ACCION"]
+        # 2. Pegar las 4 poses generadas con sus etiquetas semánticas
+        t_labels = TEST_CONFIG[format_type]["labels"]
         for p_idx, f_num in enumerate(frame_indices):
             f_img = generated_frames_map.get(f_num)
             if f_img:
                 fx = (p_idx + 1) * preview_cell_size
                 thumb = f_img.resize((preview_cell_size - 16, preview_cell_size - 16), Image.Resampling.NEAREST)
                 panel.paste(thumb, (fx + 8, 30), thumb)
-                draw.text((fx + 10, 8), f"{labels[p_idx]} (F{f_num})", fill=(20, 20, 20))
+                draw.text((fx + 10, 8), f"{p_idx + 2}. {t_labels[p_idx]} (F{f_num:02d})", fill=(20, 20, 20))
 
         panel.save(test_panel_path)
         print("=" * 70)
@@ -744,20 +990,34 @@ def run_forge_reference_pipeline(
         print("=" * 70)
         return True
 
-    # 11. Ensamblado de Spritesheet Final (si se procesaron todos los frames o sólo faltaban algunos)
+    # 12. Resumen de Calidad y Ensamblado de Spritesheet Final
     if not test_mode and only_frame is None:
-        print(f"\n[Ensamblado] Construyendo spritesheet final ({cols} columnas x {rows} filas = {total_frames} frames)...")
+        print("\n" + "=" * 70)
+        print("  RESULTADO DE GENERACIÓN")
+        print("=" * 70)
+        print(f"  Frames esperados : {total_frames}")
+        print(f"  Frames válidos   : {len(valid_frames)}")
+        print(f"  Frames fallidos  : {len(failed_frames)}")
+        if failed_frames:
+            print(f"  Fallidos         : {', '.join(f'frame_{f:03d}' for f in failed_frames)}")
+            print("  Estado           : INCOMPLETO — ejecutar --resume o --only-frame <N>")
+        else:
+            print("  Estado           : COMPLETO")
+        print("=" * 70)
+
+        # Ensamblar lienzo
+        print(f"\n[Ensamblado] Construyendo spritesheet ({cols} columnas x {rows} filas = {total_frames} frames)...")
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
-        # Cargar todos los frames del directorio normalizado para asegurar completitud matemática
         for f_num in range(1, total_frames + 1):
             f_file = norm_dir / f"frame_{f_num:03d}.png"
-            if f_file.exists():
-                f_img = Image.open(f_file).convert("RGBA")
+            if f_num in failed_frames:
+                f_img = Image.new("RGBA", (canvas_w // cols, canvas_h // rows), (0, 0, 0, 0))
             elif f_num in generated_frames_map:
                 f_img = generated_frames_map[f_num]
+            elif f_file.exists():
+                f_img = Image.open(f_file).convert("RGBA")
             else:
-                print(f"  [ALERTA] Frame {f_num:03d} ausente. Rellenando celda vacía.")
                 f_img = Image.new("RGBA", (canvas_w // cols, canvas_h // rows), (0, 0, 0, 0))
 
             frame_idx = f_num - 1
@@ -785,18 +1045,25 @@ def run_forge_reference_pipeline(
         bg_preview.paste(canvas, (0, 0), canvas)
         bg_preview.convert("RGB").save(preview_output, format="PNG")
 
-        print("=" * 70)
-        print(f"  SPRITESHEET ENSAMBLADO CON ÉXITO: {final_output}")
-        print(f"  Dimensiones: {canvas_w} x {canvas_h} px | {cols}x{rows} ({total_frames} frames)")
-        print(f"  Transparencia: RGBA nativo compatible con Unity / Godot")
-        print(f"  Vista Previa Clara: {preview_output.name}")
-        print("=" * 70)
+        if failed_frames:
+            print("=" * 70)
+            print(f"  [AVISO] SPRITESHEET GENERADO CON {len(failed_frames)} CELDAS INCOMPLETAS")
+            print(f"  Archivo guardado: {final_output}")
+            print(f"  Ejecuta con '--resume' para regenerar los frames fallidos sin reiniciar.")
+            print("=" * 70)
+        else:
+            print("=" * 70)
+            print(f"  SPRITESHEET ENSAMBLADO CON ÉXITO: {final_output}")
+            print(f"  Dimensiones: {canvas_w} x {canvas_h} px | {cols}x{rows} ({total_frames} frames)")
+            print(f"  Transparencia: RGBA nativo compatible con Unity / Godot")
+            print(f"  Vista Previa Clara: {preview_output.name}")
+            print("=" * 70)
 
-    return True
+    return len(failed_frames) == 0
 
 
 # ==============================================================================
-# 7. PARSER DE ARGUMENTOS CLI
+# 10. PARSER DE ARGUMENTOS CLI
 # ==============================================================================
 
 def main():
@@ -838,11 +1105,11 @@ def main():
     parser.add_argument("--only-frame", type=int, default=None,
                         help="Generar o regenerar exclusivamente un frame específico (ej: 37)")
     parser.add_argument("--test", action="store_true",
-                        help="Modo test: genera únicamente 4 poses clave (frente, espalda, lateral, acción) para validar")
+                        help="Modo test: genera únicamente 4 poses clave para validar identidad")
     parser.add_argument("--no-enhance", action="store_true",
                         help="Desactiva el post-procesado de pixel art (paleta, despeckling, binarizado alfa)")
     parser.add_argument("--check-only", action="store_true",
-                        help="Solo comprueba la existencia de modelos y sale")
+                        help="Comprueba la existencia de modelos, conectividad de Forge y sale con código de error si faltan requisitos")
 
     args = parser.parse_args()
 

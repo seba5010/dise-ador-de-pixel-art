@@ -62,7 +62,42 @@ El nuevo pipeline interactúa con Forge a través de su **API HTTP local** (`htt
 
 ---
 
-## 4. Modos de Uso
+## 4. Flujo de Verificación Previa Recomendada
+
+Para asegurar una ejecución limpia sin desperdiciar tiempo ni recursos en generaciones completas defectuosas, se recomienda seguir este flujo secuencial:
+
+```
+[1. Iniciar Forge] ──► [2. --check-only] ──► [3. Verificar SD 1.5] ──► [4. Ejecutar TEST] ──► [5. Revisar Comparativa] ──► [6. Generación Completa]
+   webui forger\run.bat     Validar modelos         Asegurar checkpoint       4 poses clave             Validar identidad           64 o 96 frames
+```
+
+1. **Iniciar Forge:**
+   Ejecutar `webui forger\run.bat` y esperar a que muestre `Running on local URL: http://127.0.0.1:7860`.
+2. **Ejecutar `--check-only`:**
+   Verificar que los archivos base (SD 1.5, ControlNet) estén en disco y que Forge responda en la API.
+   ```powershell
+   & "webui forger\system\python\python.exe" forge_reference_pipeline.py --reference tori --control lineart --check-only
+   ```
+3. **Verificar que SD 1.5 esté activo:**
+   El pipeline comprobará automáticamente si `v1-5-pruned-emaonly` está cargado en memoria de GPU; de no ser así, solicitará el cambio por API antes de empezar.
+4. **Ejecutar Modo TEST:**
+   Generar rápidamente únicamente 4 poses clave para evaluar la adaptación visual:
+   - Formato `16x4`: Frames 1 (Frente), 17 (Espalda), 33 (Derecha), 49 (Izquierda).
+   - Formato `8x12`: Frames 1 (Frente), 33 (Espalda), 17 (Lateral), 65 (Cocina).
+   ```powershell
+   & "webui forger\system\python\python.exe" forge_reference_pipeline.py --reference tori --format 16x4 --control lineart --test
+   ```
+5. **Revisar Comparación:**
+   Inspeccionar el panel generado en `output/<personaje>/forge/previews/test_comparison_4poses_<control>.png`.
+6. **Ejecutar Generación Completa:**
+   Una vez confirmada la coherencia de las 4 poses, proceder a la generación de todos los frames:
+   ```powershell
+   & "webui forger\system\python\python.exe" forge_reference_pipeline.py --reference tori --format 16x4 --control lineart
+   ```
+
+---
+
+## 5. Modos de Uso
 
 ### Opción 1: Lanzador Interactivo Windows (Recomendado)
 
@@ -76,6 +111,13 @@ El asistente te solicitará de forma intuitiva:
 3. **ControlNet:** `[1] Lineart` (recomendado) o `[2] Canny`.
 4. **Modo:** `[1] TEST (4 poses rápidas)`, `[2] Completo` o `[3] Reanudar (--resume)`.
 
+También soporta ejecución directa por argumentos con valores por defecto automáticos (`16x4` y `lineart`):
+```cmd
+run_generate_forge.bat tori
+run_generate_forge.bat tori 8x12 canny
+run_generate_forge.bat tori 16x4 lineart --test
+```
+
 ---
 
 ### Opción 2: Línea de Comandos (CLI Avanzado)
@@ -86,7 +128,7 @@ Puedes invocar `forge_reference_pipeline.py` directamente usando el intérprete 
 # 1. Comprobación rápida de modelos (sin generar)
 & "webui forger\system\python\python.exe" forge_reference_pipeline.py --reference tori --check-only
 
-# 2. Modo TEST (4 poses clave: frente, espalda, lateral y acción)
+# 2. Modo TEST (4 poses clave: frente, espalda, lateral/derecha y acción/izquierda)
 & "webui forger\system\python\python.exe" forge_reference_pipeline.py --reference tori --format 16x4 --control lineart --test
 
 # 3. Generación completa de la hoja 16x4 (64 frames)
@@ -104,7 +146,7 @@ Puedes invocar `forge_reference_pipeline.py` directamente usando el intérprete 
 
 ---
 
-## 5. Parámetros Disponibles
+## 6. Parámetros Disponibles
 
 | Parámetro | Valor por Defecto | Descripción |
 | :--- | :--- | :--- |
@@ -127,7 +169,7 @@ Puedes invocar `forge_reference_pipeline.py` directamente usando el intérprete 
 
 ---
 
-## 6. Organización de Archivos de Salida
+## 7. Organización de Archivos de Salida
 
 Cada ejecución almacena los datos de forma determinista y estructurada en:
 
@@ -145,28 +187,44 @@ output/
           ├── failed/                                   # Frames que no superaron el Quality Gate
           ├── previews/
           │   └── test_comparison_4poses_lineart.png    # Panel de validación de identidad (Modo TEST)
-          ├── <nombre_personaje>_spritesheet_4x16_lineart.png
-          └── <nombre_personaje>_spritesheet_4x16_lineart_vista_previa.png
+          ├── <nombre_personaje>_spritesheet_16x4_lineart.png
+          └── <nombre_personaje>_spritesheet_16x4_lineart_vista_previa.png
 ```
 
 ---
 
-## 7. Flujo Quirúrgico de Calidad y Pixel Art
+## 8. Flujo Quirúrgico de Calidad y Clasificación (Quality Gate)
 
-1. **Generación Frame a Frame:** Python garantiza el orden, numeración matemática (64 o 96 frames) y posición canónica según los moldes de `dataset_frames_individuales/00_MOLDES_POSES/`.
-2. **Extracción de Transparencia Reversible:** Se muestrean las esquinas exteriores y se aplica flood-fill desde los bordes para eliminar únicamente el fondo externo sin borrar píxeles idénticos dentro de la ropa o cuerpo del personaje.
-3. **Postprocesado con `PixelArtEnhancer`:**
-   - **Binarización alfa:** Elimina cualquier degradado suave o anti-aliasing residual.
-   - **Despeckling:** Remueve píxeles flotantes huérfanos.
-   - **Palette Snapping:** Ajusta los colores a la paleta canónica extraída de la foto frontal.
-4. **Ensamblado Canónico:** Utiliza `place_in_cell` y `get_cell_coordinates` para anclar los pies al suelo de cada celda y construir el spritesheet transparente compatible directamente con Unity y Godot.
+1. **Validación Numérica de Moldes:** Se extrae el índice entero de cada molde (`pose_001` -> 1) garantizando la presencia estricta de 1..64 (para `16x4`) o 1..96 (para `8x12`) sin saltos.
+2. **Quality Gate Estricto:** Cada frame generado se evalúa con tres estados:
+   - **`PASS`:** Sprite con canal alfa limpio, dimensiones coherentes y bounding box anatómico válido.
+   - **`WARNING`:** Sprite utilizable pero con alertas leves (ej: contacto marginal con el borde).
+   - **`FAIL`:** Frame con canal alfa vacío, imagen corrupta o dimensiones colapsadas. Se guarda en `failed/` y **no se incorpora a la hoja final**.
+3. **Resumen de Integridad:** Si algún frame falla durante el proceso, el spritesheet se marca explícitamente como **`INCOMPLETO`** y se reportan los números exactos de frames a regenerar con `--resume` o `--only-frame <N>`.
 
 ---
 
-## 8. Calibración y Preservación de Identidad
+## 9. Calibración y Preservación de Identidad
 
-- **ControlNet controla la POSE:** El molde de pose define exclusivamente la postura anatómica.
-- **img2img controla la IDENTIDAD:**
+- **ControlNet controla principalmente estructura y pose:** El molde guía la silueta y líneas del cuerpo, pero no inyecta textura ni color del personaje.
+- **img2img ayuda a conservar identidad:** Transfiere los rasgos, paleta y vestimenta desde la imagen de referencia.
   - Si la identidad se diluye (ropa o rostro cambian demasiado): **Bajar `--denoise` a `0.45` o `0.42`**.
   - Si el personaje no adopta bien la pose: **Subir `--control-weight` a `0.95` o subir `--denoise` a `0.55`**.
-- **Consistencia temporal:** La semilla fija (`--seed-strategy fixed`) asegura que no existan mutaciones aleatorias de vestimenta entre frames contiguos.
+- **Consistencia de semilla:** La semilla fija (`--seed-strategy fixed`) **ayuda a reducir variación aleatoria, pero no garantiza identidad idéntica entre poses**. Ni ControlNet ni una semilla fija garantizan identidad perfecta; por ello, el control de calidad visual en el Modo TEST es mandatorio antes de ensamblar hojas completas.
+
+---
+
+## 10. Informe Técnico sobre Geometría 16x4 vs 8x12
+
+### Formato 16x4 (`724 x 2172`):
+- **Cálculo de Celdas:**
+  - Columnas: `724 / 4 = 181 px` exactos.
+  - Filas: `2172 / 16 = 135.75 px` (fraccional).
+- **Mecanismo:** El pipeline utiliza `get_cell_coordinates()` con redondeo proporcional (`round(i * H / 16)`) para compensar la fracción. Esto mantiene compatibilidad total con los spritesheets históricos del proyecto generados por `normalize_spritesheets.py`.
+- **Plantillas Originales:** En `plantillas_edicion_manual/`, las plantillas manuales usan `341 x 1024` y `682 x 2048` (`2048 / 16 = 128 px` exactos). Si se requiere importación en Unity/Godot con *Cell Size* fijo entero, la resolución canónica natural es `682 x 2048` (o `341 x 1024`), pero `724 x 2172` se conserva por compatibilidad de assets existentes.
+
+### Formato 8x12 (`1024 x 1536`):
+- **Cálculo de Celdas:**
+  - Columnas: `1024 / 8 = 128 px` exactos.
+  - Filas: `1536 / 12 = 128 px` exactos.
+- **Ventaja:** Celdas perfectamente cuadradas y uniformes de 128x128 píxeles, ideal para Unity Sprite Editor y motores de videojuegos modernos.

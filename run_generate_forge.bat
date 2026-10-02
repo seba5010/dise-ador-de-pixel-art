@@ -16,18 +16,7 @@ echo   No altera ni sobrescribe el motor neuronal PyTorch existente (Motor A)
 echo ======================================================================
 echo.
 
-if not "%~1"=="" (
-    set CHAR_ARG=%~1
-    set FMT_ARG=16x4
-    set CTRL_ARG=lineart
-    if not "%~2"=="" set FMT_ARG=%~2
-    if not "%~3"=="" set CTRL_ARG=%~3
-    
-    echo Ejecutando directamente:
-    "%PYTHON_EXE%" forge_reference_pipeline.py --reference "%~1" --format "%~2" --control "%~3" %4 %5 %6 %7 %8 %9
-    pause
-    exit /b 0
-)
+if not "%~1"=="" goto :parse_direct_args
 
 echo Paso 1: Identidad del Personaje
 echo ----------------------------------------------------------------------
@@ -89,3 +78,74 @@ echo.
 echo.
 echo Presiona cualquier tecla para finalizar...
 pause > nul
+exit /b 0
+
+:: ============================================================================
+:: MODO DIRECTO (ARGUMENTOS PASADOS EN LINEA DE COMANDOS)
+:: ============================================================================
+:parse_direct_args
+set "CHAR_ARG=%~1"
+set "FMT_ARG=16x4"
+set "CTRL_ARG=lineart"
+set "REST_ARGS="
+
+:: Analizar segundo argumento (%2)
+set "ARG2=%~2"
+if not "%ARG2%"=="" (
+    if "%ARG2:~0,1%"=="-" goto :collect_from_arg2
+    if /i "%ARG2%"=="16x4" (
+        set "FMT_ARG=16x4"
+    ) else if /i "%ARG2%"=="8x12" (
+        set "FMT_ARG=8x12"
+    ) else (
+        set "FMT_ARG=%ARG2%"
+    )
+)
+
+:: Analizar tercer argumento (%3)
+set "ARG3=%~3"
+if not "%ARG3%"=="" (
+    if "%ARG3:~0,1%"=="-" goto :collect_from_arg3
+    if /i "%ARG3%"=="lineart" (
+        set "CTRL_ARG=lineart"
+    ) else if /i "%ARG3%"=="canny" (
+        set "CTRL_ARG=canny"
+    ) else (
+        set "CTRL_ARG=%ARG3%"
+    )
+)
+
+:: Desplazar los 3 primeros argumentos y colectar los restantes
+shift
+shift
+shift
+goto :collect_args_loop
+
+:collect_from_arg2
+shift
+goto :collect_args_loop
+
+:collect_from_arg3
+shift
+shift
+goto :collect_args_loop
+
+:collect_args_loop
+if "%~1"=="" goto :exec_direct
+set "REST_ARGS=%REST_ARGS% %1"
+shift
+goto :collect_args_loop
+
+:exec_direct
+echo ======================================================================
+echo   EJECUTANDO EN MODO DIRECTO:
+echo     - Personaje : %CHAR_ARG%
+echo     - Formato   : %FMT_ARG%
+echo     - ControlNet: %CTRL_ARG%
+if not "%REST_ARGS%"=="" echo     - Extras    :%REST_ARGS%
+echo ======================================================================
+echo.
+"%PYTHON_EXE%" forge_reference_pipeline.py --reference "%CHAR_ARG%" --format "%FMT_ARG%" --control "%CTRL_ARG%" %REST_ARGS%
+pause
+exit /b 0
+
