@@ -1171,7 +1171,7 @@ def run_forge_reference_pipeline(
                 enhanced = PixelArtEnhancer.remove_orphan_pixels(enhanced, min_connected_size=3)
                 # 2. Encaje a paleta canónica para mantener identidad exacta
                 if len(char_palette) > 0:
-                    enhanced = PixelArtEnhancer.snap_to_palette(enhanced, char_palette, tolerance=32.0)
+                    enhanced = PixelArtEnhancer.snap_to_palette(enhanced, char_palette, tolerance=65.0)
             else:
                 enhanced = transparent_img
 

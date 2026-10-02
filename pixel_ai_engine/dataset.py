@@ -308,6 +308,8 @@ def scan_character_datasets(root_dir: Path) -> List[Dict[str, Path]]:
     variants = ["rnormal", "rbchef", "rnchef", "rbnormal"]
     
     for cdir in char_dirs:
+        if cdir.name.lower() in ["tori", "test", "_pruebas_y_obsoletos"]:
+            continue
         files = list(cdir.glob("*.png"))
         sheets = [f for f in files if "movimiento" in f.name.lower()]
         fronts = [f for f in files if "movimiento" not in f.name.lower()]

@@ -1,4 +1,4 @@
-# Archivos comprimidos y pesados (> 100MB)
+﻿# Archivos comprimidos y pesados (> 100MB)
 *.7z
 *.zip
 *.rar
@@ -10,17 +10,20 @@
 *.bin
 *.onnx
 
-# Entorno de ejecución portable
+# Entorno de ejecucion portable
 webui forger/
 system/
 webui_forge_cu121_torch231/
 
-# Checkpoints y cachés de entrenamiento masivos (>100MB)
-checkpoints/*.pt
-!checkpoints/best_generator.pt
-!checkpoints/base_generator_16x4.pt
-training_samples/preview_epoch_*.png
-training_samples/latest_*.png
+# Checkpoints y caches masivos (> 100MB)
+**/dataset_cache_*.pt
+**/latest_checkpoint*.pt
+**/checkpoints/*.pt
+!**/base_generator_16x4.pt
+
+# Previews y muestras visuales de entrenamiento
+**/training_samples/
+training_samples/
 
 # Python y sistema
 __pycache__/
