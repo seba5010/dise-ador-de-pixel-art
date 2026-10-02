@@ -737,38 +737,74 @@ def run_forge_reference_pipeline(
 
     # 4. Estado de la API de Forge
     is_alive, msg = check_forge_api_connection(forge_url)
+    cn_ok = False
+    cn_model_name = ""
+    ep_ok = False
+    ep_msg = ""
+
     if is_alive:
         print(f"  Forge API              : ONLINE ({forge_url})")
+        ep_ok, ep_msg = verify_forge_endpoints(forge_url)
         options = get_forge_options(forge_url)
         current_ckpt = options.get("sd_model_checkpoint", "") if options else "Desconocido"
         ckpt_status = "OK" if "v1-5-pruned-emaonly" in current_ckpt.lower() else "DIFERENTE (se cambiará al generar)"
         print(f"  Checkpoint activo      : {current_ckpt} [{ckpt_status}]")
         
-        cn_ok, cn_info = verify_controlnet_in_api(forge_url, control_type)
+        cn_ok, cn_model_name = verify_controlnet_in_api(forge_url, control_type)
         if cn_ok:
-            print(f"  ControlNet API ({control_type}) : DETECTADO ({cn_info})")
+            print(f"  ControlNet API {control_type.capitalize():<7}: DETECTADO ({cn_model_name})")
         else:
-            print(f"  ControlNet API ({control_type}) : NO REGISTRADO EN FORGE")
+            print(f"  ControlNet API {control_type.capitalize():<7}: NO REGISTRADO EN FORGE")
     else:
         print(f"  Forge API              : OFFLINE ({forge_url})")
         print(f"  Modelos locales        : {'OK' if (has_sd15 and has_req_ctrl) else 'INCOMPLETOS'}")
-        print(f"  Generación             : Requiere iniciar Forge ('webui forger\\run.bat')")
 
     print("=" * 70)
 
-    # Si se solicitó --check-only, validar requisitos obligatorios y salir con código claro
+    # Si se solicitó --check-only, evaluar los 5 casos estrictos y salir
     if check_only:
+        # CASO D: Falta SD1.5 en disco
         if not has_sd15:
-            print("\n[ERROR] Falta el modelo base Stable Diffusion 1.5 (v1-5-pruned-emaonly.safetensors).")
-            print("RESULTADO: ERROR - FALTAN MODELOS OBLIGATORIOS\n")
-            return False
-        if not has_req_ctrl:
-            print(f"\n[ERROR] Falta el modelo ControlNet solicitado '{control_type}'.")
+            print(f"\n[ERROR] Falta el modelo base Stable Diffusion 1.5 en disco (v1-5-pruned-emaonly.safetensors).")
             print("RESULTADO: ERROR - FALTAN MODELOS OBLIGATORIOS\n")
             return False
 
-        print("  RESULTADO: PIPELINE LISTO (Archivos y dependencias locales validados)\n")
-        return True
+        # CASO E: Falta ControlNet solicitado en disco
+        if not has_req_ctrl:
+            print(f"\n[ERROR] Falta el modelo ControlNet solicitado '{control_type}' en disco.")
+            print("RESULTADO: ERROR - FALTAN MODELOS OBLIGATORIOS\n")
+            return False
+
+        # Si Forge está ONLINE
+        if is_alive:
+            # Comprobar endpoints indispensables
+            if not ep_ok:
+                print(f"\n[ERROR] Endpoints indispensables de Forge no responden: {ep_msg}")
+                print("RESULTADO: ERROR - API DE FORGE INCOMPLETA\n")
+                return False
+
+            # CASO C: ControlNet existe en disco pero NO aparece en /controlnet/model_list
+            if not cn_ok:
+                real_model_path = models.get(ctrl_key)
+                expected_model = f"control_v11p_sd15_{ctrl_key}"
+                print("\n" + "!" * 70)
+                print(f"  [ERROR] ControlNet {control_type.capitalize()} existe en disco, pero Forge no lo tiene registrado.")
+                print(f"  Ruta del archivo   : {real_model_path}")
+                print(f"  Forge API          : ONLINE ({forge_url})")
+                print(f"  Modelo esperado    : {expected_model}")
+                print(f"  Acción recomendada : Reinicia Forge ('webui forger\\run.bat') y vuelve a ejecutar --check-only.")
+                print("!" * 70)
+                print("RESULTADO: ERROR - CONTROLNET NO REGISTRADO EN FORGE\n")
+                return False
+
+            # CASO B: Todo en orden y Forge ONLINE
+            print("  RESULTADO: PIPELINE LISTO PARA GENERAR\n")
+            return True
+        else:
+            # CASO A: Forge OFFLINE pero archivos locales válidos
+            print("  RESULTADO: PIPELINE LISTO LOCALMENTE")
+            print("  Forge está apagado. Los archivos requeridos están presentes, pero debes iniciar Forge antes de generar.\n")
+            return True
 
     # Para generación real, verificar que Forge está activo
     if not is_alive:
@@ -776,7 +812,6 @@ def run_forge_reference_pipeline(
         return False
 
     # Verificar endpoints indispensables de Forge
-    ep_ok, ep_msg = verify_forge_endpoints(forge_url)
     if not ep_ok:
         print(f"\n[ERROR] {ep_msg}")
         return False
@@ -788,9 +823,16 @@ def run_forge_reference_pipeline(
         return False
 
     # Verificar que el modelo ControlNet seleccionado aparece en la API
-    cn_ok, cn_model_name = verify_controlnet_in_api(forge_url, control_type)
     if not cn_ok:
-        print(f"\n{cn_model_name}")
+        real_model_path = models.get(ctrl_key)
+        expected_model = f"control_v11p_sd15_{ctrl_key}"
+        print("\n" + "!" * 70)
+        print(f"  [ERROR] ControlNet {control_type.capitalize()} existe en disco, pero Forge no lo tiene registrado.")
+        print(f"  Ruta del archivo   : {real_model_path}")
+        print(f"  Forge API          : ONLINE ({forge_url})")
+        print(f"  Modelo esperado    : {expected_model}")
+        print(f"  Acción recomendada : Reinicia Forge ('webui forger\\run.bat').")
+        print("!" * 70)
         return False
     print(f"[ControlNet] Modelo asignado en Forge: '{cn_model_name}' (Modo: {control_type.upper()})")
 

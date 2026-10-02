@@ -216,15 +216,51 @@ output/
 
 ## 10. Informe Técnico sobre Geometría 16x4 vs 8x12
 
-### Formato 16x4 (`724 x 2172`):
-- **Cálculo de Celdas:**
-  - Columnas: `724 / 4 = 181 px` exactos.
-  - Filas: `2172 / 16 = 135.75 px` (fraccional).
-- **Mecanismo:** El pipeline utiliza `get_cell_coordinates()` con redondeo proporcional (`round(i * H / 16)`) para compensar la fracción. Esto mantiene compatibilidad total con los spritesheets históricos del proyecto generados por `normalize_spritesheets.py`.
-- **Plantillas Originales:** En `plantillas_edicion_manual/`, las plantillas manuales usan `341 x 1024` y `682 x 2048` (`2048 / 16 = 128 px` exactos). Si se requiere importación en Unity/Godot con *Cell Size* fijo entero, la resolución canónica natural es `682 x 2048` (o `341 x 1024`), pero `724 x 2172` se conserva por compatibilidad de assets existentes.
+### Análisis Matemático de Formatos 16x4 Históricos y Actual:
 
-### Formato 8x12 (`1024 x 1536`):
+Ninguno de los formatos históricos o heredados de 16x4 posee celdas uniformes en ambas dimensiones; todos requieren `get_cell_coordinates()` o delimitación por proporciones:
+
+1. **Formato Histórico 341 x 1024:**
+   - Columnas: $341 / 4 = 85.25\text{ px}$ (fraccional).
+   - Filas: $1024 / 16 = 64.0\text{ px}$ (entera).
+   - *Resultado:* Columnas fraccionarias. Requiere interpolación proporcional.
+
+2. **Formato Histórico 682 x 2048 (en plantillas manuales y movimientos originales):**
+   - Columnas: $682 / 4 = 170.5\text{ px}$ (fraccional).
+   - Filas: $2048 / 16 = 128.0\text{ px}$ (entera).
+   - *Resultado:* Columnas fraccionarias. **NO es un formato de celdas uniformes**, ya que horizontalmente cada celda requiere $170.5\text{ px}$.
+
+3. **Formato Actual 724 x 2172 (estándar heredado de `normalize_spritesheets.py`):**
+   - Columnas: $724 / 4 = 181.0\text{ px}$ (entera).
+   - Filas: $2172 / 16 = 135.75\text{ px}$ (fraccional).
+   - *Resultado:* Filas fraccionarias.
+   - *Estado en el Pipeline:* **Se mantiene estrictamente `724 x 2172` en `GRID_CONFIGS["16x4"]`** para conservar compatibilidad absoluta con todos los spritesheets existentes del proyecto, sin redimensionar assets, moldes ni scripts preexistentes.
+
+### Ejemplos Matemáticamente Válidos para Celdas Enteras en 16x4 (Referencia Técnica):
+
+Si en fases futuras del proyecto se decidiera migrar a un lienzo de 16x4 con celdas de tamaño entero estricto para Unity/Godot, las opciones matemáticamente válidas son:
+
+- **Opción A (680 x 2048):**
+  - Columnas: $680 / 4 = 170\text{ px}$
+  - Filas: $2048 / 16 = 128\text{ px}$
+  - Tamaño de Celda uniforme: $170 \times 128\text{ px}$.
+- **Opción B (724 x 2176) — La más cercana al estándar actual:**
+  - Columnas: $724 / 4 = 181\text{ px}$
+  - Filas: $2176 / 16 = 136\text{ px}$
+  - Tamaño de Celda uniforme: $181 \times 136\text{ px}$.
+  - *(Solo requiere añadir 4 píxeles de altura respecto al estándar actual de 724x2172).*
+- **Opción C (512 x 2048):**
+  - Columnas: $512 / 4 = 128\text{ px}$
+  - Filas: $2048 / 16 = 128\text{ px}$
+  - Tamaño de Celda uniforme cuadrada: $128 \times 128\text{ px}$.
+
+*(Nota: Estas opciones son solo informativas. No se migran assets ni se alteran las grillas actuales).*
+
+---
+
+### Formato Canónico 8x12 (`1024 x 1536`):
+
 - **Cálculo de Celdas:**
-  - Columnas: `1024 / 8 = 128 px` exactos.
-  - Filas: `1536 / 12 = 128 px` exactos.
-- **Ventaja:** Celdas perfectamente cuadradas y uniformes de 128x128 píxeles, ideal para Unity Sprite Editor y motores de videojuegos modernos.
+  - Columnas: $1024 / 8 = 128\text{ px}$ exactos.
+  - Filas: $1536 / 12 = 128\text{ px}$ exactos.
+- **Ventaja de Integración:** Celdas perfectamente cuadradas y uniformes de **$128 \times 128\text{ px}$**. Es el formato estándar recomendado para corte automático inmediato en Unity Sprite Editor (*Grid by Cell Size: 128x128*) y Godot Engine sin desfases de píxel.
