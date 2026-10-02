@@ -483,38 +483,82 @@ def prepare_reference_input(ref_path: Path, target_size: int = 512) -> Tuple[Ima
     oy = max(8, target_size - nh - 16)  # Anclado hacia la base
     canvas.paste(scaled, (ox, oy), scaled)
     
-    return canvas, palette
+    return canvas, palette, (nw, nh, ox, oy)
 
 
-def prepare_controlnet_pose(pose_path: Path, control_type: str = "lineart", target_size: int = 512) -> Tuple[Image.Image, str]:
+def prepare_controlnet_pose(
+    pose_path: Path,
+    control_type: str = "lineart",
+    target_size: int = 512,
+    ref_bounds: Optional[Tuple[int, int, int, int]] = None,
+) -> Tuple[Image.Image, str]:
     """
     Procesa el frame de molde/pose individual para alimentar ControlNet:
-    - Escala el molde con Nearest Neighbor.
-    - Genera la guía estructural óptima (líneas blancas sobre fondo negro para module='none').
-    Retorna (imagen_preparada_pil, nombre_modulo).
+    1. Aísla el maniquí anatómico eliminando marcos de celda y líneas residuales de la cuadrícula.
+    2. Recorta el maniquí y lo escala adaptándolo a las dimensiones exactas del personaje de referencia (evita auras grises).
+    3. Genera líneas Canny/Lineart gruesas sobre fondo negro.
+    Retorna (imagen_preparada_pil, "None").
     """
-    pose_img = Image.open(pose_path).convert("RGBA")
-    pose_scaled = pose_img.resize((target_size, target_size), Image.Resampling.NEAREST)
-    arr = np.array(pose_scaled)
-    alpha = arr[:, :, 3]
-    
-    # Crear máscara binaria del cuerpo
-    mask = (alpha > 35).astype(np.uint8) * 255
-    
-    if control_type.lower() == "canny":
-        # Extraer bordes duros con Canny para guía estricta
-        edges = cv2.Canny(mask, 100, 200)
-        # Dilatar levemente para dar espesor legible al modelo
-        kernel = np.ones((2, 2), np.uint8)
-        dilated = cv2.dilate(edges, kernel, iterations=1)
-        out_pil = Image.fromarray(dilated, mode="L").convert("RGB")
-        return out_pil, "None"
+    raw_mold = Image.open(pose_path).convert("RGBA")
+    arr_m = np.array(raw_mold)
+    mask_raw = (arr_m[:, :, 3] > 30).astype(np.uint8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_raw, connectivity=8)
+
+    # Filtrar líneas finas de cuadrícula y marcos perimetrales
+    best_idx = -1
+    best_area = 0
+    for i in range(1, num_labels):
+        w = stats[i, cv2.CC_STAT_WIDTH]
+        h = stats[i, cv2.CC_STAT_HEIGHT]
+        area = stats[i, cv2.CC_STAT_AREA]
+        if w <= 3 or h <= 3:
+            continue
+        if w >= 100 and h >= 100 and area < 600:
+            continue
+        if area > best_area:
+            best_area = area
+            best_idx = i
+
+    if best_idx == -1 and num_labels > 1:
+        best_idx = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+
+    if best_idx > 0:
+        mannequin_mask = (labels == best_idx)
     else:
-        # Modo Lineart: Extraer contornos anatómicos nítidos
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        gradient = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, kernel)
-        out_pil = Image.fromarray(gradient, mode="L").convert("RGB")
-        return out_pil, "None"
+        mannequin_mask = mask_raw.astype(bool)
+
+    # Conservar el sombreado original del maniquí
+    clean_m_arr = np.zeros_like(arr_m)
+    clean_m_arr[mannequin_mask] = arr_m[mannequin_mask]
+    coords_m = np.argwhere(mannequin_mask)
+    if len(coords_m) > 0:
+        y0_m, x0_m = coords_m.min(axis=0)
+        y1_m, x1_m = coords_m.max(axis=0)
+        crop_m = Image.fromarray(clean_m_arr).crop((x0_m, y0_m, x1_m + 1, y1_m + 1))
+    else:
+        crop_m = raw_mold
+
+    if ref_bounds is not None:
+        nw_m, nh_m, ox_m, oy_m = ref_bounds
+    else:
+        cw_m, ch_m = crop_m.size
+        safe_size = int(target_size * 0.85)
+        scale_m = min(safe_size / max(1, cw_m), safe_size / max(1, ch_m))
+        nw_m = max(1, int(round(cw_m * scale_m)))
+        nh_m = max(1, int(round(ch_m * scale_m)))
+        ox_m = (target_size - nw_m) // 2
+        oy_m = max(8, target_size - nh_m - 16)
+
+    scaled_m = crop_m.resize((nw_m, nh_m), Image.Resampling.NEAREST)
+    canvas_m = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
+    canvas_m.paste(scaled_m, (ox_m, oy_m), scaled_m)
+
+    m_gray = cv2.cvtColor(np.array(canvas_m)[:, :, :3], cv2.COLOR_RGB2GRAY)
+    canny_m = cv2.Canny(m_gray, 30, 100)
+    kernel = np.ones((3, 3), np.uint8)
+    canny_m = cv2.dilate(canny_m, kernel, iterations=1)
+    out_pil = Image.fromarray(canny_m, mode="L").convert("RGB")
+    return out_pil, "None"
 
 
 # ==============================================================================
@@ -600,6 +644,102 @@ def validate_frame(frame_img: Image.Image, frame_idx: int) -> Tuple[bool, str, s
 
 
 # ==============================================================================
+# 7.5 DIRECCIÓN SEMÁNTICA DE MOVIMIENTO Y ACCIÓN POR FRAME
+# ==============================================================================
+
+def get_frame_prompt_and_denoise(
+    format_type: str,
+    frame_idx: int,
+    base_denoise: float = 0.55,
+    char_name: str = "character"
+) -> Tuple[str, str, float]:
+    """
+    Construye la dirección semántica (perspectiva/acción) y ajusta la fuerza de desruido
+    según la fila canónica del spritesheet (LEEME_ACCIONES.md).
+    """
+    base_style = (
+        f"2D pixel art videogame sprite of {char_name}, full body, clean hard pixel edges, "
+        "same character as reference image, exact same clothing, exact same colors, "
+        "exact same hair, exact same skin tone, consistent character design, 16-bit retro style"
+    )
+    base_neg = (
+        "different character, redesigned outfit, different hair, extra arms, extra legs, "
+        "duplicate limbs, malformed hands, cropped feet, cropped head, photorealistic, "
+        "3d render, smooth painting, blurry, anti-aliasing, text, watermark, background objects"
+    )
+
+    if format_type == "8x12":
+        row = (frame_idx - 1) // 8 + 1
+        if row == 1:
+            action = "front view, facing camera, south view, walking forward animation cycle"
+            neg_add = "back view, facing away, rear view"
+            f_denoise = min(base_denoise, 0.52)
+        elif row == 2:
+            action = "three-quarter front diagonal view, looking southeast, walking southeast"
+            neg_add = "direct back view"
+            f_denoise = max(base_denoise, 0.60)
+        elif row == 3:
+            action = "side profile view facing right, looking right, walking east, side of body"
+            neg_add = "direct front view, facing camera, two front eyes, front chest"
+            f_denoise = max(base_denoise, 0.65)
+        elif row == 4:
+            action = "three-quarter back diagonal view, looking northeast, walking northeast"
+            neg_add = "facing camera, front view, front face"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 5:
+            action = "back view, from behind, rear view, backside of body, facing away from camera, walking north"
+            neg_add = "facing camera, front view, front face, eyes, nose, mouth, front chest"
+            f_denoise = max(base_denoise, 0.65)
+        elif row == 6:
+            action = "three-quarter back diagonal view, looking northwest, walking northwest"
+            neg_add = "facing camera, front view, front face"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 7:
+            action = "side profile view facing left, looking left, walking west, side of body"
+            neg_add = "direct front view, facing camera, two front eyes, front chest"
+            f_denoise = max(base_denoise, 0.65)
+        elif row == 8:
+            action = "three-quarter front diagonal view, looking southwest, walking southwest"
+            neg_add = "direct back view"
+            f_denoise = max(base_denoise, 0.60)
+        elif row in (9, 10):
+            action = "cooking action pose, chef cooking movements, holding utensils, stirring pot, hands active in front"
+            neg_add = "hands in pockets, standing still idle, relaxed arms"
+            f_denoise = max(base_denoise, 0.62)
+        elif row == 11:
+            action = "thinking pose with hand on chin, carrying box action pose, active arms"
+            neg_add = "hands in pockets, standing still idle"
+            f_denoise = max(base_denoise, 0.62)
+        else:  # row 12
+            action = "serving dish action pose, celebration pose, hands raised in air celebrating"
+            neg_add = "hands in pockets, standing still idle"
+            f_denoise = max(base_denoise, 0.62)
+
+    else:  # 16x4
+        row = (frame_idx - 1) // 4 + 1
+        if 1 <= row <= 4:
+            action = "front view, facing camera, south view, walking forward animation cycle"
+            neg_add = "back view, facing away, rear view"
+            f_denoise = min(base_denoise, 0.52)
+        elif 5 <= row <= 8:
+            action = "back view, from behind, rear view, backside of body, facing away from camera, walking north"
+            neg_add = "facing camera, front view, front face, eyes, nose, mouth, front chest"
+            f_denoise = max(base_denoise, 0.65)
+        elif 9 <= row <= 12:
+            action = "side profile view facing right, looking right, walking east, side of body"
+            neg_add = "direct front view, facing camera, two front eyes, front chest"
+            f_denoise = max(base_denoise, 0.65)
+        else:
+            action = "side profile view facing left, looking left, walking west, side of body"
+            neg_add = "direct front view, facing camera, two front eyes, front chest"
+            f_denoise = max(base_denoise, 0.65)
+
+    full_prompt = f"{action}, {base_style}"
+    full_neg = f"{neg_add}, {base_neg}"
+    return full_prompt, full_neg, f_denoise
+
+
+# ==============================================================================
 # 8. LLAMADA A LA API DE FORGE (IMG2IMG + CONTROLNET)
 # ==============================================================================
 
@@ -646,7 +786,7 @@ def generate_single_frame_forge(
                         "image": f"data:image/png;base64,{control_b64}",
                         "guidance_start": control_start,
                         "guidance_end": control_end,
-                        "control_mode": "Balanced",
+                        "control_mode": "ControlNet is more important",
                         "pixel_perfect": False,
                         "processor_res": width,
                         "threshold_a": 0,
@@ -684,8 +824,8 @@ def run_forge_reference_pipeline(
     seed_strategy: str = "fixed",
     steps: int = 25,
     cfg: float = 7.0,
-    denoise: float = 0.50,
-    control_weight: float = 0.90,
+    denoise: float = 0.55,
+    control_weight: float = 1.10,
     control_start: float = 0.0,
     control_end: float = 1.0,
     sampler: str = "Euler a",
@@ -858,7 +998,7 @@ def run_forge_reference_pipeline(
     print(f"[Semilla] Base para '{char_name}': {base_seed} (Estrategia: {seed_strategy})")
 
     # 8. Preprocesar referencia frontal y paleta
-    ref_canvas, char_palette = prepare_reference_input(ref_path, target_size=resolution)
+    ref_canvas, char_palette, ref_bounds = prepare_reference_input(ref_path, target_size=resolution)
     ref_b64 = pil_to_base64(ref_canvas)
 
     # Prompts base conservadores
@@ -925,10 +1065,18 @@ def run_forge_reference_pipeline(
 
         # Cargar molde numérico correspondiente
         pose_file = molds_map[f_num]
-        ctrl_img, ctrl_module = prepare_controlnet_pose(pose_file, control_type=control_type, target_size=resolution)
+        ctrl_img, ctrl_module = prepare_controlnet_pose(pose_file, control_type=control_type, target_size=resolution, ref_bounds=ref_bounds)
         ctrl_b64 = pil_to_base64(ctrl_img)
 
-        print(f"  [Generando] Frame {f_num:03d}/{total_frames} (Molde: {pose_file.name}, Seed: {current_seed})...", end="", flush=True)
+        # Dirección semántica de movimiento/acción y denoise adaptativo según la fila
+        frame_prompt, frame_neg, frame_denoise = get_frame_prompt_and_denoise(
+            format_type=format_type,
+            frame_idx=f_num,
+            base_denoise=denoise,
+            char_name=char_name
+        )
+
+        print(f"  [Generando] Frame {f_num:03d}/{total_frames} (Molde: {pose_file.name}, Seed: {current_seed}, Denoise: {frame_denoise:.2f})...", end="", flush=True)
         t0 = time.time()
 
         try:
@@ -945,12 +1093,12 @@ def run_forge_reference_pipeline(
                 seed=current_seed,
                 steps=steps,
                 cfg_scale=cfg,
-                denoise=denoise,
+                denoise=frame_denoise,
                 width=resolution,
                 height=resolution,
                 sampler_name=sampler,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
+                prompt=frame_prompt,
+                negative_prompt=frame_neg,
             )
             raw_result.save(raw_file)
 
@@ -1131,10 +1279,10 @@ def main():
                         help="Pasos de difusión en Forge (defecto: 25)")
     parser.add_argument("--cfg", type=float, default=7.0,
                         help="Escala CFG (defecto: 7.0)")
-    parser.add_argument("--denoise", type=float, default=0.50,
-                        help="Fuerza de denoising en img2img (0.40 - 0.60 recomendado para preservar identidad)")
-    parser.add_argument("--control-weight", type=float, default=0.90,
-                        help="Peso de ControlNet (0.80 - 1.00)")
+    parser.add_argument("--denoise", type=float, default=0.55,
+                        help="Fuerza base de denoising en img2img (0.50 - 0.65 adaptativo por fila)")
+    parser.add_argument("--control-weight", type=float, default=1.10,
+                        help="Peso de ControlNet (1.00 - 1.20 recomendado)")
     parser.add_argument("--control-start", type=float, default=0.0,
                         help="Inicio de guía ControlNet (0.0)")
     parser.add_argument("--control-end", type=float, default=1.0,
