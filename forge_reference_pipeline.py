@@ -508,13 +508,13 @@ def prepare_controlnet_pose(pose_path: Path, control_type: str = "lineart", targ
         kernel = np.ones((2, 2), np.uint8)
         dilated = cv2.dilate(edges, kernel, iterations=1)
         out_pil = Image.fromarray(dilated, mode="L").convert("RGB")
-        return out_pil, "none"
+        return out_pil, "None"
     else:
         # Modo Lineart: Extraer contornos anatómicos nítidos
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         gradient = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, kernel)
         out_pil = Image.fromarray(gradient, mode="L").convert("RGB")
-        return out_pil, "none"
+        return out_pil, "None"
 
 
 # ==============================================================================
@@ -648,6 +648,9 @@ def generate_single_frame_forge(
                         "guidance_end": control_end,
                         "control_mode": "Balanced",
                         "pixel_perfect": False,
+                        "processor_res": width,
+                        "threshold_a": 0,
+                        "threshold_b": 0,
                     }
                 ]
             }
