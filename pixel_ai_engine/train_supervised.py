@@ -77,8 +77,8 @@ class FallbackSobelLoss(nn.Module):
             p_gy = nn.functional.conv2d(p_c, self.ky, padding=1)
             t_gx = nn.functional.conv2d(t_c, self.kx, padding=1)
             t_gy = nn.functional.conv2d(t_c, self.ky, padding=1)
-            p_edge = torch.sqrt(p_gx**2 + p_gy**2 + 1e-6)
-            t_edge = torch.sqrt(t_gx**2 + t_gy**2 + 1e-6)
+            p_edge = torch.sqrt(torch.clamp(p_gx**2 + p_gy**2, min=1e-5))
+            t_edge = torch.sqrt(torch.clamp(t_gx**2 + t_gy**2, min=1e-5))
             loss += nn.functional.smooth_l1_loss(p_edge, t_edge)
         return loss / 3.0
 
@@ -320,6 +320,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print(f"[!] Aviso: No se encontro snapshot para epoca {respawn_epoch}. Iniciando estandar.")
     elif mode == "resume":
         ckpt_candidate = CHECKPOINT_DIR / "latest_checkpoint.pt"
+        if not ckpt_candidate.exists():
+            ckpt_candidate = CHECKPOINT_DIR / "best_generator.pt"
         if ckpt_candidate.exists():
             try:
                 ckpt = torch.load(ckpt_candidate, map_location=DEVICE)
@@ -332,6 +334,19 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                     print(f"[OK] Reanudando entrenamiento desde epoca {start_epoch}")
             except Exception as e:
                 print(f"[!] Error al reanudar checkpoint: {e}")
+    elif mode == "start":
+        # Warm start: Si existe best_generator o base_generator, iniciar desde pesos entrenados
+        warm_ckpt = CHECKPOINT_DIR / "best_generator.pt"
+        if not warm_ckpt.exists():
+            warm_ckpt = CHECKPOINT_DIR / "base_generator_16x4.pt"
+        if warm_ckpt.exists():
+            try:
+                ckpt = torch.load(warm_ckpt, map_location=DEVICE)
+                gen_state = ckpt.get("generator", ckpt) if isinstance(ckpt, dict) else ckpt
+                generator.load_state_dict(gen_state, strict=False)
+                print(f"[OK] Warm Start: Inicializando generador desde pesos existentes: {warm_ckpt.name}")
+            except Exception as e:
+                print(f"[!] Aviso: No se pudo cargar warm start: {e}. Iniciando desde inicializacion normal.")
 
     total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
 
@@ -352,14 +367,17 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         opt_d = torch.optim.Adam(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999))
         print(f"[!] Optimizador estandar PyTorch Adam activo: {e}")
 
-    scaler_g = GradScaler(enabled=USE_AMP)
-    scaler_d = GradScaler(enabled=USE_AMP)
+    scaler_g = GradScaler(enabled=USE_AMP, init_scale=2048.0)
+    scaler_d = GradScaler(enabled=USE_AMP, init_scale=2048.0)
 
     criterion_l1 = nn.SmoothL1Loss()
     criterion_edge = KorniaSobelLoss().to(DEVICE) if HAS_KORNIA else FallbackSobelLoss().to(DEVICE)
     if HAS_KORNIA:
         print("[OK] Perdida de bordes Kornia Sobel acelerada en GPU activa")
     criterion_bce = nn.BCEWithLogitsLoss()
+
+    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(opt_g, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
+    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(opt_d, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
 
     start_time = time.time()
     avg_g = 0.0
@@ -391,19 +409,24 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
         for batch_i, (fronts, f_indices, targets, _) in enumerate(dataloader):
             if batch_i % 8 == 0:
+                curr_batches = max(1, batch_i)
+                curr_g = epoch_g_loss / curr_batches
+                curr_d = epoch_d_loss / curr_batches
+                curr_l1 = epoch_l1 / curr_batches
+                curr_edge = epoch_edge / curr_batches
                 if PAUSE_FLAG_FILE.exists():
                     print('\n[PAUSA] Senal de pausa en lote. Guardando checkpoint...')
                     try: PAUSE_FLAG_FILE.unlink()
                     except Exception: pass
-                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': avg_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
-                    update_status(epoch, total_target_epochs, 'PAUSADO', avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
+                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': curr_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
+                    update_status(epoch, total_target_epochs, 'PAUSADO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
                 if STOP_FLAG_FILE.exists():
                     print('\n[STOP] Senal de detencion en lote. Guardando checkpoint...')
                     try: STOP_FLAG_FILE.unlink()
                     except Exception: pass
-                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': avg_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
-                    update_status(epoch, total_target_epochs, 'DETENIDO', avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
+                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': curr_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
+                    update_status(epoch, total_target_epochs, 'DETENIDO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
 
             fronts = fronts.to(DEVICE)
@@ -419,25 +442,33 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 l1_alpha = criterion_l1(preds[:, 3:], targets[:, 3:]) * 2.5
                 edge_loss = criterion_edge(preds[:, :3], targets[:, :3]) * 1.5
 
-                d_fake = discriminator(preds, cond)
+                # Discriminador: orden canonico (condition, target)
+                d_fake = discriminator(cond, preds)
                 adv_loss = criterion_bce(d_fake.float().clamp(-30.0, 30.0), torch.ones_like(d_fake).float()) * 0.05
                 total_g = l1_color + l1_alpha + edge_loss + adv_loss
 
             scaler_g.scale(total_g).backward()
-            scaler_g.step(opt_g)
+            scaler_g.unscale_(opt_g)
+            g_norm = torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=5.0)
+            if torch.isfinite(g_norm):
+                scaler_g.step(opt_g)
             scaler_g.update()
 
             # Discriminador (Aprende mas lento para no aplastar al generador)
             opt_d.zero_grad()
             with autocast(enabled=USE_AMP):
-                d_real = discriminator(targets, cond)
-                d_fake_det = discriminator(preds.detach(), cond)
+                # Discriminador: orden canonico (condition, target)
+                d_real = discriminator(cond, targets)
+                d_fake_det = discriminator(cond, preds.detach())
                 loss_d_real = criterion_bce(d_real.float().clamp(-30.0, 30.0), torch.ones_like(d_real).float())
                 loss_d_fake = criterion_bce(d_fake_det.float().clamp(-30.0, 30.0), torch.zeros_like(d_fake_det).float())
                 total_d = (loss_d_real + loss_d_fake) * 0.5
 
             scaler_d.scale(total_d).backward()
-            scaler_d.step(opt_d)
+            scaler_d.unscale_(opt_d)
+            d_norm = torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=5.0)
+            if torch.isfinite(d_norm):
+                scaler_d.step(opt_d)
             scaler_d.update()
 
             epoch_g_loss += total_g.item()
@@ -476,6 +507,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             gen_only_file = SNAPSHOTS_DIR / f"generator_epoch_{epoch:03d}.pt"
             torch.save(generator.state_dict(), gen_only_file)
             print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f})")
+
+        scheduler_g.step()
+        scheduler_d.step()
 
         # Checkpoints de mejor rendimiento y ultimo
         if avg_g < best_loss:

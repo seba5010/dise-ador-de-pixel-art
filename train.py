@@ -1,30 +1,28 @@
 """
-Entrypoint principal para entrenar el modelo de Pixel Art
+Entrypoint principal para entrenar el modelo de Pixel Art (Motor Canónico Supervisado PyTorch UNet).
 """
 import sys
+import argparse
 from pathlib import Path
 
 # Añadir directorio actual al path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pixel_ai_engine.train import train, EPOCHS, BATCH_SIZE
-import argparse
+from pixel_ai_engine.train_supervised import train_supervised_model
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Entrenar Generador de Pixel Art Spritesheets")
-    parser.add_argument("--epochs", type=int, default=EPOCHS, help="Número de épocas. Usa 0 para modo infinito.")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Tamaño del batch")
-    parser.add_argument("--resume", action="store_true", help="Reanudar desde último checkpoint")
-    parser.add_argument("--infinite", action="store_true", help="Entrena sin límite de épocas hasta Ctrl+C")
-    parser.add_argument("--phase", type=str, default="1", choices=["1", "2", "16x4", "8x12"], help="Fase: 1 (base 16x4) o 2 (transferencia 8x12)")
-    parser.add_argument("--transfer", type=str, default="", help="Ruta al checkpoint de Fase 1 para transferir a Fase 2")
+    parser = argparse.ArgumentParser(description="Entrenamiento Supervisado de Pixel Art Spritesheets con 4 Candados")
+    parser.add_argument("--epochs", type=int, default=50, help="Número de épocas a entrenar")
+    parser.add_argument("--batch_size", "--batch-size", type=int, default=4, help="Tamaño de batch")
+    parser.add_argument("--lr", type=float, default=1.5e-4, help="Tasa de aprendizaje (Learning Rate)")
+    parser.add_argument("--mode", type=str, default="resume", choices=["start", "resume"], help="Modo de entrenamiento (start o resume)")
+    parser.add_argument("--respawn_epoch", type=int, default=None, help="Época exacta a la cual rebobinar (Respawn)")
     args = parser.parse_args()
     
-    train(
+    train_supervised_model(
         epochs=args.epochs,
         batch_size=args.batch_size,
-        resume=args.resume,
-        infinite=args.infinite,
-        phase=args.phase,
-        transfer_from=args.transfer if args.transfer else None
+        lr=args.lr,
+        mode=args.mode,
+        respawn_epoch=args.respawn_epoch
     )

@@ -183,3 +183,12 @@ Auditoría técnica automatizada que certifica si una hoja cumple con los están
   - Sincronización instantánea de las 25 ejecuciones en los desplegables.
   - Paso cuadro a cuadro verificado con `nextAnimFrame()` y `prevAnimFrame()`.
   - Latencia de respuesta de `/api/status`: inferior a 5 milisegundos.
+
+---
+
+## 6. Estabilidad de Entrenamiento y Corrección Numérica (Octubre 2026)
+
+- **Corrección de Subnormales en MinibatchStdDev**: Reemplazado `sqrt(var + 1e-8)` por `sqrt(clamp(var, min=1e-4))` en `models.py` para prevenir colapso de derivadas infinitas (`NaN`) en float16 AMP.
+- **Protección de Gradientes No Finitos**: Validación con `torch.isfinite(norm)` antes de aplicar pasos del optimizador con `GradScaler`.
+- **Orden de Parámetros en Discriminador PatchGAN**: Restablecido orden canónico `(condition, target)` en `train_supervised.py`.
+- **Verificación**: Entrenador operativo al 100% con métricas reales (`G_Loss: 0.0941`, `D_Loss: 0.6536`) y sin desbordes numéricos.

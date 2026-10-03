@@ -165,7 +165,11 @@ class MinibatchStdDev(nn.Module):
         
         # Desviación estándar a través del lote (dim=0)
         # Se agrega 1e-8 para estabilidad numérica estricta
-        std = torch.sqrt(torch.var(x, dim=0, unbiased=False) + 1e-8)
+        # Desviacion estandar a traves del lote (dim=0)
+        # Computo en float32 y clamp seguro (1e-4) para prevenir underflow a 0.0 y derivadas infinitas/NaN en FP16 AMP
+        x_f32 = x.float()
+        var = torch.var(x_f32, dim=0, unbiased=False)
+        std = torch.sqrt(torch.clamp(var, min=1e-4)).to(dtype=x.dtype)
         # Promedio global de variabilidad
         mean_std = torch.mean(std)
         # Mapa de características de 1 canal expandido a todo el batch
@@ -244,7 +248,7 @@ class SobelEdgeLoss(nn.Module):
         x_reshaped = x.reshape(b * c, 1, h, w)
         gx = F.conv2d(x_reshaped, self.kernel_x, padding=1)
         gy = F.conv2d(x_reshaped, self.kernel_y, padding=1)
-        edge = torch.sqrt(gx ** 2 + gy ** 2 + 1e-6)
+        edge = torch.sqrt(torch.clamp(gx ** 2 + gy ** 2, min=1e-5))
         return edge.reshape(b, c, h, w)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
