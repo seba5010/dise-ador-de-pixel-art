@@ -24,7 +24,7 @@ from pixel_ai_engine.config import (
     USE_AMP
 )
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
-from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette
+from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette, clean_orphan_pixels
 
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR = CHECKPOINT_DIR / "snapshots"
@@ -41,23 +41,26 @@ PAUSE_FLAG_FILE = PROJECT_ROOT / "pause_training.flag"
 
 CACHE_PATH = PROJECT_ROOT / "dataset_supervisado" / "supervised_cache_8x12.pt"
 
-class SupervisedTensorDataset(Dataset):
-    def __init__(self, cache_path):
-        if not cache_path.exists():
-            raise FileNotFoundError(f"Cache no encontrada: {cache_path}. Ejecuta prepare_supervised_dataset.py primero.")
-        self.samples = torch.load(cache_path)
+# -------------------------------------------------------------
+# 1. PÉRDIDA DE BORDES ACELERADA EN GPU CON KORNIA (DE FORGE)
+# -------------------------------------------------------------
+try:
+    import kornia
+    class KorniaSobelLoss(nn.Module):
+        def __init__(self):
+            super().__init__()
 
-    def __len__(self):
-        return len(self.samples)
+        def forward(self, pred, target):
+            p_rgb = pred[:, :3]
+            t_rgb = target[:, :3]
+            p_grad = kornia.filters.sobel(p_rgb)
+            t_grad = kornia.filters.sobel(t_rgb)
+            return nn.functional.smooth_l1_loss(p_grad, t_grad)
+    HAS_KORNIA = True
+except Exception:
+    HAS_KORNIA = False
 
-    def __getitem__(self, idx):
-        s = self.samples[idx]
-        front = s["front_tensor"] # (3, H, W)
-        f_idx = s["frame_idx"]
-        target = s["target_tensor"] # (4, H, W)
-        return front, f_idx, target, s["char_id"]
-
-class SobelLoss(nn.Module):
+class FallbackSobelLoss(nn.Module):
     def __init__(self):
         super().__init__()
         kx = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]).unsqueeze(0).unsqueeze(0)
@@ -78,6 +81,43 @@ class SobelLoss(nn.Module):
             t_edge = torch.sqrt(t_gx**2 + t_gy**2 + 1e-6)
             loss += nn.functional.smooth_l1_loss(p_edge, t_edge)
         return loss / 3.0
+
+# -------------------------------------------------------------
+# 2. DATASET CON AUMENTO INTELIGENTE DE DATOS (ALBUMENTATIONS)
+# -------------------------------------------------------------
+try:
+    import albumentations as A
+    AUG_PIPELINE = A.Compose([
+        A.ColorJitter(brightness=0.03, contrast=0.03, p=0.4),
+    ])
+    HAS_ALBUMENTATIONS = True
+except Exception:
+    HAS_ALBUMENTATIONS = False
+
+class SupervisedTensorDataset(Dataset):
+    def __init__(self, cache_path, augment: bool = True):
+        if not cache_path.exists():
+            raise FileNotFoundError(f"Cache no encontrada: {cache_path}. Ejecuta prepare_supervised_dataset.py primero.")
+        self.samples = torch.load(cache_path)
+        self.augment = augment
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        s = self.samples[idx]
+        front = s["front_tensor"] # (3, H, W)
+        f_idx = s["frame_idx"]
+        target = s["target_tensor"] # (4, H, W)
+
+        # Si el aumento esta activo, aplicar sutil variacion al frontal para robustez
+        if self.augment and HAS_ALBUMENTATIONS and torch.rand(1).item() < 0.35:
+            f_np = ((front.permute(1, 2, 0).numpy() + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+            aug_np = AUG_PIPELINE(image=f_np)["image"]
+            aug_t = torch.from_numpy(aug_np.astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1)
+            front = aug_t
+
+        return front, f_idx, target, s["char_id"]
 
 def get_gpu_temperature():
     try:
@@ -152,7 +192,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     status_data = {
         "epoch": int(epoch),
         "total_epochs": int(total_epochs),
-        "phase": "Supervisado Pix2Pix + 8bit AdamW + Remapeo Paleta",
+        "phase": "Supervisado Pix2Pix + Kornia GPU + 8bit AdamW",
         "phase_id": 3,
         "status": status_str,
         "g_loss": f_loss,
@@ -202,15 +242,16 @@ def generate_preview(generator, dataset, epoch_label=None):
             p_np = ((pose.permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             p_pil = Image.fromarray(p_np, "RGB").resize((128, 128), Image.Resampling.NEAREST)
 
-            # 3. Prediccion IA con Remapeo de Paleta Canónica
+            # 3. Prediccion IA con Remapeo de Paleta + Filtro Morfológico Anti-Hollín
             pred_np = ((out[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             alpha_np = ((out[3].cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             pred_rgba = np.dstack([pred_np, alpha_np])
             raw_pred_pil = Image.fromarray(pred_rgba, "RGBA").resize((128, 128), Image.Resampling.NEAREST)
             
-            # Aplicar remapeo de paleta del frontal para erradicar cualquier color extraño
+            # Remapear a la paleta del frontal y limpiar píxeles huérfanos
             char_palette = extract_character_palette(f_pil)
-            pred_pil = remap_image_to_palette(raw_pred_pil, char_palette)
+            snapped_pil = remap_image_to_palette(raw_pred_pil, char_palette)
+            pred_pil = clean_orphan_pixels(snapped_pil)
 
             # 4. Ground Truth Real
             tgt_np = ((target[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
@@ -247,7 +288,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         try: PAUSE_FLAG_FILE.unlink()
         except Exception: pass
 
-    dataset = SupervisedTensorDataset(CACHE_PATH)
+    dataset = SupervisedTensorDataset(CACHE_PATH, augment=True)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     from pixel_ai_engine.dataset import TemplateManager
@@ -295,17 +336,17 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
 
     print("=" * 70)
-    print("  ENTRENAMIENTO SUPERVISADO CON ACELERACIÓN 8-BIT Y RESPAWN")
+    print("  ENTRENAMIENTO SUPERVISADO CON KORNIA GPU + 8-BIT ADAMW + RESPAWN")
     print(f"  Modo: {mode.upper()} | Epocas: {start_epoch} a {total_target_epochs} | Batch: {batch_size} | LR: {lr}")
     print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE}")
     print("=" * 70)
 
-    # Optimizadores: Intentar BitsAndBytes 8-bit AdamW de Forge para maximo ahorro de VRAM
+    # Optimizadores 8-bit AdamW de Forge
     try:
         import bitsandbytes as bnb
         opt_g = bnb.optim.AdamW8bit(generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-4)
         opt_d = bnb.optim.AdamW8bit(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999), weight_decay=1e-4)
-        print("[OK] Optimizador BitsAndBytes 8-bit AdamW activado (Ahorro de ~50% VRAM)")
+        print("[OK] Optimizador BitsAndBytes 8-bit AdamW activo (VRAM: ~1.5 GB)")
     except Exception as e:
         opt_g = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.999))
         opt_d = torch.optim.Adam(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999))
@@ -315,7 +356,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     scaler_d = GradScaler(enabled=USE_AMP)
 
     criterion_l1 = nn.SmoothL1Loss()
-    criterion_edge = SobelLoss().to(DEVICE)
+    criterion_edge = KorniaSobelLoss().to(DEVICE) if HAS_KORNIA else FallbackSobelLoss().to(DEVICE)
+    if HAS_KORNIA:
+        print("[OK] Perdida de bordes Kornia Sobel acelerada en GPU activa")
     criterion_bce = nn.BCEWithLogitsLoss()
 
     start_time = time.time()
