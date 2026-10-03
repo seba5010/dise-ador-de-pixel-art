@@ -192,3 +192,39 @@ Auditoría técnica automatizada que certifica si una hoja cumple con los están
 - **Protección de Gradientes No Finitos**: Validación con `torch.isfinite(norm)` antes de aplicar pasos del optimizador con `GradScaler`.
 - **Orden de Parámetros en Discriminador PatchGAN**: Restablecido orden canónico `(condition, target)` en `train_supervised.py`.
 - **Verificación**: Entrenador operativo al 100% con métricas reales (`G_Loss: 0.0941`, `D_Loss: 0.6536`) y sin desbordes numéricos.
+
+---
+
+## 7. Resolución Quirúrgica de Auditoría Técnica (Octubre 2026)
+
+A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguientes 5 correcciones arquitecturales:
+
+1. **Reanudación y Preservación de `best_loss`**:
+   - `save_checkpoint` unifica el guardado de checkpoints normales, pausas, paradas y snapshots de 10 épocas.
+   - Preserva `best_loss`, optimizadores `opt_g`/`opt_d` (8-bit AdamW / Adam), escaladores AMP `scaler_g`/`scaler_d` y estados de generadores de números aleatorios (RNG) de CPU y CUDA.
+   - En caso de reanudar desde checkpoints de versiones anteriores que carezcan del campo `best_loss`, el cargador lo recupera automáticamente desde `best_generator.pt`, impidiendo que una época posterior con mayor pérdida reemplace el mejor modelo histórico.
+   - Validación estricta con `math.isfinite` que previene escrituras de valores `NaN` en `training_status.json`.
+
+2. **Sincronización Reactiva de Respawn**:
+   - El selector `#respawnEpochSelect` se alimenta dinámicamente de `/api/train/snapshots` y de la telemetría en tiempo real (`info.snapshots`).
+   - El badge `#respawnCountBadge` refleja el número exacto de puntos de restauración disponibles.
+   - Si no existen snapshots, el desplegable muestra el placeholder desactivado; al generarse snapshots, se habilita inmediatamente y retiene la selección del usuario o preselecciona el snapshot más reciente.
+
+3. **Reproductor Multiformato (8x12 y 16x4) y Redibujado en Pausa**:
+   - `loadRunSheet` detecta el formato de la hoja (`8x12` de 96 frames o `16x4` de 64 frames) a partir de los metadatos de la ejecución y ajusta automáticamente la rejilla, la plantilla y el visor.
+   - Se crearon diccionarios de clips independientes (`ANIMATION_CLIPS_8X12` y `ANIMATION_CLIPS_16X4`). Las hojas de 64 frames ya no solicitan índices fuera de rango (como celebrar en el frame 92).
+   - `drawAnimFrame` implementa acotamiento estricto (`safeIdx`), garantizando que el recorte no sobrepase los límites de altura o anchura del spritesheet.
+   - El manejador `sheetImg.onload` redibuja el fotograma en el lienzo inmediatamente tras la carga asíncrona de la imagen, garantizando actualización visual instantánea incluso si la animación está en pausa.
+
+4. **Control de Calidad Quirúrgico de Canal Alfa**:
+   - `run_quality_audit` incluye formalmente el análisis de `blurry_alpha_cells` en la condición de certificación `is_ready`.
+   - Se exige que `len(blurry_alpha_cells) == 0` y `alpha_purity_score >= 95.0%`.
+   - Cualquier hoja con píxeles semitransparentes o bordes difuminados es calificada como `BORRADOR / REVISIÓN REQUERIDA` y se detalla el número de celdas afectadas en la bitácora técnica.
+
+5. **Colores, Acabado Unificado y Transparencia de Inferencia**:
+   - `Albumentations.ColorJitter` bloquea explícitamente `saturation=0.0` y `hue=0.0`, limitando las variaciones exclusivamente a cambios sutiles de brillo y contraste sin alterar los tonos de la ropa ni la piel del personaje.
+   - `extract_character_palette` aplica K-Means clustering sobre los colores únicos del personaje, garantizando la preservación de tonos minoritarios (ojos azules, gemas, accesorios pequeños) junto con la paleta de props autorizada (`PROPS_PALETTE`).
+   - `remap_image_to_palette` incorpora tolerancia euclídea (35.0) para no destruir colores de accesorios legítimos y binariza estrictamente el canal alfa a 0 o 255.
+   - `PixelArtEnhancer.enhance_frame` sella la salida con `binarize_alpha(threshold=40)`, unificando el acabado entre la generación/exportación de Sprite Studio y el entrenamiento supervisado.
+   - `generate_preview` evalúa muestras fijas sin aumentos aleatorios (`dataset.samples[s_idx]`) y renderiza una tira de 5 columnas: `[Frontal Chibi] | [Pose] | [Predicción IA Cruda] | [IA Remapeada con Alfa Puro] | [Ground Truth Real]`.
+

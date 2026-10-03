@@ -2,7 +2,9 @@ import os
 import sys
 import time
 import json
+import math
 import shutil
+from typing import Any, Optional, Dict
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -87,9 +89,15 @@ class FallbackSobelLoss(nn.Module):
 # -------------------------------------------------------------
 try:
     import albumentations as A
-    AUG_PIPELINE = A.Compose([
-        A.ColorJitter(brightness=0.03, contrast=0.03, p=0.4),
-    ])
+    try:
+        # Desactivar explícitamente tono y saturación para conservar la identidad exacta del personaje
+        AUG_PIPELINE = A.Compose([
+            A.ColorJitter(brightness=0.03, contrast=0.03, saturation=0.0, hue=0.0, p=0.4),
+        ])
+    except Exception:
+        AUG_PIPELINE = A.Compose([
+            A.ColorJitter(brightness=(0.97, 1.03), contrast=(0.97, 1.03), saturation=(1.0, 1.0), hue=(0.0, 0.0), p=0.4),
+        ])
     HAS_ALBUMENTATIONS = True
 except Exception:
     HAS_ALBUMENTATIONS = False
@@ -159,11 +167,29 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         except Exception:
             history = []
 
-    f_loss = round(float(g_loss), 4) if isinstance(g_loss, (int, float)) and not (g_loss != g_loss) else 0.0
-    if f_loss > 0:
-        if initial_loss is None:
+    def safe_num(v, default=0.0):
+        try:
+            f = float(v)
+            return f if math.isfinite(f) else default
+        except (TypeError, ValueError):
+            return default
+
+    # Comprobar finitud de métricas para evitar NaN en JSON y estado
+    is_finite_g = isinstance(g_loss, (int, float)) and math.isfinite(float(g_loss))
+    if not is_finite_g and status_str == "ENTRENANDO":
+        status_str = "ERROR_NAN"
+        print(f"[!] ADVERTENCIA CRÍTICA: Gradiente o pérdida no finita detectada: g_loss={g_loss}")
+
+    f_loss = round(safe_num(g_loss, 0.0), 4)
+    f_d = round(safe_num(d_loss, 0.0), 4)
+    f_l1 = round(safe_num(l1_val, 0.0), 4)
+    f_edge = round(safe_num(edge_val, 0.0), 4)
+    f_lr = safe_num(lr_val, 1.5e-4)
+
+    if f_loss > 0 and math.isfinite(f_loss):
+        if initial_loss is None or not math.isfinite(initial_loss):
             initial_loss = f_loss
-        if best_loss is None or f_loss < best_loss:
+        if best_loss is None or not math.isfinite(best_loss) or f_loss < best_loss:
             best_loss = f_loss
 
         history = [h for h in history if h.get("epoch") != int(epoch)]
@@ -171,17 +197,17 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
             "epoch": int(epoch),
             "loss": f_loss,
             "g_loss": f_loss,
-            "d_loss": round(float(d_loss), 4),
-            "l1_loss": round(float(l1_val), 4),
-            "edge_loss": round(float(edge_val), 4),
-            "lr": float(lr_val),
+            "d_loss": f_d,
+            "l1_loss": f_l1,
+            "edge_loss": f_edge,
+            "lr": f_lr,
             "gpu_temp": get_gpu_temperature(),
             "elapsed_sec": elapsed
         })
         history.sort(key=lambda x: x["epoch"])
 
     loss_reduction_pct = 0.0
-    if initial_loss and f_loss and initial_loss > 0:
+    if initial_loss and f_loss and initial_loss > 0 and math.isfinite(initial_loss):
         loss_reduction_pct = round(((initial_loss - f_loss) / initial_loss) * 100.0, 1)
 
     sec_per_epoch = (elapsed / max(1, epoch)) if epoch > 0 else 0
@@ -196,13 +222,13 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "phase_id": 3,
         "status": status_str,
         "g_loss": f_loss,
-        "d_loss": round(float(d_loss), 4),
-        "l1_loss": round(float(l1_val), 4),
-        "edge_loss": round(float(edge_val), 4),
-        "best_loss": best_loss,
-        "initial_loss": initial_loss,
+        "d_loss": f_d,
+        "l1_loss": f_l1,
+        "edge_loss": f_edge,
+        "best_loss": round(best_loss, 4) if (best_loss is not None and math.isfinite(best_loss)) else None,
+        "initial_loss": round(initial_loss, 4) if (initial_loss is not None and math.isfinite(initial_loss)) else None,
         "loss_reduction_pct": loss_reduction_pct,
-        "lr": float(lr_val),
+        "lr": f_lr,
         "gpu_temp": get_gpu_temperature(),
         "elapsed_sec": elapsed,
         "eta_sec": eta_sec,
@@ -214,6 +240,28 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     }
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status_data, f, indent=2)
+
+def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
+                    generator: nn.Module, discriminator: nn.Module,
+                    opt_g: Any = None, opt_d: Any = None, scaler_g: Any = None, scaler_d: Any = None):
+    """Guarda un checkpoint completo con formato unificado y preservación estricta de métricas y estados."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else 0.0
+    f_best = float(best_loss) if (best_loss is not None and math.isfinite(float(best_loss))) else 999.0
+    state = {
+        "epoch": int(epoch),
+        "generator": generator.state_dict(),
+        "discriminator": discriminator.state_dict(),
+        "loss": f_loss,
+        "best_loss": f_best,
+        "opt_g": opt_g.state_dict() if opt_g is not None else None,
+        "opt_d": opt_d.state_dict() if opt_d is not None else None,
+        "scaler_g": scaler_g.state_dict() if (scaler_g is not None and hasattr(scaler_g, "state_dict")) else None,
+        "scaler_d": scaler_d.state_dict() if (scaler_d is not None and hasattr(scaler_d, "state_dict")) else None,
+        "rng_state": torch.get_rng_state(),
+        "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+    torch.save(state, file_path)
 
 def generate_preview(generator, dataset, epoch_label=None):
     generator.eval()
@@ -227,14 +275,19 @@ def generate_preview(generator, dataset, epoch_label=None):
 
         cards = []
         for s_idx in sample_indices:
-            front, f_idx, target, char_id = dataset[s_idx]
+            # Evaluar siempre sobre la muestra fija sin aumentos de datos aleatorios
+            s = dataset.samples[s_idx]
+            front = s["front_tensor"]
+            f_idx = s["frame_idx"]
+            target = s["target_tensor"]
+            char_id = s["char_id"]
             pose = tm.get_frame_tensor(f_idx)
 
             cond = torch.cat([front, pose], dim=0).unsqueeze(0).to(DEVICE)
             with autocast(enabled=USE_AMP):
                 out = generator(cond).squeeze(0)
 
-            # 1. Frontal Chibi (Referencia real)
+            # 1. Frontal Chibi (Referencia real original sin aumentos)
             f_np = ((front.permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             f_pil = Image.fromarray(f_np, "RGB").resize((128, 128), Image.Resampling.NEAREST)
 
@@ -242,28 +295,30 @@ def generate_preview(generator, dataset, epoch_label=None):
             p_np = ((pose.permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             p_pil = Image.fromarray(p_np, "RGB").resize((128, 128), Image.Resampling.NEAREST)
 
-            # 3. Prediccion IA con Remapeo de Paleta + Filtro Morfológico Anti-Hollín
+            # 3. Prediccion IA Cruda (Sin retoques - para auditoría transparente de fallos)
             pred_np = ((out[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             alpha_np = ((out[3].cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             pred_rgba = np.dstack([pred_np, alpha_np])
             raw_pred_pil = Image.fromarray(pred_rgba, "RGBA").resize((128, 128), Image.Resampling.NEAREST)
             
-            # Remapear a la paleta del frontal y limpiar píxeles huérfanos
-            char_palette = extract_character_palette(f_pil)
-            snapped_pil = remap_image_to_palette(raw_pred_pil, char_palette)
-            pred_pil = clean_orphan_pixels(snapped_pil)
+            # 4. Predicción IA con Remapeo de Paleta + Filtro Morfológico Anti-Hollín + Alfa Puro
+            char_palette = extract_character_palette(f_pil, include_props=True)
+            snapped_pil = remap_image_to_palette(raw_pred_pil, char_palette, tolerance=35.0, binarize_alpha=True)
+            pred_pil = clean_orphan_pixels(snapped_pil, min_connected_size=3, binarize=True)
 
-            # 4. Ground Truth Real
+            # 5. Ground Truth Real
             tgt_np = ((target[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             t_alpha_np = ((target[3].cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             tgt_rgba = np.dstack([tgt_np, t_alpha_np])
             tgt_pil = Image.fromarray(tgt_rgba, "RGBA").resize((128, 128), Image.Resampling.NEAREST)
 
-            strip = Image.new("RGBA", (128 * 4 + 30, 128 + 20), (16, 18, 26, 255))
+            # Tira comparativa con 5 paneles: Frontal | Pose | IA Cruda | IA Remapeada | Ground Truth
+            strip = Image.new("RGBA", (128 * 5 + 35, 128 + 20), (16, 18, 26, 255))
             strip.paste(f_pil, (5, 10))
             strip.paste(p_pil, (128 + 10, 10))
-            strip.paste(pred_pil, (256 + 15, 10))
-            strip.paste(tgt_pil, (384 + 20, 10))
+            strip.paste(raw_pred_pil, (256 + 15, 10))
+            strip.paste(pred_pil, (384 + 20, 10))
+            strip.paste(tgt_pil, (512 + 25, 10))
             cards.append(strip)
 
         total_w = cards[0].width
@@ -301,7 +356,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     discriminator = PixelArtPatchDiscriminator().to(DEVICE)
 
     start_epoch = 1
-    best_loss = 999.0
+    best_loss = None
+    loaded_ckpt = None
 
     # Logica de Respawn o Reanudacion
     if respawn_epoch is not None and respawn_epoch > 0:
@@ -309,12 +365,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         if not respawn_candidate.exists():
             respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch}.pt"
         if respawn_candidate.exists():
-            ckpt = torch.load(respawn_candidate, map_location=DEVICE)
-            generator.load_state_dict(ckpt["generator"])
-            if "discriminator" in ckpt:
-                discriminator.load_state_dict(ckpt["discriminator"])
+            loaded_ckpt = torch.load(respawn_candidate, map_location=DEVICE)
+            generator.load_state_dict(loaded_ckpt["generator"])
+            if "discriminator" in loaded_ckpt:
+                discriminator.load_state_dict(loaded_ckpt["discriminator"])
             start_epoch = respawn_epoch + 1
-            best_loss = ckpt.get("best_loss", ckpt.get("loss", 999.0))
+            best_loss = loaded_ckpt.get("best_loss", loaded_ckpt.get("loss", None))
             print(f"\n[RESPAWN] == RESPAWN EXITOSO: Regresando al punto de guardado EPOCA {respawn_epoch} ==\n")
         else:
             print(f"[!] Aviso: No se encontro snapshot para epoca {respawn_epoch}. Iniciando estandar.")
@@ -324,13 +380,13 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             ckpt_candidate = CHECKPOINT_DIR / "best_generator.pt"
         if ckpt_candidate.exists():
             try:
-                ckpt = torch.load(ckpt_candidate, map_location=DEVICE)
-                if isinstance(ckpt, dict) and "generator" in ckpt:
-                    generator.load_state_dict(ckpt["generator"])
-                    if "discriminator" in ckpt:
-                        discriminator.load_state_dict(ckpt["discriminator"])
-                    start_epoch = ckpt.get("epoch", 0) + 1
-                    best_loss = ckpt.get("best_loss", 999.0)
+                loaded_ckpt = torch.load(ckpt_candidate, map_location=DEVICE)
+                if isinstance(loaded_ckpt, dict) and "generator" in loaded_ckpt:
+                    generator.load_state_dict(loaded_ckpt["generator"])
+                    if "discriminator" in loaded_ckpt:
+                        discriminator.load_state_dict(loaded_ckpt["discriminator"])
+                    start_epoch = loaded_ckpt.get("epoch", 0) + 1
+                    best_loss = loaded_ckpt.get("best_loss", None)
                     print(f"[OK] Reanudando entrenamiento desde epoca {start_epoch}")
             except Exception as e:
                 print(f"[!] Error al reanudar checkpoint: {e}")
@@ -344,16 +400,34 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 ckpt = torch.load(warm_ckpt, map_location=DEVICE)
                 gen_state = ckpt.get("generator", ckpt) if isinstance(ckpt, dict) else ckpt
                 generator.load_state_dict(gen_state, strict=False)
+                if isinstance(ckpt, dict):
+                    best_loss = ckpt.get("best_loss", ckpt.get("loss", None))
                 print(f"[OK] Warm Start: Inicializando generador desde pesos existentes: {warm_ckpt.name}")
             except Exception as e:
                 print(f"[!] Aviso: No se pudo cargar warm start: {e}. Iniciando desde inicializacion normal.")
+
+    # Recuperar best_loss de best_generator.pt para archivos antiguos compatibles
+    if best_loss is None or (isinstance(best_loss, (int, float)) and best_loss >= 990.0):
+        best_ckpt_file = CHECKPOINT_DIR / "best_generator.pt"
+        if best_ckpt_file.exists():
+            try:
+                b_data = torch.load(best_ckpt_file, map_location="cpu")
+                if isinstance(b_data, dict):
+                    cand_best = b_data.get("best_loss", b_data.get("loss", 999.0))
+                    if cand_best is not None and math.isfinite(cand_best):
+                        best_loss = float(cand_best)
+                        print(f"[OK] best_loss historico recuperado de best_generator.pt: {best_loss:.4f}")
+            except Exception:
+                pass
+    if best_loss is None or not math.isfinite(best_loss):
+        best_loss = 999.0
 
     total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
 
     print("=" * 70)
     print("  ENTRENAMIENTO SUPERVISADO CON KORNIA GPU + 8-BIT ADAMW + RESPAWN")
     print(f"  Modo: {mode.upper()} | Epocas: {start_epoch} a {total_target_epochs} | Batch: {batch_size} | LR: {lr}")
-    print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE}")
+    print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE} | Mejor Loss Inicial: {best_loss:.4f}")
     print("=" * 70)
 
     # Optimizadores 8-bit AdamW de Forge
@@ -369,6 +443,33 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
     scaler_g = GradScaler(enabled=USE_AMP, init_scale=2048.0)
     scaler_d = GradScaler(enabled=USE_AMP, init_scale=2048.0)
+
+    # Restaurar estados de optimizadores, escaladores y RNG si estan disponibles en el checkpoint
+    if loaded_ckpt is not None:
+        if "opt_g" in loaded_ckpt and loaded_ckpt["opt_g"] is not None:
+            try:
+                opt_g.load_state_dict(loaded_ckpt["opt_g"])
+                print("[OK] Estado de optimizador opt_g restaurado con exito.")
+            except Exception as e:
+                print(f"[!] Aviso al restaurar estado de opt_g: {e}")
+        if "opt_d" in loaded_ckpt and loaded_ckpt["opt_d"] is not None:
+            try:
+                opt_d.load_state_dict(loaded_ckpt["opt_d"])
+                print("[OK] Estado de optimizador opt_d restaurado con exito.")
+            except Exception as e:
+                print(f"[!] Aviso al restaurar estado de opt_d: {e}")
+        if "scaler_g" in loaded_ckpt and loaded_ckpt["scaler_g"] is not None and scaler_g is not None:
+            try: scaler_g.load_state_dict(loaded_ckpt["scaler_g"])
+            except Exception: pass
+        if "scaler_d" in loaded_ckpt and loaded_ckpt["scaler_d"] is not None and scaler_d is not None:
+            try: scaler_d.load_state_dict(loaded_ckpt["scaler_d"])
+            except Exception: pass
+        if "rng_state" in loaded_ckpt and loaded_ckpt["rng_state"] is not None:
+            try: torch.set_rng_state(loaded_ckpt["rng_state"])
+            except Exception: pass
+        if "cuda_rng_state" in loaded_ckpt and loaded_ckpt["cuda_rng_state"] is not None and torch.cuda.is_available():
+            try: torch.cuda.set_rng_state_all(loaded_ckpt["cuda_rng_state"])
+            except Exception: pass
 
     criterion_l1 = nn.SmoothL1Loss()
     criterion_edge = KorniaSobelLoss().to(DEVICE) if HAS_KORNIA else FallbackSobelLoss().to(DEVICE)
@@ -390,6 +491,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print("\n[PAUSA] Senal de pausa recibida. Guardando checkpoint...")
             try: PAUSE_FLAG_FILE.unlink()
             except Exception: pass
+            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
             update_status(epoch - 1, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
@@ -397,6 +499,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print("\n[STOP] Senal de detencion recibida. Guardando...")
             try: STOP_FLAG_FILE.unlink()
             except Exception: pass
+            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
             update_status(epoch - 1, total_target_epochs, "DETENIDO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
@@ -418,14 +521,14 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                     print('\n[PAUSA] Senal de pausa en lote. Guardando checkpoint...')
                     try: PAUSE_FLAG_FILE.unlink()
                     except Exception: pass
-                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': curr_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
+                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
                     update_status(epoch, total_target_epochs, 'PAUSADO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
                 if STOP_FLAG_FILE.exists():
                     print('\n[STOP] Senal de detencion en lote. Guardando checkpoint...')
                     try: STOP_FLAG_FILE.unlink()
                     except Exception: pass
-                    torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': curr_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
+                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
                     update_status(epoch, total_target_epochs, 'DETENIDO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
 
@@ -492,41 +595,25 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         generate_preview(generator, dataset, epoch_label=epoch if save_audit else None)
 
         # -------------------------------------------------------------
-        # SISTEMA DE RESPAWN: Guardado cada 10 epocas
+        # SISTEMA DE RESPAWN: Guardado cada 10 epocas con estado completo
         # -------------------------------------------------------------
         if epoch % 10 == 0:
             snapshot_file = SNAPSHOTS_DIR / f"checkpoint_epoch_{epoch:03d}.pt"
-            torch.save({
-                "epoch": epoch,
-                "generator": generator.state_dict(),
-                "discriminator": discriminator.state_dict(),
-                "loss": avg_g,
-                "best_loss": best_loss
-            }, snapshot_file)
-            
+            save_checkpoint(snapshot_file, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
             gen_only_file = SNAPSHOTS_DIR / f"generator_epoch_{epoch:03d}.pt"
             torch.save(generator.state_dict(), gen_only_file)
-            print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f})")
+            print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f}, Best: {best_loss:.4f})")
 
         scheduler_g.step()
         scheduler_d.step()
 
-        # Checkpoints de mejor rendimiento y ultimo
-        if avg_g < best_loss:
+        # Checkpoints de mejor rendimiento y ultimo (preservando siempre best_loss)
+        if avg_g < best_loss and math.isfinite(avg_g):
             best_loss = avg_g
-            torch.save({
-                "epoch": epoch,
-                "generator": generator.state_dict(),
-                "discriminator": discriminator.state_dict(),
-                "best_loss": best_loss
-            }, CHECKPOINT_DIR / "best_generator.pt")
+            save_checkpoint(CHECKPOINT_DIR / "best_generator.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+            print(f"[*] ¡Nuevo mejor modelo registrado! G_Loss: {best_loss:.4f}")
 
-        torch.save({
-            "epoch": epoch,
-            "generator": generator.state_dict(),
-            "discriminator": discriminator.state_dict(),
-            "loss": avg_g
-        }, CHECKPOINT_DIR / "latest_checkpoint.pt")
+        save_checkpoint(CHECKPOINT_DIR / "latest_checkpoint.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
 
     update_status(total_target_epochs, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
     print("\n[OK] Ciclo de entrenamiento supervisado finalizado exitosamente.")

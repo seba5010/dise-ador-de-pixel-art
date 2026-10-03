@@ -249,7 +249,10 @@ class PixelArtEnhancer:
             if pal is None and identity_img is not None:
                 pal = cls.extract_palette(identity_img, max_colors=40)
             if pal is not None:
-                enhanced = cls.snap_to_palette(enhanced, pal, tolerance=32.0)
+                enhanced = cls.snap_to_palette(enhanced, pal, tolerance=35.0)
+
+        if binarize:
+            enhanced = cls.binarize_alpha(enhanced, threshold=40)
 
         return enhanced
 

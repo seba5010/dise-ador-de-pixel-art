@@ -704,7 +704,13 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
     alpha_purity_score = round(max(0, 100 - len(blurry_alpha_cells) * 1.5), 1)
     border_safety_score = round(max(0, 100 - len(border_touch_cells) * 2.0), 1)
 
-    is_ready = (completeness_score == 100.0 and len(border_touch_cells) == 0 and len(empty_cells) == 0)
+    is_ready = (
+        completeness_score == 100.0 and
+        len(border_touch_cells) == 0 and
+        len(empty_cells) == 0 and
+        len(blurry_alpha_cells) == 0 and
+        alpha_purity_score >= 95.0
+    )
     audit_logs = [
         f"[{time.strftime('%H:%M:%S')}] Iniciando auditoria quirurgica de {run_dir.name}...",
         f"[{time.strftime('%H:%M:%S')}] Formato de spritesheet: {format_type} ({total} frames esperados).",
@@ -717,10 +723,12 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
         audit_logs.append(f"[{time.strftime('%H:%M:%S')}] AVISO: {len(empty_cells)} celdas vacias pendientes de generacion.")
     if len(border_touch_cells) > 0:
         audit_logs.append(f"[{time.strftime('%H:%M:%S')}] AVISO: {len(border_touch_cells)} celdas con sangrado en bordes.")
+    if len(blurry_alpha_cells) > 0:
+        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] AVISO: {len(blurry_alpha_cells)} celdas con canal alfa semitransparente/borroso (no apto para Unity).")
     if is_ready:
-        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: SPRITESHEET CERTIFICADO 100% PARA UNITY.")
+        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: SPRITESHEET CERTIFICADO 100% PARA UNITY (ALFA PURO Y SIN SANGRADO).")
     else:
-        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: BORRADOR / REVISION REQUERIDA ({completeness_score}% completado).")
+        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: BORRADOR / REVISION REQUERIDA ({completeness_score}% completado, {len(blurry_alpha_cells)} celdas con alfa defectuoso).")
 
     return {
         "run_id": run_dir.name,
