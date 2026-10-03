@@ -683,13 +683,33 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
                 })
 
             # Verificar binaridad del canal alfa
-            semi = ((alpha > 10) & (alpha < 240)).sum()
-            solid = (alpha >= 240).sum()
-            if solid > 0 and (semi / solid) > 0.08:
+            # En pixel art retro certificado para Unity, el alfa debe ser estrictamente binario (0 o 255).
+            # Cualquier valor intermedio (2 a 253) representa semitransparencia no permitida.
+            semi = ((alpha >= 2) & (alpha <= 253)).sum()
+            solid = (alpha >= 254).sum()
+            is_blurry = False
+            ratio_val = 0.0
+
+            if solid == 0 and semi >= 5:
+                # Caso critico: Personaje completamente fantasmal / semitransparente sin ningun pixel opaco
+                is_blurry = True
+                ratio_val = 1.0
+            elif solid > 0 and (semi / solid) > 0.02:
+                # Halos difuminados o bordes antialiasing no binarios
+                is_blurry = True
+                ratio_val = round(float(semi / solid), 3)
+            elif semi >= 15:
+                # Mas de 15 pixeles con transparencia intermedia absoluta
+                is_blurry = True
+                ratio_val = round(float(semi / max(1, solid)), 3)
+
+            if is_blurry:
                 blurry_alpha_cells.append({
                     "frame": f_idx,
                     "desc": desc,
-                    "ratio": round(float(semi / solid), 3)
+                    "ratio": ratio_val,
+                    "semi_pixels": int(semi),
+                    "solid_pixels": int(solid)
                 })
         except Exception as e:
             empty_cells.append({

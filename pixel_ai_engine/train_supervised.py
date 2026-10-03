@@ -162,34 +162,58 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
             with open(STATUS_FILE, "r", encoding="utf-8") as f:
                 prev = json.load(f)
                 history = prev.get("history", [])
-                best_loss = prev.get("best_loss")
-                initial_loss = prev.get("initial_loss")
+                raw_best = prev.get("best_loss")
+                raw_init = prev.get("initial_loss")
+                # Solo aceptar numeros finitos estrictamente positivos (evita 0.0 heredado)
+                if raw_best is not None and isinstance(raw_best, (int, float)) and math.isfinite(float(raw_best)) and float(raw_best) > 0.0:
+                    best_loss = float(raw_best)
+                if raw_init is not None and isinstance(raw_init, (int, float)) and math.isfinite(float(raw_init)) and float(raw_init) > 0.0:
+                    initial_loss = float(raw_init)
         except Exception:
             history = []
 
-    def safe_num(v, default=0.0):
+    # Recuperar de historial valido si aun no estan inicializados o eran 0.0
+    valid_losses = [h["loss"] for h in history if isinstance(h.get("loss"), (int, float)) and math.isfinite(h["loss"]) and h["loss"] > 0.0]
+    if valid_losses:
+        if initial_loss is None:
+            initial_loss = valid_losses[0]
+        if best_loss is None:
+            best_loss = min(valid_losses)
+
+    def safe_num(v):
+        if v is None:
+            return None
         try:
             f = float(v)
-            return f if math.isfinite(f) else default
+            return round(f, 4) if math.isfinite(f) else None
         except (TypeError, ValueError):
-            return default
+            return None
 
-    # Comprobar finitud de métricas para evitar NaN en JSON y estado
-    is_finite_g = isinstance(g_loss, (int, float)) and math.isfinite(float(g_loss))
-    if not is_finite_g and status_str == "ENTRENANDO":
+    f_loss = safe_num(g_loss)
+    f_d = safe_num(d_loss)
+    f_l1 = safe_num(l1_val)
+    f_edge = safe_num(edge_val)
+    try:
+        f_lr = float(lr_val) if (lr_val is not None and math.isfinite(float(lr_val))) else 1.5e-4
+    except Exception:
+        f_lr = 1.5e-4
+
+    # Comprobar finitud de metricas: si alguna metrica solicitada no es finita o hay NaN, forzar ERROR_NAN
+    has_nan = (
+        (g_loss is not None and f_loss is None) or
+        (d_loss is not None and f_d is None) or
+        (l1_val is not None and f_l1 is None) or
+        (edge_val is not None and f_edge is None)
+    )
+
+    if has_nan or (status_str == "COMPLETADO" and f_loss is None):
         status_str = "ERROR_NAN"
-        print(f"[!] ADVERTENCIA CRÍTICA: Gradiente o pérdida no finita detectada: g_loss={g_loss}")
+        print(f"[!] ADVERTENCIA CRITICA: Gradiente o perdida no finita detectada: g_loss={g_loss}, d_loss={d_loss}")
 
-    f_loss = round(safe_num(g_loss, 0.0), 4)
-    f_d = round(safe_num(d_loss, 0.0), 4)
-    f_l1 = round(safe_num(l1_val, 0.0), 4)
-    f_edge = round(safe_num(edge_val, 0.0), 4)
-    f_lr = safe_num(lr_val, 1.5e-4)
-
-    if f_loss > 0 and math.isfinite(f_loss):
-        if initial_loss is None or not math.isfinite(initial_loss):
+    if f_loss is not None and f_loss > 0.0 and math.isfinite(f_loss):
+        if initial_loss is None or not math.isfinite(initial_loss) or initial_loss <= 0.0:
             initial_loss = f_loss
-        if best_loss is None or not math.isfinite(best_loss) or f_loss < best_loss:
+        if best_loss is None or not math.isfinite(best_loss) or best_loss <= 0.0 or f_loss < best_loss:
             best_loss = f_loss
 
         history = [h for h in history if h.get("epoch") != int(epoch)]
@@ -197,9 +221,9 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
             "epoch": int(epoch),
             "loss": f_loss,
             "g_loss": f_loss,
-            "d_loss": f_d,
-            "l1_loss": f_l1,
-            "edge_loss": f_edge,
+            "d_loss": f_d if f_d is not None else 0.0,
+            "l1_loss": f_l1 if f_l1 is not None else 0.0,
+            "edge_loss": f_edge if f_edge is not None else 0.0,
             "lr": f_lr,
             "gpu_temp": get_gpu_temperature(),
             "elapsed_sec": elapsed
@@ -207,7 +231,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         history.sort(key=lambda x: x["epoch"])
 
     loss_reduction_pct = 0.0
-    if initial_loss and f_loss and initial_loss > 0 and math.isfinite(initial_loss):
+    if initial_loss is not None and f_loss is not None and initial_loss > 0.0 and math.isfinite(initial_loss) and math.isfinite(f_loss):
         loss_reduction_pct = round(((initial_loss - f_loss) / initial_loss) * 100.0, 1)
 
     sec_per_epoch = (elapsed / max(1, epoch)) if epoch > 0 else 0
@@ -225,8 +249,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "d_loss": f_d,
         "l1_loss": f_l1,
         "edge_loss": f_edge,
-        "best_loss": round(best_loss, 4) if (best_loss is not None and math.isfinite(best_loss)) else None,
-        "initial_loss": round(initial_loss, 4) if (initial_loss is not None and math.isfinite(initial_loss)) else None,
+        "best_loss": round(best_loss, 4) if (best_loss is not None and math.isfinite(best_loss) and best_loss > 0.0) else None,
+        "initial_loss": round(initial_loss, 4) if (initial_loss is not None and math.isfinite(initial_loss) and initial_loss > 0.0) else None,
         "loss_reduction_pct": loss_reduction_pct,
         "lr": f_lr,
         "gpu_temp": get_gpu_temperature(),
@@ -243,10 +267,11 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
 
 def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
                     generator: nn.Module, discriminator: nn.Module,
-                    opt_g: Any = None, opt_d: Any = None, scaler_g: Any = None, scaler_d: Any = None):
-    """Guarda un checkpoint completo con formato unificado y preservación estricta de métricas y estados."""
+                    opt_g: Any = None, opt_d: Any = None, scaler_g: Any = None, scaler_d: Any = None,
+                    sched_g: Any = None, sched_d: Any = None):
+    """Guarda un checkpoint completo con formato unificado y preservacion estricta de metricas y estados."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else 0.0
+    f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else None
     f_best = float(best_loss) if (best_loss is not None and math.isfinite(float(best_loss))) else 999.0
     state = {
         "epoch": int(epoch),
@@ -258,7 +283,9 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "opt_d": opt_d.state_dict() if opt_d is not None else None,
         "scaler_g": scaler_g.state_dict() if (scaler_g is not None and hasattr(scaler_g, "state_dict")) else None,
         "scaler_d": scaler_d.state_dict() if (scaler_d is not None and hasattr(scaler_d, "state_dict")) else None,
-        "rng_state": torch.get_rng_state(),
+        "scheduler_g": sched_g.state_dict() if (sched_g is not None and hasattr(sched_g, "state_dict")) else None,
+        "scheduler_d": sched_d.state_dict() if (sched_d is not None and hasattr(sched_d, "state_dict")) else None,
+        "rng_state": torch.get_rng_state().cpu(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     torch.save(state, file_path)
@@ -391,6 +418,22 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             except Exception as e:
                 print(f"[!] Error al reanudar checkpoint: {e}")
     elif mode == "start":
+        # Restablecer historial de entrenamiento en STATUS_FILE para nuevo experimento
+        if STATUS_FILE.exists():
+            try:
+                with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                    sdata = json.load(f)
+                sdata["history"] = []
+                sdata["initial_loss"] = None
+                sdata["best_loss"] = None
+                sdata["loss_reduction_pct"] = 0.0
+                sdata["epoch"] = 0
+                sdata["status"] = "INICIANDO"
+                with open(STATUS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(sdata, f, indent=2)
+            except Exception:
+                pass
+
         # Warm start: Si existe best_generator o base_generator, iniciar desde pesos entrenados
         warm_ckpt = CHECKPOINT_DIR / "best_generator.pt"
         if not warm_ckpt.exists():
@@ -401,7 +444,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 gen_state = ckpt.get("generator", ckpt) if isinstance(ckpt, dict) else ckpt
                 generator.load_state_dict(gen_state, strict=False)
                 if isinstance(ckpt, dict):
-                    best_loss = ckpt.get("best_loss", ckpt.get("loss", None))
+                    cand_best = ckpt.get("best_loss", ckpt.get("loss", None))
+                    if cand_best is not None and math.isfinite(cand_best) and float(cand_best) > 0.0:
+                        best_loss = float(cand_best)
                 print(f"[OK] Warm Start: Inicializando generador desde pesos existentes: {warm_ckpt.name}")
             except Exception as e:
                 print(f"[!] Aviso: No se pudo cargar warm start: {e}. Iniciando desde inicializacion normal.")
@@ -414,12 +459,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 b_data = torch.load(best_ckpt_file, map_location="cpu")
                 if isinstance(b_data, dict):
                     cand_best = b_data.get("best_loss", b_data.get("loss", 999.0))
-                    if cand_best is not None and math.isfinite(cand_best):
+                    if cand_best is not None and math.isfinite(cand_best) and float(cand_best) > 0.0:
                         best_loss = float(cand_best)
                         print(f"[OK] best_loss historico recuperado de best_generator.pt: {best_loss:.4f}")
             except Exception:
                 pass
-    if best_loss is None or not math.isfinite(best_loss):
+    if best_loss is None or not math.isfinite(best_loss) or best_loss <= 0.0:
         best_loss = 999.0
 
     total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
@@ -465,11 +510,27 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             try: scaler_d.load_state_dict(loaded_ckpt["scaler_d"])
             except Exception: pass
         if "rng_state" in loaded_ckpt and loaded_ckpt["rng_state"] is not None:
-            try: torch.set_rng_state(loaded_ckpt["rng_state"])
-            except Exception: pass
+            try:
+                rng = loaded_ckpt["rng_state"]
+                if hasattr(rng, "cpu"):
+                    rng = rng.cpu()
+                if isinstance(rng, torch.Tensor) and rng.dtype != torch.uint8:
+                    rng = rng.to(torch.uint8)
+                torch.set_rng_state(rng)
+                print("[OK] Estado CPU RNG restaurado.")
+            except Exception as e:
+                print(f"[*] Aviso al restaurar CPU RNG: {e}")
         if "cuda_rng_state" in loaded_ckpt and loaded_ckpt["cuda_rng_state"] is not None and torch.cuda.is_available():
-            try: torch.cuda.set_rng_state_all(loaded_ckpt["cuda_rng_state"])
-            except Exception: pass
+            try:
+                cuda_rng = loaded_ckpt["cuda_rng_state"]
+                if isinstance(cuda_rng, list):
+                    cuda_rng_cpu = [r.cpu() if hasattr(r, "cpu") else r for r in cuda_rng]
+                    torch.cuda.set_rng_state_all(cuda_rng_cpu)
+                elif hasattr(cuda_rng, "cpu"):
+                    torch.cuda.set_rng_state(cuda_rng.cpu())
+                print("[OK] Estado CUDA RNG restaurado.")
+            except Exception as e:
+                print(f"[*] Aviso al restaurar CUDA RNG: {e}")
 
     criterion_l1 = nn.SmoothL1Loss()
     criterion_edge = KorniaSobelLoss().to(DEVICE) if HAS_KORNIA else FallbackSobelLoss().to(DEVICE)
@@ -479,6 +540,21 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
     scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(opt_g, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
     scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(opt_d, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
+
+    # Restaurar schedulers si estan disponibles en checkpoint
+    if loaded_ckpt is not None:
+        if "scheduler_g" in loaded_ckpt and loaded_ckpt["scheduler_g"] is not None:
+            try:
+                scheduler_g.load_state_dict(loaded_ckpt["scheduler_g"])
+                print("[OK] Estado de scheduler_g restaurado con exito.")
+            except Exception as e:
+                print(f"[*] Aviso al restaurar scheduler_g: {e}")
+        if "scheduler_d" in loaded_ckpt and loaded_ckpt["scheduler_d"] is not None:
+            try:
+                scheduler_d.load_state_dict(loaded_ckpt["scheduler_d"])
+                print("[OK] Estado de scheduler_d restaurado con exito.")
+            except Exception as e:
+                print(f"[*] Aviso al restaurar scheduler_d: {e}")
 
     start_time = time.time()
     avg_g = 0.0
@@ -491,7 +567,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print("\n[PAUSA] Senal de pausa recibida. Guardando checkpoint...")
             try: PAUSE_FLAG_FILE.unlink()
             except Exception: pass
-            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             update_status(epoch - 1, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
@@ -499,7 +575,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print("\n[STOP] Senal de detencion recibida. Guardando...")
             try: STOP_FLAG_FILE.unlink()
             except Exception: pass
-            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+            save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch - 1, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             update_status(epoch - 1, total_target_epochs, "DETENIDO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
@@ -521,14 +597,14 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                     print('\n[PAUSA] Senal de pausa en lote. Guardando checkpoint...')
                     try: PAUSE_FLAG_FILE.unlink()
                     except Exception: pass
-                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
                     update_status(epoch, total_target_epochs, 'PAUSADO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
                 if STOP_FLAG_FILE.exists():
                     print('\n[STOP] Senal de detencion en lote. Guardando checkpoint...')
                     try: STOP_FLAG_FILE.unlink()
                     except Exception: pass
-                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+                    save_checkpoint(CHECKPOINT_DIR / 'latest_checkpoint.pt', epoch, curr_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
                     update_status(epoch, total_target_epochs, 'DETENIDO', curr_g, curr_d, curr_l1, curr_edge, start_time, lr)
                     return
 
@@ -585,6 +661,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         avg_l1 = epoch_l1 / n_batches
         avg_edge = epoch_edge / n_batches
 
+        # Verificar finitud estricta en cada epoca
+        if not math.isfinite(avg_g) or not math.isfinite(avg_d):
+            print(f"[!] ERROR CRITICO: Epoca {epoch} produjo perdidas no finitas (G: {avg_g}, D: {avg_d}). Deteniendo por seguridad.")
+            update_status(epoch, total_target_epochs, "ERROR_NAN", None, None, None, None, start_time, lr)
+            return
+
         print(f"Epoca [{epoch:03d}/{total_target_epochs:03d}] - G_Loss: {avg_g:.4f} | Color_L1: {avg_l1:.4f} | Borde: {avg_edge:.4f} | D_Loss: {avg_d:.4f}")
 
         # Guardar preview y actualizar status cada epoca
@@ -599,7 +681,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         # -------------------------------------------------------------
         if epoch % 10 == 0:
             snapshot_file = SNAPSHOTS_DIR / f"checkpoint_epoch_{epoch:03d}.pt"
-            save_checkpoint(snapshot_file, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+            save_checkpoint(snapshot_file, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             gen_only_file = SNAPSHOTS_DIR / f"generator_epoch_{epoch:03d}.pt"
             torch.save(generator.state_dict(), gen_only_file)
             print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f}, Best: {best_loss:.4f})")
@@ -608,15 +690,20 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         scheduler_d.step()
 
         # Checkpoints de mejor rendimiento y ultimo (preservando siempre best_loss)
-        if avg_g < best_loss and math.isfinite(avg_g):
+        if avg_g < best_loss and math.isfinite(avg_g) and avg_g > 0.0:
             best_loss = avg_g
-            save_checkpoint(CHECKPOINT_DIR / "best_generator.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+            save_checkpoint(CHECKPOINT_DIR / "best_generator.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             print(f"[*] ¡Nuevo mejor modelo registrado! G_Loss: {best_loss:.4f}")
 
-        save_checkpoint(CHECKPOINT_DIR / "latest_checkpoint.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d)
+        if math.isfinite(avg_g):
+            save_checkpoint(CHECKPOINT_DIR / "latest_checkpoint.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
 
-    update_status(total_target_epochs, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
-    print("\n[OK] Ciclo de entrenamiento supervisado finalizado exitosamente.")
+    if math.isfinite(avg_g) and math.isfinite(avg_d) and avg_g > 0.0:
+        update_status(total_target_epochs, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
+        print("\n[OK] Ciclo de entrenamiento supervisado finalizado exitosamente.")
+    else:
+        update_status(total_target_epochs, total_target_epochs, "ERROR_NAN", None, None, None, None, start_time, lr)
+        print("\n[!] Ciclo finalizado con perdidas invalidas o no finitas.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

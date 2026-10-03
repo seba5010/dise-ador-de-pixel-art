@@ -189,7 +189,43 @@ Falta de parámetros de bloqueo de tono/saturación en `ColorJitter`, uso de ord
 
 ---
 
-## 4. Archivos Modificados en el Repositorio
+---
+
+## 5. Resolución de Errores Reproducidos en la Segunda Auditoría
+
+### 5.1. Pérdida NaN y Validación de Finitud al Completar
+- **Causa Raíz:** En `update_status`, la transición a `ERROR_NAN` solo se evaluaba si `status_str == "ENTRENANDO"`. La llamada final del ciclo de entrenamiento solicitaba `"COMPLETADO"`, por lo que si una época previa producía `NaN`, este se enmascaraba como `0.0` y el estado final marcaba erróneamente un éxito perfecto.
+- **Solución Implementada:**
+  - `update_status` valida finitud de forma agnóstica al estado solicitado: si `g_loss` o `d_loss` son `NaN` o no finitos, fuerza incondicionalmente `status = "ERROR_NAN"`.
+  - Las métricas no válidas se guardan como `None` (`null` en JSON) en lugar del valor ficticio `0.0`.
+  - En `train_supervised_model`, se añade un guardián por época: si `avg_g` o `avg_d` no son finitos, se detiene el entrenamiento de inmediato con `ERROR_NAN`.
+  - La llamada final solo emite `"COMPLETADO"` si `avg_g` y `avg_d` son estrictamente finitos y mayores a cero.
+
+### 5.2. Control de Calidad (QC): Rechazo de Sprites Completamente Semitransparentes (Alfa 128)
+- **Causa Raíz:** La condición `solid > 0 and (semi / solid) > 0.08` en `run_quality_audit` requería la existencia de al menos un píxel sólido (`solid > 0`). Si una celda completa contenía un sprite con alfa 128 (bloque fantasma sin ningún píxel sólido), `solid` era 0, evadiendo la detección y aprobando la hoja con pureza alfa del 100%.
+- **Solución Implementada:**
+  - En `sprite_studio.py`, se reformuló la verificación de binaridad: si `solid == 0 and semi >= 5`, se clasifica como celda defectuosa (`blurry_alpha_cells`) con ratio `1.0`.
+  - Si existen píxeles sólidos pero la proporción no binaria supera el 2% (`semi / solid > 0.02`), o si la celda acumula más de 15 píxeles difusos, también se marca como defectuosa.
+  - La prueba de validación con 96 celdas con bloques verdes de alfa 128 ahora resulta en: `is_ready_for_game: False`, 96 celdas marcadas y pureza alfa de `0.0%`.
+
+### 5.3. Métricas Históricas del Monitor (`best_loss` e `initial_loss`)
+- **Causa Raíz:** Si `training_status.json` tenía valores `0.0` heredados de ejecuciones interrumpidas, el cargador los aceptaba porque `0.0` es finito. Dado que ninguna pérdida real es menor que cero, `best_loss` e `initial_loss` quedaban congelados en `0.0` y el porcentaje de reducción en `0.0%`.
+- **Solución Implementada:**
+  - En `update_status`, se exige estrictamente `float(v) > 0.0` para aceptar métricas existentes.
+  - Si `best_loss` o `initial_loss` no están inicializados o eran `0.0`, se recuperan de los valores válidos históricos presentes en `history`.
+  - Se eliminó el uso de `0.0` como valor de reserva; si no hay mediciones válidas, se serializa como `null`.
+  - Al iniciar un experimento con `mode == "start"`, se reinicia el historial y las métricas en `STATUS_FILE` para evitar contaminaciones de corridas previas.
+
+### 5.4. Reanudación de Schedulers y Generador RNG en CPU
+- **Causa Raíz:** Los optimizadores se guardaban, pero los `lr_scheduler` se reconstruían desde cero al reanudar. Además, el tensor de estado RNG de CPU podía presentar incompatibilidades si se cargaba directamente en GPU con `map_location=DEVICE`.
+- **Solución Implementada:**
+  - `save_checkpoint` ahora almacena `scheduler_g` y `scheduler_d`.
+  - Al reanudar desde checkpoint, se restaura el estado de ambos schedulers con `load_state_dict`.
+  - El estado del RNG de CPU se transfiere explícitamente a CPU (`torch.get_rng_state().cpu()`) y al restaurar se valida `rng.cpu()` y `torch.uint8` antes de invocar `torch.set_rng_state(rng)`.
+
+---
+
+## 6. Archivos Modificados en el Repositorio
 
 - [`pixel_ai_engine/train_supervised.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/pixel_ai_engine/train_supervised.py)
 - [`pixel_ai_engine/palette_remap.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/pixel_ai_engine/palette_remap.py)

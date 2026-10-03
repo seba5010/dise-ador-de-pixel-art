@@ -199,11 +199,12 @@ Auditoría técnica automatizada que certifica si una hoja cumple con los están
 
 A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguientes 5 correcciones arquitecturales:
 
-1. **Reanudación y Preservación de `best_loss`**:
+1. **Reanudación y Preservación de `best_loss` y Schedulers**:
    - `save_checkpoint` unifica el guardado de checkpoints normales, pausas, paradas y snapshots de 10 épocas.
-   - Preserva `best_loss`, optimizadores `opt_g`/`opt_d` (8-bit AdamW / Adam), escaladores AMP `scaler_g`/`scaler_d` y estados de generadores de números aleatorios (RNG) de CPU y CUDA.
-   - En caso de reanudar desde checkpoints de versiones anteriores que carezcan del campo `best_loss`, el cargador lo recupera automáticamente desde `best_generator.pt`, impidiendo que una época posterior con mayor pérdida reemplace el mejor modelo histórico.
-   - Validación estricta con `math.isfinite` que previene escrituras de valores `NaN` en `training_status.json`.
+   - Preserva `best_loss`, optimizadores `opt_g`/`opt_d` (8-bit AdamW / Adam), escaladores AMP `scaler_g`/`scaler_d`, schedulers CosineAnnealing (`scheduler_g`/`scheduler_d`) y estados de generadores de números aleatorios (RNG en CPU/CUDA con validación de tipo de tensor).
+   - En caso de reanudar desde checkpoints antiguos que carezcan de `best_loss`, se recupera automáticamente desde `best_generator.pt`.
+   - Protección integral contra `NaN`: `update_status` intercepta pérdidas no finitas independientemente del estado (`COMPLETADO` o `ENTRENANDO`), asignando `status: "ERROR_NAN"` y serializando métricas inválidas como `null` en lugar de `0.0`.
+   - Recuperación de métricas históricas: descarta valores `0.0` heredados para `best_loss` e `initial_loss`, recuperándolos del historial válido.
 
 2. **Sincronización Reactiva de Respawn**:
    - El selector `#respawnEpochSelect` se alimenta dinámicamente de `/api/train/snapshots` y de la telemetría en tiempo real (`info.snapshots`).
@@ -218,8 +219,9 @@ A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguie
 
 4. **Control de Calidad Quirúrgico de Canal Alfa**:
    - `run_quality_audit` incluye formalmente el análisis de `blurry_alpha_cells` en la condición de certificación `is_ready`.
-   - Se exige que `len(blurry_alpha_cells) == 0` y `alpha_purity_score >= 95.0%`.
-   - Cualquier hoja con píxeles semitransparentes o bordes difuminados es calificada como `BORRADOR / REVISIÓN REQUERIDA` y se detalla el número de celdas afectadas en la bitácora técnica.
+   - Detecta y rechaza de forma inmediata celdas completamente semitransparentes (por ejemplo, bloques o sprites fantasma con alfa 128 donde `solid == 0 and semi >= 5`), marcándolas con ratio `1.0`.
+   - Para celdas con píxeles opacos, rechaza cualquier sangrado con semitransparencias mayores al 2% (`semi / solid > 0.02`) o con más de 15 píxeles difusos.
+   - Se exige que `len(blurry_alpha_cells) == 0` y `alpha_purity_score >= 95.0%`. Cualquier hoja con píxeles semitransparentes o bordes difuminados es calificada como `BORRADOR / REVISIÓN REQUERIDA`.
 
 5. **Colores, Acabado Unificado y Transparencia de Inferencia**:
    - `Albumentations.ColorJitter` bloquea explícitamente `saturation=0.0` y `hue=0.0`, limitando las variaciones exclusivamente a cambios sutiles de brillo y contraste sin alterar los tonos de la ropa ni la piel del personaje.
