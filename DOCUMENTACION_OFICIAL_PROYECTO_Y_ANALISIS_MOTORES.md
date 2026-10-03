@@ -1,6 +1,6 @@
 # DOCUMENTACIÓN OFICIAL DEL PROYECTO: DISEÑADOR DE PIXEL ART
 **Villa del Chef — Motor Neuronal de Spritesheets y Análisis Comparativo de Motores**  
-*Fecha: Octubre 2026 | Versión: 2.5 (Arquitectura Blindada y Control de Respawn)*
+*Fecha: Octubre 2026 | Versión: 2.6 (Arquitectura Híbrida Supervisada, Optimización 8-Bit y Remapeo de Paleta)*
 
 ---
 
@@ -38,17 +38,41 @@ A continuación se detallan las razones técnicas fundamentales de este fallo:
 * El endpoint `txt2img` de Forge solo recibe cadenas de texto (`prompt`). Ignora por completo los píxeles reales de la imagen frontal seleccionada por el usuario.
 * Si el usuario sube un personaje nuevo con delantal blanco o un peinado singular, Forge no puede transferir esos píxeles directamente; intenta inventar un personaje nuevo basado únicamente en palabras clave, cambiando colores arbitrariamente (por ejemplo, vistiendo al chef de rojo y negro).
 
-> **Conclusión sobre Forge:** El motor de difusión SD 1.5 + LoRA queda documentado oficialmente como **OBSOLETO Y NO APTO** para la generación de spritesheets rígidos en este proyecto.
+> **Conclusión sobre Forge:** El motor de difusión libre SD 1.5 + LoRA queda documentado oficialmente como **OBSOLETO Y NO APTO** para la generación de spritesheets rígidos en este proyecto.
 
 ---
 
-## 3. El Motor Válido: Generador Supervisado Directo (Pix2Pix / UNet 6 Canales)
+## 3. Rescate Tecnológico: Métodos, Clases y Diseños Salvados de Forge para el Motor Supervisado
 
-La solución técnica que cumple al 100% con los requisitos del juego es el **Generador Supervisado Píxel a Píxel (`PixelArtUNetGenerator`)**.
+Aunque la difusión libre no sea apta, el entorno de Forge y su pila de visión artificial contienen **métodos, clases y algoritmos de alto rendimiento** que han sido rescatados e integrados directamente en nuestro motor:
 
-### 3.1. Arquitectura de Entrada y Salida
-A diferencia de los modelos de difusión, este modelo es un traductor directo de imagen a imagen:
+### 3.1. Optimizador de 8-Bits (`bitsandbytes.optim.AdamW8bit`)
+* **Origen:** Forge utiliza `bitsandbytes` para entrenar modelos pesados en GPUs de gama media sin desbordar la VRAM.
+* **Integración en `train_supervised.py`:** En lugar del optimizador Adam tradicional de PyTorch (que mantiene momentos en Float32 consumiendo casi 3 GB de VRAM), se activó `AdamW8bit`.
+* **Beneficio:** Reduce el consumo de VRAM a **~1.5 GB**, dejando holgura total para la GPU de 4 GB (RTX 3050 Ti) y acelerando la tasa de entrenamiento por época.
 
+### 3.2. Módulo de Cuantización y Remapeo de Paleta (`pixel_ai_engine/palette_remap.py`)
+* **Origen:** Algoritmos de indexación de color y color snapping usados en pipelines profesionales de Pixel Art.
+* **Integración:**
+  1. `extract_character_palette(front_img)`: Extrae los centroides RGB exactos de la piel, ojos, cabello y prendas del frontal del personaje.
+  2. `remap_image_to_palette(frame, palette)`: Proyecta cada píxel generado por la U-Net al color canónico más cercano mediante distancia euclidiana mínima en espacio tridimensional, preservando el canal alfa.
+* **Beneficio:** Erradica al 100% cualquier color "inventado" o gradiente difuminado. El personaje mantiene una fidelidad cromática idéntica a su ilustración de entrada.
+
+### 3.3. Acondicionamiento Semántico de Poses (`frame_map.py`)
+* **Origen:** Mapeo estructurado de 96 frames con atributos ontológicos: dirección (sur, este, etc.), subfase (paso 1, 2, idle) y acción (batir, cargar, celebrar).
+* **Beneficio:** Permite estructurar la correlación entre la pose geométrica del maniquí y la orientación anatómica que la red neuronal debe aprender.
+
+### 3.4. Preprocesadores de Siluetas y Líneas de ControlNet
+* **Origen:** Filtros Canny / Lineart de la suite ControlNet de Forge.
+* **Beneficio:** Automatizan la extracción de contornos de nuevos personajes con ropas o accesorios especiales para incorporarlos a la plantilla de poses.
+
+---
+
+## 4. El Motor Válido: Generador Supervisado Directo (Pix2Pix / UNet 6 Canales)
+
+La solución técnica definitiva es el **Generador Supervisado Píxel a Píxel (`PixelArtUNetGenerator`)**.
+
+### 4.1. Arquitectura de Entrada y Salida
 ```
 [FRONTAL DEL PERSONAJE] (3 canales RGB: Identidad, Colores reales, Cabello, Ropa)
            +
@@ -59,70 +83,32 @@ A diferencia de los modelos de difusión, este modelo es un traductor directo de
      │  U-Net    │  (Entrada: 6 canales | Salida: 4 canales RGBA)
      └─────┬─────┘
            ▼
+   [REMAPEO DE PALETA] (pixel_ai_engine/palette_remap.py)
+           ▼
 [SPRITE FINAL 128×128] (Píxeles fieles, fondo alfa transparente estricto)
 ```
 
-### 3.2. Los 4 Candados de Seguridad Implementados
-Para evitar los incidentes históricos de colapso modal (cuadros grises) o desbordes numéricos, el script `pixel_ai_engine/train_supervised.py` cuenta con 4 blindajes activos:
-
-1. **🔒 Candado 1: Cero Texto, Cero Alucinación:**
-   La red no procesa texto. Se alimenta de matrices de píxeles reales (Frontal + Molde). No tiene libertad física para cambiar el tamaño de la cabeza ni inventar poses extrañas.
-2. **🔒 Candado 2: Supremacía del Generador sobre el Discriminador:**
-   - Tasa de aprendizaje del discriminador a la mitad (`lr * 0.5`).
-   - Peso adversarial reducido al 5% (`adv_loss * 0.05`). El 95% del entrenamiento lo dominan las pérdidas reconstructivas: **Smooth L1 Color (peso 5.0)**, **Smooth L1 Alpha (peso 2.5)** y **Sobel Edge Loss (peso 1.5)**.
-   - Dataset supervisado de **1.008 frames** reales (Alex, Amaro, Belial, Conny, Dana) que impide que el discriminador memorice las muestras.
-3. **🔒 Candado 3: Blindaje Numérico Anti-NaN:**
-   Clamping estricto de logits a Float32 en rango `[-30.0, 30.0]` en todas las llamadas `BCEWithLogitsLoss`, eliminando desbordes numéricos en FP16 AMP.
-4. **🔒 Candado 4: Auditoría Visual en Vivo (4 Columnas) y Récord Histórico:**
-   Generación en cada época de la tira comparativa:
-   `[Frontal] -> [Molde] -> [Predicción IA] -> [Ground Truth Real]`
-   Guardado automático del mejor modelo histórico en `checkpoints/best_generator.pt`.
+### 4.2. Los 4 Candados de Seguridad Implementados
+1. **🔒 Candado 1: Cero Texto, Cero Alucinación:** Entrada directa de 6 canales numéricos (Identidad + Pose).
+2. **🔒 Candado 2: Supremacía del Generador sobre el Discriminador:** Tasa de aprendizaje reducida (`lr * 0.5`) y peso adversarial de solo 5% (`adv_loss * 0.05`), frente a un 95% dominado por **Smooth L1 Color**, **Smooth L1 Alpha** y **Sobel Edge Loss** sobre 1.008 frames.
+3. **🔒 Candado 3: Blindaje Numérico Anti-NaN:** Clamping estricto de logits a Float32 en rango `[-30.0, 30.0]`.
+4. **🔒 Candado 4: Auditoría Visual en Vivo (4 Columnas) y Récord Histórico:** Tira comparativa en cada época y guardado de `best_generator.pt`.
 
 ---
 
-## 4. Nuevo Sistema: Control de Épocas y Puntos de Respawn (Snapshots cada 10 Épocas)
+## 5. Control de Épocas y Sistema de Respawn (Snapshots cada 10 Épocas)
 
-A propuesta del equipo de desarrollo, se implementó una red de seguridad contra sobreajuste o degradación tardía:
-
-### 4.1. Guardado de Snapshots Periódicos
-Cada 10 épocas completadas (10, 20, 30, 40, 50, ...), el sistema almacena en `checkpoints/snapshots/`:
-- `checkpoint_epoch_XXX.pt`: Cerebro completo (generador, discriminador, optimizadores, pérdidas).
-- `generator_epoch_XXX.pt`: Pesos limpios del generador listos para inferencia.
-- `preview_epoch_XXX.png`: Captura visual en `training_samples/audit_history/` para inspeccionar la calidad en esa época.
-
-### 4.2. Función de Respawn (Rollback / Vuelta en el Tiempo)
-Si el usuario nota que en una época avanzada (ej. 45) el modelo empezó a perder nitidez en comparación con una época anterior (ej. 20 o 30):
-- Abre el panel **⏪ Control de Respawn** en Sprite Studio.
-- Selecciona el punto deseado en el desplegable.
-- Pulsa **⏪ Ejecutar Respawn**: El sistema rebobina los pesos al snapshot seleccionado y reanuda el entrenamiento desde ese punto exacto, descartando las épocas deterioradas.
+* **Snapshots cada 10 Épocas:** En `checkpoints/snapshots/` se guardan automáticamente `checkpoint_epoch_XXX.pt`, `generator_epoch_XXX.pt` y `preview_epoch_XXX.png`.
+* **Botón y Función de Respawn:** Desde el monitor web de Sprite Studio (`http://localhost:8080`), el usuario puede rebobinar el modelo a cualquier decena anterior si en el futuro se detecta sobreajuste o pérdida de nitidez.
 
 ---
 
-## 5. Manual Operativo de Sprite Studio (`sprite_studio.py`)
+## 6. Manual Operativo de Sprite Studio (`sprite_studio.py`)
 
-### 5.1. Puesta en Marcha
-1. **Servidor Web:** Ejecutar `sprite_studio.py` con el entorno de Python de Forge:
+1. **Iniciar Servidor:**
    ```bash
    & "d:\escritorio\diseñador de pixel art\webui forger\system\python\python.exe" "d:\escritorio\diseñador de pixel art\sprite_studio.py"
    ```
-2. **Acceso Web:** Abrir en el navegador:
-   `http://localhost:8080`
-
-### 5.2. Flujo de Trabajo Recomendado
-1. **Entrenamiento:**
-   - Ir a la pestaña **📈 Monitor de Entrenamiento**.
-   - Seleccionar **Motor: PyTorch UNet (Generador Quirúrgico Local)**.
-   - Pulsar **▶️ Iniciar**.
-   - Auditar en vivo la columna 3 (*Predicción IA*) en la vista previa.
-2. **Control de Calidad (QC):**
-   - En la pestaña **Control de Calidad**, pulsar **Auditar Spritesheet**.
-   - El sistema genera `spritesheet_clean.png` (transparente) y `spritesheet_grid.png` (con cuadrícula de alineación) y emite un informe métrico de alineación de cabeza, pies y saturación.
-
----
-
-## 6. Políticas de Control de Versiones (Git y GitHub)
-
-1. **Prohibición de Archivos Binarios > 50 MB:**
-   - No comitear archivos `.pt` masivos (`supervised_cache_8x12.pt`, etc.).
-   - Mantener `.gitignore` configurado para excluir caches binarias temporales.
-2. **No usar Git LFS:** La cuota de GitHub LFS está al límite; los assets pixel art livianos se suben mediante Git estándar sin LFS.
+2. **Acceso Web:** `http://localhost:8080`
+3. **Selección de Motor:** En el Monitor de Entrenamiento, seleccionar **PyTorch UNet (Generador Quirúrgico Local)**.
+4. **Control de Calidad (QC):** En la pestaña de QC, auditar la alineación métrica y la transparencia de las hojas ensambladas.

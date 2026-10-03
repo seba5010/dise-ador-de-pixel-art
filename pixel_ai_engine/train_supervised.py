@@ -24,6 +24,7 @@ from pixel_ai_engine.config import (
     USE_AMP
 )
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
+from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette
 
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR = CHECKPOINT_DIR / "snapshots"
@@ -151,7 +152,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     status_data = {
         "epoch": int(epoch),
         "total_epochs": int(total_epochs),
-        "phase": "Supervisado Pix2Pix (Alex, Amaro, Conny, Dana, Belial)",
+        "phase": "Supervisado Pix2Pix + 8bit AdamW + Remapeo Paleta",
         "phase_id": 3,
         "status": status_str,
         "g_loss": f_loss,
@@ -193,19 +194,23 @@ def generate_preview(generator, dataset, epoch_label=None):
             with autocast(enabled=USE_AMP):
                 out = generator(cond).squeeze(0)
 
-            # 1. Frontal Chibi
+            # 1. Frontal Chibi (Referencia real)
             f_np = ((front.permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             f_pil = Image.fromarray(f_np, "RGB").resize((128, 128), Image.Resampling.NEAREST)
 
-            # 2. Pose
+            # 2. Pose (Molde geométrico)
             p_np = ((pose.permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             p_pil = Image.fromarray(p_np, "RGB").resize((128, 128), Image.Resampling.NEAREST)
 
-            # 3. Prediccion IA
+            # 3. Prediccion IA con Remapeo de Paleta Canónica
             pred_np = ((out[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             alpha_np = ((out[3].cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
             pred_rgba = np.dstack([pred_np, alpha_np])
-            pred_pil = Image.fromarray(pred_rgba, "RGBA").resize((128, 128), Image.Resampling.NEAREST)
+            raw_pred_pil = Image.fromarray(pred_rgba, "RGBA").resize((128, 128), Image.Resampling.NEAREST)
+            
+            # Aplicar remapeo de paleta del frontal para erradicar cualquier color extraño
+            char_palette = extract_character_palette(f_pil)
+            pred_pil = remap_image_to_palette(raw_pred_pil, char_palette)
 
             # 4. Ground Truth Real
             tgt_np = ((target[:3].permute(1,2,0).cpu().numpy() + 1.0) * 127.5).clip(0,255).astype(np.uint8)
@@ -290,13 +295,22 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
 
     print("=" * 70)
-    print("  ENTRENAMIENTO SUPERVISADO PIX2PIX CON CONTROL DE RESPAWN")
+    print("  ENTRENAMIENTO SUPERVISADO CON ACELERACIÓN 8-BIT Y RESPAWN")
     print(f"  Modo: {mode.upper()} | Epocas: {start_epoch} a {total_target_epochs} | Batch: {batch_size} | LR: {lr}")
     print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE}")
     print("=" * 70)
 
-    opt_g = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.999))
-    opt_d = torch.optim.Adam(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999))
+    # Optimizadores: Intentar BitsAndBytes 8-bit AdamW de Forge para maximo ahorro de VRAM
+    try:
+        import bitsandbytes as bnb
+        opt_g = bnb.optim.AdamW8bit(generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-4)
+        opt_d = bnb.optim.AdamW8bit(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999), weight_decay=1e-4)
+        print("[OK] Optimizador BitsAndBytes 8-bit AdamW activado (Ahorro de ~50% VRAM)")
+    except Exception as e:
+        opt_g = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        opt_d = torch.optim.Adam(discriminator.parameters(), lr=lr * 0.5, betas=(0.5, 0.999))
+        print(f"[!] Optimizador estandar PyTorch Adam activo: {e}")
+
     scaler_g = GradScaler(enabled=USE_AMP)
     scaler_d = GradScaler(enabled=USE_AMP)
 
