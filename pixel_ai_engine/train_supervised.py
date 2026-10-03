@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -25,8 +26,14 @@ from pixel_ai_engine.config import (
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
 
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+SNAPSHOTS_DIR = CHECKPOINT_DIR / "snapshots"
+SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 TRAIN_SAMPLES_DIR = PROJECT_ROOT / "training_samples"
 TRAIN_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+AUDIT_DIR = TRAIN_SAMPLES_DIR / "audit_history"
+AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+
 STATUS_FILE = PROJECT_ROOT / "training_status.json"
 STOP_FLAG_FILE = PROJECT_ROOT / "stop_training.flag"
 PAUSE_FLAG_FILE = PROJECT_ROOT / "pause_training.flag"
@@ -82,27 +89,92 @@ def get_gpu_temperature():
     except Exception:
         return 55
 
-def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time):
+def get_available_snapshots():
+    snaps = []
+    if SNAPSHOTS_DIR.exists():
+        for p in sorted(SNAPSHOTS_DIR.glob("checkpoint_epoch_*.pt")):
+            name = p.stem
+            try:
+                ep = int(name.replace("checkpoint_epoch_", ""))
+                img_url = f"/training_samples/audit_history/preview_epoch_{ep:03d}.png"
+                snaps.append({"epoch": ep, "file": p.name, "preview_url": img_url})
+            except Exception:
+                pass
+    return snaps
+
+def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4):
     elapsed = round(time.time() - start_time, 1)
+    history = []
+    best_loss = None
+    initial_loss = None
+
+    if STATUS_FILE.exists():
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+                history = prev.get("history", [])
+                best_loss = prev.get("best_loss")
+                initial_loss = prev.get("initial_loss")
+        except Exception:
+            history = []
+
+    f_loss = round(float(g_loss), 4) if isinstance(g_loss, (int, float)) and not (g_loss != g_loss) else 0.0
+    if f_loss > 0:
+        if initial_loss is None:
+            initial_loss = f_loss
+        if best_loss is None or f_loss < best_loss:
+            best_loss = f_loss
+
+        history = [h for h in history if h.get("epoch") != int(epoch)]
+        history.append({
+            "epoch": int(epoch),
+            "loss": f_loss,
+            "g_loss": f_loss,
+            "d_loss": round(float(d_loss), 4),
+            "l1_loss": round(float(l1_val), 4),
+            "edge_loss": round(float(edge_val), 4),
+            "lr": float(lr_val),
+            "gpu_temp": get_gpu_temperature(),
+            "elapsed_sec": elapsed
+        })
+        history.sort(key=lambda x: x["epoch"])
+
+    loss_reduction_pct = 0.0
+    if initial_loss and f_loss and initial_loss > 0:
+        loss_reduction_pct = round(((initial_loss - f_loss) / initial_loss) * 100.0, 1)
+
+    sec_per_epoch = (elapsed / max(1, epoch)) if epoch > 0 else 0
+    rem_epochs = max(0, total_epochs - epoch)
+    eta_sec = round(sec_per_epoch * rem_epochs)
+    fps = round(1008.0 / max(1.0, sec_per_epoch), 2) if sec_per_epoch > 0 else 0.0
+
     status_data = {
-        "epoch": epoch,
-        "total_epochs": total_epochs,
-        "phase": "Supervisado (Alex, Amaro, Conny, Dana, Belial)",
+        "epoch": int(epoch),
+        "total_epochs": int(total_epochs),
+        "phase": "Supervisado Pix2Pix (Alex, Amaro, Conny, Dana, Belial)",
         "phase_id": 3,
         "status": status_str,
-        "g_loss": round(float(g_loss), 4),
+        "g_loss": f_loss,
         "d_loss": round(float(d_loss), 4),
         "l1_loss": round(float(l1_val), 4),
         "edge_loss": round(float(edge_val), 4),
+        "best_loss": best_loss,
+        "initial_loss": initial_loss,
+        "loss_reduction_pct": loss_reduction_pct,
+        "lr": float(lr_val),
         "gpu_temp": get_gpu_temperature(),
         "elapsed_sec": elapsed,
+        "eta_sec": eta_sec,
+        "fps": fps,
         "timestamp": time.strftime("%H:%M:%S"),
-        "total_frames": 1008
+        "total_frames": 1008,
+        "snapshots": get_available_snapshots(),
+        "history": history
     }
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status_data, f, indent=2)
 
-def generate_preview(generator, dataset):
+def generate_preview(generator, dataset, epoch_label=None):
     generator.eval()
     with torch.no_grad():
         sample_indices = [0, 96, 288, 384] if len(dataset) > 400 else list(range(min(4, len(dataset))))
@@ -158,11 +230,17 @@ def generate_preview(generator, dataset):
 
         comp_img.save(TRAIN_SAMPLES_DIR / "latest_detail_comparison.png")
         comp_img.save(TRAIN_SAMPLES_DIR / "latest_preview.png")
+        if epoch_label is not None:
+            comp_img.save(AUDIT_DIR / f"preview_epoch_{epoch_label:03d}.png")
 
-def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1.5e-4, mode: str = "resume"):
+def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1.5e-4, mode: str = "resume", respawn_epoch: int = None):
     # Limpiar banderas anteriores
-    if STOP_FLAG_FILE.exists(): STOP_FLAG_FILE.unlink()
-    if PAUSE_FLAG_FILE.exists(): PAUSE_FLAG_FILE.unlink()
+    if STOP_FLAG_FILE.exists():
+        try: STOP_FLAG_FILE.unlink()
+        except Exception: pass
+    if PAUSE_FLAG_FILE.exists():
+        try: PAUSE_FLAG_FILE.unlink()
+        except Exception: pass
 
     dataset = SupervisedTensorDataset(CACHE_PATH)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -178,26 +256,42 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
     start_epoch = 1
     best_loss = 999.0
-    ckpt_candidate = CHECKPOINT_DIR / "latest_checkpoint.pt"
 
-    if mode == "resume" and ckpt_candidate.exists():
-        try:
-            ckpt = torch.load(ckpt_candidate, map_location=DEVICE)
-            if isinstance(ckpt, dict) and "generator" in ckpt:
-                generator.load_state_dict(ckpt["generator"])
-                if "discriminator" in ckpt:
-                    discriminator.load_state_dict(ckpt["discriminator"])
-                start_epoch = ckpt.get("epoch", 0) + 1
-                best_loss = ckpt.get("best_loss", 999.0)
-                print(f"[OK] Reanudando entrenamiento desde época {start_epoch}")
-        except Exception as e:
-            print(f"[!] Error al reanudar checkpoint: {e}")
+    # Logica de Respawn o Reanudacion
+    if respawn_epoch is not None and respawn_epoch > 0:
+        respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch:03d}.pt"
+        if not respawn_candidate.exists():
+            respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch}.pt"
+        if respawn_candidate.exists():
+            ckpt = torch.load(respawn_candidate, map_location=DEVICE)
+            generator.load_state_dict(ckpt["generator"])
+            if "discriminator" in ckpt:
+                discriminator.load_state_dict(ckpt["discriminator"])
+            start_epoch = respawn_epoch + 1
+            best_loss = ckpt.get("best_loss", ckpt.get("loss", 999.0))
+            print(f"\n[RESPAWN] == RESPAWN EXITOSO: Regresando al punto de guardado EPOCA {respawn_epoch} ==\n")
+        else:
+            print(f"[!] Aviso: No se encontro snapshot para epoca {respawn_epoch}. Iniciando estandar.")
+    elif mode == "resume":
+        ckpt_candidate = CHECKPOINT_DIR / "latest_checkpoint.pt"
+        if ckpt_candidate.exists():
+            try:
+                ckpt = torch.load(ckpt_candidate, map_location=DEVICE)
+                if isinstance(ckpt, dict) and "generator" in ckpt:
+                    generator.load_state_dict(ckpt["generator"])
+                    if "discriminator" in ckpt:
+                        discriminator.load_state_dict(ckpt["discriminator"])
+                    start_epoch = ckpt.get("epoch", 0) + 1
+                    best_loss = ckpt.get("best_loss", 999.0)
+                    print(f"[OK] Reanudando entrenamiento desde epoca {start_epoch}")
+            except Exception as e:
+                print(f"[!] Error al reanudar checkpoint: {e}")
 
-    total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" else epochs
+    total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
 
     print("=" * 70)
-    print("  ENTRENAMIENTO SUPERVISADO DE CORRECCIÓN QUIRÚRGICA")
-    print(f"  Modo: {mode.upper()} | Épocas: {start_epoch} a {total_target_epochs} | Batch: {batch_size} | LR: {lr}")
+    print("  ENTRENAMIENTO SUPERVISADO PIX2PIX CON CONTROL DE RESPAWN")
+    print(f"  Modo: {mode.upper()} | Epocas: {start_epoch} a {total_target_epochs} | Batch: {batch_size} | LR: {lr}")
     print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE}")
     print("=" * 70)
 
@@ -218,15 +312,17 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
     for epoch in range(start_epoch, total_target_epochs + 1):
         if PAUSE_FLAG_FILE.exists():
-            print("\n[⏸️] Señal de pausa recibida. Guardando checkpoint y pausando...")
-            PAUSE_FLAG_FILE.unlink()
-            update_status(epoch - 1, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time)
+            print("\n[PAUSA] Senal de pausa recibida. Guardando checkpoint...")
+            try: PAUSE_FLAG_FILE.unlink()
+            except Exception: pass
+            update_status(epoch - 1, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
         if STOP_FLAG_FILE.exists():
-            print("\n[⏹️] Señal de detención recibida. Guardando y deteniendo...")
-            STOP_FLAG_FILE.unlink()
-            update_status(epoch - 1, total_target_epochs, "DETENIDO", avg_g, avg_d, avg_l1, avg_edge, start_time)
+            print("\n[STOP] Senal de detencion recibida. Guardando...")
+            try: STOP_FLAG_FILE.unlink()
+            except Exception: pass
+            update_status(epoch - 1, total_target_epochs, "DETENIDO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
             return
 
         generator.train()
@@ -239,19 +335,20 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         for batch_i, (fronts, f_indices, targets, _) in enumerate(dataloader):
             if batch_i % 8 == 0:
                 if PAUSE_FLAG_FILE.exists():
-                    print('\n[⏸️] Señal de pausa recibida en lote. Guardando checkpoint...')
+                    print('\n[PAUSA] Senal de pausa en lote. Guardando checkpoint...')
                     try: PAUSE_FLAG_FILE.unlink()
                     except Exception: pass
                     torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': avg_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
-                    update_status(epoch, total_target_epochs, 'PAUSADO', avg_g, avg_d, avg_l1, avg_edge, start_time)
+                    update_status(epoch, total_target_epochs, 'PAUSADO', avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
                     return
                 if STOP_FLAG_FILE.exists():
-                    print('\n[⏹️] Señal de detención recibida en lote. Guardando checkpoint...')
+                    print('\n[STOP] Senal de detencion en lote. Guardando checkpoint...')
                     try: STOP_FLAG_FILE.unlink()
                     except Exception: pass
                     torch.save({'epoch': epoch, 'generator': generator.state_dict(), 'discriminator': discriminator.state_dict(), 'loss': avg_g, 'best_loss': best_loss}, CHECKPOINT_DIR / 'latest_checkpoint.pt')
-                    update_status(epoch, total_target_epochs, 'DETENIDO', avg_g, avg_d, avg_l1, avg_edge, start_time)
+                    update_status(epoch, total_target_epochs, 'DETENIDO', avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
                     return
+
             fronts = fronts.to(DEVICE)
             targets = targets.to(DEVICE)
             poses = torch.stack([tmpl_mgr.get_frame_tensor(idx) for idx in f_indices]).to(DEVICE)
@@ -273,7 +370,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             scaler_g.step(opt_g)
             scaler_g.update()
 
-            # Discriminador
+            # Discriminador (Aprende mas lento para no aplastar al generador)
             opt_d.zero_grad()
             with autocast(enabled=USE_AMP):
                 d_real = discriminator(targets, cond)
@@ -297,14 +394,33 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         avg_l1 = epoch_l1 / n_batches
         avg_edge = epoch_edge / n_batches
 
-        print(f"Época [{epoch:03d}/{total_target_epochs:03d}] - G_Loss: {avg_g:.4f} | Color_L1: {avg_l1:.4f} | Borde: {avg_edge:.4f} | D_Loss: {avg_d:.4f}")
+        print(f"Epoca [{epoch:03d}/{total_target_epochs:03d}] - G_Loss: {avg_g:.4f} | Color_L1: {avg_l1:.4f} | Borde: {avg_edge:.4f} | D_Loss: {avg_d:.4f}")
 
-        # Guardar preview y actualizar status cada época o cada 2
-        update_status(epoch, total_target_epochs, "ENTRENANDO", avg_g, avg_d, avg_l1, avg_edge, start_time)
-        if epoch % 2 == 0 or epoch == start_epoch or epoch == total_target_epochs:
-            generate_preview(generator, dataset)
+        # Guardar preview y actualizar status cada epoca
+        update_status(epoch, total_target_epochs, "ENTRENANDO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
+        
+        # Muestra visual
+        save_audit = (epoch % 10 == 0)
+        generate_preview(generator, dataset, epoch_label=epoch if save_audit else None)
 
-        # Checkpoints
+        # -------------------------------------------------------------
+        # SISTEMA DE RESPAWN: Guardado cada 10 epocas
+        # -------------------------------------------------------------
+        if epoch % 10 == 0:
+            snapshot_file = SNAPSHOTS_DIR / f"checkpoint_epoch_{epoch:03d}.pt"
+            torch.save({
+                "epoch": epoch,
+                "generator": generator.state_dict(),
+                "discriminator": discriminator.state_dict(),
+                "loss": avg_g,
+                "best_loss": best_loss
+            }, snapshot_file)
+            
+            gen_only_file = SNAPSHOTS_DIR / f"generator_epoch_{epoch:03d}.pt"
+            torch.save(generator.state_dict(), gen_only_file)
+            print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f})")
+
+        # Checkpoints de mejor rendimiento y ultimo
         if avg_g < best_loss:
             best_loss = avg_g
             torch.save({
@@ -321,7 +437,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             "loss": avg_g
         }, CHECKPOINT_DIR / "latest_checkpoint.pt")
 
-    update_status(total_target_epochs, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time)
+    update_status(total_target_epochs, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time, lr)
     print("\n[OK] Ciclo de entrenamiento supervisado finalizado exitosamente.")
 
 if __name__ == "__main__":
@@ -330,5 +446,12 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1.5e-4)
     parser.add_argument("--mode", type=str, default="resume", choices=["start", "resume"])
+    parser.add_argument("--respawn_epoch", type=int, default=None, help="Epoca exacta a la cual rebobinar (Respawn)")
     args = parser.parse_args()
-    train_supervised_model(epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, mode=args.mode)
+    train_supervised_model(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        mode=args.mode,
+        respawn_epoch=args.respawn_epoch
+    )

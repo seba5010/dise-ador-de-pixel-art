@@ -815,6 +815,24 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        elif path == "/api/train/snapshots":
+            snaps_dir = PROJECT_ROOT / "checkpoints" / "snapshots"
+            snaps = []
+            if snaps_dir.exists():
+                for p in sorted(snaps_dir.glob("checkpoint_epoch_*.pt")):
+                    try:
+                        ep = int(p.stem.replace("checkpoint_epoch_", ""))
+                        snaps.append({
+                            "epoch": ep,
+                            "file": p.name,
+                            "size_mb": round(p.stat().st_size / (1024 * 1024), 2),
+                            "preview_url": f"/training_samples/audit_history/preview_epoch_{ep:03d}.png"
+                        })
+                    except Exception:
+                        pass
+            self.send_json(snaps)
+            return
+
         elif path == "/api/runs":
             runs = []
             if OUTPUT_DIR.exists():
@@ -1151,6 +1169,67 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 except Exception:
                     pass
             self.send_json({"status": "stopping", "message": "Señal de detención enviada al entrenamiento."})
+            return
+
+        elif parsed.path == "/api/train/respawn":
+            training_active, _ = check_gpu_training_status()
+            if training_active:
+                self.send_json({"error": "Por favor pausa o detén el entrenamiento actual antes de hacer Respawn."}, status=409)
+                return
+
+            stop_flag = PROJECT_ROOT / "stop_training.flag"
+            pause_flag = PROJECT_ROOT / "pause_training.flag"
+            if stop_flag.exists(): 
+                try: stop_flag.unlink()
+                except Exception: pass
+            if pause_flag.exists(): 
+                try: pause_flag.unlink()
+                except Exception: pass
+
+            target_epoch = int(body.get("epoch", 10))
+            epochs = int(body.get("epochs", 50))
+            batch_size = int(body.get("batch_size", 4))
+            
+            snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch:03d}.pt"
+            if not snap_file.exists():
+                snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch}.pt"
+            if not snap_file.exists():
+                self.send_json({"error": f"No se encontró el snapshot para la época {target_epoch}."}, status=404)
+                return
+
+            python_exe = sys.executable
+            embedded_python = PROJECT_ROOT / "webui forger" / "system" / "python" / "python.exe"
+            if not embedded_python.exists():
+                embedded_python = PROJECT_ROOT.parent / "webui forger" / "system" / "python" / "python.exe"
+            if embedded_python.exists():
+                python_exe = str(embedded_python)
+
+            train_script = PROJECT_ROOT / "pixel_ai_engine" / "train_supervised.py"
+            
+            status_file = PROJECT_ROOT / "training_status.json"
+            if status_file.exists():
+                try:
+                    with open(status_file, "r", encoding="utf-8") as f:
+                        cur = json.load(f)
+                    cur["status"] = f"RESPAWN EPOCA {target_epoch}"
+                    cur["epoch"] = target_epoch
+                    cur["timestamp"] = time.strftime("%H:%M:%S")
+                    with open(status_file, "w", encoding="utf-8") as f:
+                        json.dump(cur, f, indent=2)
+                except Exception:
+                    pass
+
+            subprocess.Popen([
+                python_exe, str(train_script),
+                "--epochs", str(epochs),
+                "--batch_size", str(batch_size),
+                "--mode", "resume",
+                "--respawn_epoch", str(target_epoch)
+            ], cwd=str(PROJECT_ROOT))
+            self.send_json({
+                "status": "respawned",
+                "message": f"¡Respawn exitoso! Reanudando entrenamiento desde la Época {target_epoch}."
+            })
             return
 
         elif parsed.path == "/api/regenerate_frame":

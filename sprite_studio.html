@@ -752,6 +752,34 @@
         </div>
 
         <!-- 6 TARJETAS DE MÉTRICAS Y ESTADÍSTICAS RICAMENTE DETALLADAS -->
+                <!-- PANEL DE RESPAWN / PUNTOS DE RESTAURACIÓN CADA 10 ÉPOCAS -->
+        <div class="monitor-card" style="margin-bottom:14px; border:1px solid rgba(16,185,129,0.35); background:linear-gradient(180deg, rgba(16,35,28,0.95), rgba(12,22,18,0.95)); box-shadow:0 4px 14px rgba(0,0,0,0.35);">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:14px; font-weight:700; color:#10b981;">⏪ Control de Respawn (Checkpoints cada 10 Épocas)</span>
+                <span id="respawnCountBadge" class="badge" style="background:rgba(16,185,129,0.2); color:#10b981; font-size:11px; padding:3px 9px; border-radius:12px;">0 Puntos Guardados</span>
+              </div>
+              <div style="font-size:11px; color:#94a3b8; margin-top:4px;">
+                Si el modelo empieza a degradarse o sobreajustar en una época avanzada, selecciona una época anterior y pulsa <strong>Respawn</strong> para reanudar desde ese punto exacto.
+              </div>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <label for="respawnEpochSelect" style="font-size:11px; color:#94a3b8; font-weight:600; margin:0;">Punto de Respawn:</label>
+                <select id="respawnEpochSelect" style="background:#0f172a; color:#10b981; border:1px solid #10b981; border-radius:4px; padding:5px 8px; font-size:11px; font-weight:600; min-width:160px;">
+                  <option value="" disabled selected>Esperando Época 10...</option>
+                </select>
+              </div>
+              <button id="btnRespawnTrigger" class="btn btn-secondary" onclick="triggerRespawn()" style="background:rgba(16,185,129,0.2); color:#10b981; border-color:#10b981; font-weight:600; padding:6px 14px;" title="Reanuda el entrenamiento desde el punto seleccionado">
+                ⏪ Ejecutar Respawn
+              </button>
+            </div>
+          </div>
+          <div id="respawnFeedback" style="font-size:11px; margin-top:8px; color:#10b981; min-height:16px; font-weight:500;"></div>
+        </div>
+
         <div class="monitor-grid">
           <!-- CARD 1: Época Actual & Avance -->
           <div class="monitor-card">
@@ -2761,6 +2789,37 @@
       const lBox = document.getElementById('trainLogBox');
       if (lBox) {
         lBox.textContent = `[${info.timestamp || ''}] Estado: ${info.status || 'Listo'} | Fase: ${info.phase || 'Supervisado'} | G_Loss: ${info.g_loss || '--'} | D_Loss: ${info.d_loss || '--'} | Frames Ground-Truth: ${info.total_frames || 1008}`;
+      }
+    }
+
+    async function triggerRespawn() {
+      const select = document.getElementById('respawnEpochSelect');
+      const feedback = document.getElementById('respawnFeedback');
+      const epVal = select ? parseInt(select.value, 10) : null;
+      if (!epVal) {
+        alert('Por favor selecciona una época válida en el desplegable de Respawn.');
+        return;
+      }
+      if (!confirm(¿Confirmas volver en el tiempo a la Época ? El entrenamiento continuará desde ese punto exacto descartando épocas posteriores.)) {
+        return;
+      }
+      if (feedback) feedback.textContent = ⏳ Ejecutando Respawn hacia la Época ...;
+      try {
+        const res = await fetch('/api/train/respawn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ epoch: epVal, epochs: 50, batch_size: 4 })
+        });
+        const data = await res.json();
+        if (res.status === 409) {
+          if (feedback) feedback.textContent = '⚠️ ' + data.error;
+          alert('⚠️ ' + data.error);
+        } else {
+          if (feedback) feedback.textContent = '✅ ' + data.message;
+        }
+        setTimeout(fetchStatus, 400);
+      } catch (e) {
+        if (feedback) feedback.textContent = '❌ Error: ' + e;
       }
     }
 
