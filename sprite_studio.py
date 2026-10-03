@@ -1071,6 +1071,28 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 phase_num = 3
                 msg_title = "Supervisado PyTorch UNet"
             
+            past_eras = []
+            status_path = PROJECT_ROOT / "training_status.json"
+            if status_path.exists():
+                try:
+                    with open(status_path, "r", encoding="utf-8") as f:
+                        prev_data = json.load(f)
+                    past_eras = prev_data.get("past_eras", [])
+                    old_hist = prev_data.get("history", [])
+                    if old_hist and len(old_hist) > 0:
+                        era_idx = len(past_eras) + 1
+                        past_eras.append({
+                            "era": era_idx,
+                            "name": f"Era {era_idx}",
+                            "timestamp": prev_data.get("timestamp", time.strftime("%H:%M:%S")),
+                            "epochs": prev_data.get("epoch", len(old_hist)),
+                            "initial_loss": prev_data.get("initial_loss"),
+                            "best_loss": prev_data.get("best_loss"),
+                            "history": old_hist
+                        })
+                except Exception:
+                    pass
+
             init_status = {
                 "epoch": 1,
                 "total_epochs": epochs,
@@ -1084,10 +1106,11 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 "gpu_temp": 55,
                 "elapsed_sec": 0,
                 "timestamp": time.strftime("%H:%M:%S"),
-                "total_frames": 1008
+                "total_frames": 1008,
+                "past_eras": past_eras
             }
             try:
-                with open(PROJECT_ROOT / "training_status.json", "w", encoding="utf-8") as f:
+                with open(status_path, "w", encoding="utf-8") as f:
                     json.dump(init_status, f, indent=2)
             except Exception:
                 pass

@@ -334,13 +334,34 @@
     <div class="panel-left">
 
       <!-- Chart -->
-      <div class="card">
-        <h3>📈 Curva de Pérdida</h3>
-        <canvas id="loss-chart"></canvas>
-        <div class="chart-legend">
-          <div><span class="legend-dot" style="background:#6c63ff"></span>G_Loss</div>
+      <div class="card" id="chart-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 style="margin:0;">📈 Curva de Pérdida en Tiempo Real</h3>
+          <span id="m-past-eras-badge" style="font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; color:#38bdf8; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); display:none;">0 eras archivadas</span>
+        </div>
+        <div style="position:relative; width:100%; height:180px;" id="chart-container">
+          <canvas id="loss-chart" style="width:100%; height:100%; display:block;"></canvas>
+          <div id="m-chart-tooltip" style="position:absolute; display:none; pointer-events:none; background:rgba(15,23,42,0.95); border:1px solid #6c63ff; border-radius:6px; padding:6px 10px; font-size:11px; font-family:var(--mono); color:#e2e8f0; z-index:20; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,0.5);"></div>
+        </div>
+        <div class="chart-legend" style="margin-top:8px; display:flex; gap:12px; font-size:11px; flex-wrap:wrap;">
+          <div><span class="legend-dot" style="background:#6c63ff"></span>G_Loss (Era Actual)</div>
           <div><span class="legend-dot" style="background:#48bb78"></span>L1 ×100</div>
           <div><span class="legend-dot" style="background:#ed8936"></span>D_Loss ×10</div>
+          <div id="m-eras-legend-item" style="display:none; align-items:center; gap:5px;">
+            <span style="display:inline-block; width:12px; height:2px; border-top:2px dashed #38bdf8;"></span>
+            <span style="color:#38bdf8; font-weight:600;">Era Previa (Comparativa)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cuadro de Línea del Tiempo (Eras Anteriores y Actual) -->
+      <div class="card" id="m-eras-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 style="margin:0;">🏛️ Cuadro de Línea del Tiempo (Eras)</h3>
+          <span style="font-size:10px; color:var(--dim);" id="m-eras-summary-label">Comparativa de Sesiones</span>
+        </div>
+        <div id="m-eras-table-box" style="font-size:11px; overflow-x:auto;">
+          <div style="color:var(--dim); padding:6px 0;">Cargando registro de eras...</div>
         </div>
       </div>
 
@@ -545,15 +566,126 @@
     // ─── FETCH STATUS JSON ─────────────────────────────────────────────────────
     async function fetchStatus() {
       try {
-        const res  = await fetch(`training_status.json?t=${Date.now()}`);
+        let res;
+        try {
+          res = await fetch(`training_status.json?t=${Date.now()}`);
+        } catch (netErr) {
+          if (window.location.protocol === 'file:') {
+            res = await fetch(`http://localhost:8080/training_status.json?t=${Date.now()}`);
+          } else {
+            throw netErr;
+          }
+        }
         if (!res.ok) throw new Error('no file');
         const data = await res.json();
         updateUI(data);
         lastTimeEl.textContent = data.timestamp || new Date().toLocaleTimeString();
       } catch(e) {
-        // Archivo no existe todavía — entrenamiento aún no comenzó
-        statusText.textContent = 'Esperando entrenamiento...';
+        statusText.textContent = window.location.protocol === 'file:'
+          ? 'Abriendo monitor en http://localhost:8080/monitor.html...'
+          : 'Esperando entrenamiento...';
       }
+    }
+
+    // ─── RENDER CUADRO DE ERAS ANTERIORES ──────────────────────────────────────
+    function renderErasTable(d) {
+      const box = document.getElementById('m-eras-table-box');
+      if (!box) return;
+
+      const eras = Array.isArray(d.past_eras) ? d.past_eras : [];
+      const hasCurrent = (Array.isArray(d.history) && d.history.length > 0) || (d.epoch > 0);
+      const eraColors = ['#38bdf8', '#fbbf24', '#f43f5e', '#a78bfa', '#34d399'];
+
+      if (eras.length === 0 && !hasCurrent) {
+        box.innerHTML = '<div style="color:var(--dim); padding:6px 0;">No hay sesiones de entrenamiento archivadas todavía.</div>';
+        return;
+      }
+
+      let html = `
+        <table style="width:100%; border-collapse:collapse; text-align:left; font-size:11px; margin-top:4px;">
+          <thead>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.1); color:var(--dim); font-size:10px; text-transform:uppercase;">
+              <th style="padding:6px 4px;">Era / Sesión</th>
+              <th style="padding:6px 4px; text-align:center;">Épocas</th>
+              <th style="padding:6px 4px; text-align:right;">Inicial</th>
+              <th style="padding:6px 4px; text-align:right;">Mínima (Best)</th>
+              <th style="padding:6px 4px; text-align:center;">Convergencia</th>
+              <th style="padding:6px 4px; text-align:right;">Hora</th>
+              <th style="padding:6px 4px; text-align:center;">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      // 1. Filas de eras anteriores archivadas
+      eras.forEach((era, idx) => {
+        const color = eraColors[idx % eraColors.length];
+        const initL = typeof era.initial_loss === 'number' ? era.initial_loss.toFixed(4) : (era.history && era.history[0]?.loss ? Number(era.history[0].loss).toFixed(4) : '--');
+        const bestL = typeof era.best_loss === 'number' ? era.best_loss.toFixed(4) : '--';
+        const epCount = era.epochs || (era.history ? era.history.length : '--');
+
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05); color:#cbd5e1;">
+            <td style="padding:6px 4px; display:flex; align-items:center; gap:6px;">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${color};"></span>
+              <strong style="color:${color}">${era.name || `Era ${idx + 1}`}</strong>
+            </td>
+            <td style="padding:6px 4px; text-align:center;">${epCount} ép</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:#94a3b8;">${initL}</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:${color}; font-weight:600;">${bestL}</td>
+            <td style="padding:6px 4px; text-align:center; font-size:10px; color:#94a3b8;">Base histórica</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:#64748b;">${era.timestamp || '--'}</td>
+            <td style="padding:6px 4px; text-align:center;">
+              <span style="font-size:9px; padding:2px 6px; border-radius:3px; background:rgba(56,189,248,0.12); color:#38bdf8; border:1px solid rgba(56,189,248,0.25);">Archivada</span>
+            </td>
+          </tr>
+        `;
+      });
+
+      // 2. Fila de la era actual
+      if (hasCurrent) {
+        const currBest = typeof d.best_loss === 'number' ? d.best_loss.toFixed(4) : (typeof d.g_loss === 'number' ? d.g_loss.toFixed(4) : '--');
+        const currInit = typeof d.initial_loss === 'number' ? d.initial_loss.toFixed(4) : (d.history && d.history[0]?.loss ? Number(d.history[0].loss).toFixed(4) : '--');
+        const currEp = d.epoch || (d.history ? d.history.length : 1);
+        const totEp = d.total_epochs || 25;
+
+        let compText = '<span style="color:#60a5fa;">Calibrando</span>';
+        if (eras.length > 0 && typeof d.best_loss === 'number' && typeof eras[0].best_loss === 'number') {
+          const diffPct = (((d.best_loss - eras[0].best_loss) / eras[0].best_loss) * 100);
+          if (diffPct < 0) {
+            compText = `<strong style="color:#10b981;">🟢 ${Math.abs(diffPct).toFixed(1)}% mejor</strong>`;
+          } else if (diffPct > 0) {
+            compText = `<span style="color:#f59e0b;">+${diffPct.toFixed(1)}%</span>`;
+          } else {
+            compText = `<span style="color:#94a3b8;">Igual</span>`;
+          }
+        }
+
+        const isRunning = d.status === 'ENTRENANDO';
+        const statusColor = isRunning ? '#10b981' : (d.status === 'COMPLETADO' ? '#6366f1' : '#f59e0b');
+
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05); background:rgba(108,99,255,0.06); color:#fff;">
+            <td style="padding:6px 4px; display:flex; align-items:center; gap:6px;">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#6c63ff; box-shadow:0 0 6px #6c63ff;"></span>
+              <strong style="color:#a5b4fc">Era Actual ${eras.length > 0 ? `(Sesión ${eras.length + 1})` : ''}</strong>
+            </td>
+            <td style="padding:6px 4px; text-align:center;">${currEp}/${totEp}</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:#94a3b8;">${currInit}</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:#10b981; font-weight:700;">${currBest}</td>
+            <td style="padding:6px 4px; text-align:center; font-size:10px;">${compText}</td>
+            <td style="padding:6px 4px; text-align:right; font-family:var(--mono); color:#94a3b8;">${d.timestamp || '--'}</td>
+            <td style="padding:6px 4px; text-align:center;">
+              <span style="font-size:9px; padding:2px 6px; border-radius:3px; background:${statusColor}22; color:${statusColor}; border:1px solid ${statusColor}44; font-weight:600;">
+                ${d.status || 'Activa'}
+              </span>
+            </td>
+          </tr>
+        `;
+      }
+
+      html += '</tbody></table>';
+      box.innerHTML = html;
     }
 
     // ─── UPDATE UI ─────────────────────────────────────────────────────────────
@@ -622,7 +754,7 @@
       setText('p-phase', d.phase || (isPhase2 ? 'Fase 2 (Transfer 8x12 - 96 Frames)' : 'Fase 1 (Base 16x4 - 64 Frames)'));
       setText('p-template', d.template_name || (isPhase2 ? 'plantilla de los spritesheets.png' : 'plantilla_16x4.png'));
       setText('p-mode',  d.total_epochs === '∞' ? '∞ INFINITO — Ctrl+C para detener' : `Finito (${d.total_epochs} épocas)`);
-      setText('p-lr',    d.lr.toExponential(1));
+      setText('p-lr',    d.lr ? d.lr.toExponential(1) : '1.0e-4');
       setText('p-best',  d.best_loss !== null ? d.best_loss.toFixed(4) : '—');
       setText('preview-title', `🎨 Vista Previa en Vivo — ${d.total_frames || (isPhase2 ? 96 : 64)} Frames (${isPhase2 ? 'Fase 2' : 'Fase 1'})`);
 
@@ -656,7 +788,43 @@
         progWrap.style.display = 'none';
       }
 
-      // Log
+      // Sincronizar historial para el gráfico
+      if (Array.isArray(d.history) && d.history.length > 0) {
+        history.labels = d.history.map(h => h.epoch);
+        history.g = d.history.map(h => (h.loss !== undefined ? h.loss : h.g_loss)).filter(v => v !== null && isFinite(v));
+        history.l1 = d.history.map(h => (h.l1_loss || 0) * 100);
+        history.d = d.history.map(h => (h.d_loss || 0) * 10);
+      } else if (typeof d.epoch === 'number' && typeof d.g_loss === 'number' && isFinite(d.g_loss)) {
+        if (!history.labels.includes(d.epoch)) {
+          history.labels.push(d.epoch);
+          history.g.push(d.g_loss);
+          history.l1.push((d.l1_loss || 0) * 100);
+          history.d.push((d.d_loss || 0) * 10);
+          if (history.labels.length > MAX_CHART_POINTS) {
+            history.labels.shift(); history.g.shift(); history.l1.shift(); history.d.shift();
+          }
+        }
+      }
+
+      // Badges y leyendas de eras
+      const erasBadge = document.getElementById('m-past-eras-badge');
+      const erasLeg = document.getElementById('m-eras-legend-item');
+      if (pastEras && pastEras.length > 0) {
+        if (erasBadge) {
+          erasBadge.style.display = 'inline-block';
+          erasBadge.textContent = `${pastEras.length} era${pastEras.length > 1 ? 's' : ''} archivada${pastEras.length > 1 ? 's' : ''}`;
+        }
+        if (erasLeg) erasLeg.style.display = 'flex';
+      } else {
+        if (erasBadge) erasBadge.style.display = 'none';
+        if (erasLeg) erasLeg.style.display = 'none';
+      }
+
+      // Renderizar tabla y gráfico siempre
+      renderErasTable(d);
+      drawChart();
+
+      // Log de épocas recientes (solo cuando cambia la época)
       if (d.epoch !== lastEpoch) {
         lastEpoch = d.epoch;
         const entry = document.createElement('div');
@@ -670,18 +838,7 @@
           (isBest ? `<span class="best">★ MEJOR</span>` : '') +
           ` · ${d.epoch_sec}s`;
         logBox.insertBefore(entry, logBox.firstChild);
-        // mantener solo últimas 40 entradas
         while (logBox.children.length > 40) logBox.removeChild(logBox.lastChild);
-
-        // Actualizar historial para el gráfico
-        history.labels.push(d.epoch);
-        history.g.push(d.g_loss);
-        history.l1.push(d.l1_loss * 100);   // escalar para comparar visualmente
-        history.d.push(d.d_loss * 10);
-        if (history.labels.length > MAX_CHART_POINTS) {
-          history.labels.shift(); history.g.shift(); history.l1.shift(); history.d.shift();
-        }
-        drawChart();
       }
     }
 
@@ -699,17 +856,22 @@
       return `${s}s`;
     }
 
-    // ─── CHART ─────────────────────────────────────────────────────────────────
+    // ─── CHART ENGINE ──────────────────────────────────────────────────────────
+    let chartPlotPoints = [];
+
     function drawChart() {
+      if (!canvas || !canvas.parentElement) return;
       const dpr = window.devicePixelRatio || 1;
-      const W = canvas.parentElement.clientWidth - 2;
+      const W = canvas.parentElement.clientWidth;
       const H = 180;
+      if (W <= 0) return;
+
       canvas.width  = W * dpr;
       canvas.height = H * dpr;
       canvas.style.width  = W + 'px';
       canvas.style.height = H + 'px';
+      ctx.save();
       ctx.scale(dpr, dpr);
-
       ctx.clearRect(0, 0, W, H);
 
       // Fondo del gráfico
@@ -718,19 +880,32 @@
       ctx.roundRect(0, 0, W, H, 8);
       ctx.fill();
 
-      // Grid lines
+      // Grid lines horizontales
       const gridLines = 4;
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 1;
       for (let i = 1; i < gridLines; i++) {
         const y = H * i / gridLines;
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
       }
 
-      if (history.g.length < 2 && (!pastEras || pastEras.length === 0)) return;
+      const hasPast = Array.isArray(pastEras) && pastEras.length > 0;
+      const hasCurr = Array.isArray(history.g) && history.g.length > 0;
 
-      const allVals = [...history.g, ...history.l1, ...history.d];
-      if (pastEras && pastEras.length > 0) {
+      if (!hasCurr && !hasPast) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Esperando datos de entrenamiento para la curva...', W / 2, H / 2);
+        ctx.restore();
+        return;
+      }
+
+      // Recopilar todos los valores para el rango Y
+      const allVals = [];
+      if (hasCurr) allVals.push(...history.g);
+      if (hasPast) {
         pastEras.forEach(era => {
           (era.history || []).forEach(h => {
             const v = h.loss !== undefined ? h.loss : h.g_loss;
@@ -739,15 +914,36 @@
         });
       }
 
-      if (allVals.length === 0) return;
+      if (allVals.length === 0) {
+        ctx.restore();
+        return;
+      }
 
-      const maxV = Math.max(...allVals) * 1.1 || 1;
-      const minV = 0;
-      const n    = Math.max(2, history.g.length);
-      const pad  = 12;
+      let maxV = Math.max(...allVals);
+      let minV = Math.min(...allVals);
+      if (maxV === minV) {
+        maxV *= 1.2;
+        minV = Math.max(0, minV * 0.8);
+      } else {
+        const padY = (maxV - minV) * 0.12;
+        maxV += padY;
+        minV = Math.max(0, minV - padY);
+      }
+
+      // Calcular número de puntos N para el eje X
+      let maxPoints = Math.max(2, history.g.length);
+      if (hasPast) {
+        pastEras.forEach(era => {
+          if (era.history && era.history.length > maxPoints) {
+            maxPoints = era.history.length;
+          }
+        });
+      }
+      const pad = 16;
+      chartPlotPoints = [];
 
       function plotLine(data, color, lw = 2, isDashed = false) {
-        if (!data || data.length < 2) return;
+        if (!data || data.length === 0) return [];
         ctx.beginPath();
         ctx.strokeStyle = color;
         ctx.lineWidth   = lw;
@@ -755,55 +951,155 @@
         ctx.lineCap     = 'round';
         if (isDashed) ctx.setLineDash([4, 4]);
         else ctx.setLineDash([]);
+
+        const pts = [];
         data.forEach((v, i) => {
-          const x = pad + (i / (n - 1)) * (W - pad * 2);
+          const x = pad + (i / Math.max(1, maxPoints - 1)) * (W - pad * 2);
           const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
+          pts.push({ x, y, val: v, epoch: i + 1 });
           i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         });
         ctx.stroke();
         ctx.setLineDash([]);
+        return pts;
       }
 
-      // Trazar eras anteriores (líneas punteadas comparativas)
-      if (pastEras && pastEras.length > 0) {
-        const eraColors = ['rgba(56, 189, 248, 0.60)', 'rgba(251, 191, 36, 0.60)', 'rgba(244, 63, 94, 0.60)'];
+      // 1. Trazar eras anteriores (líneas punteadas comparativas con puntos)
+      if (hasPast) {
+        const eraColors = ['#38bdf8', '#fbbf24', '#f43f5e', '#a78bfa'];
         pastEras.forEach((era, idx) => {
           const eraG = (era.history || []).map(h => (h.loss !== undefined ? h.loss : h.g_loss)).filter(v => v !== null && isFinite(v));
-          if (eraG.length > 1) {
-            plotLine(eraG, eraColors[idx % eraColors.length], 1.6, true);
+          if (eraG.length > 0) {
+            const color = eraColors[idx % eraColors.length];
+            const pts = plotLine(eraG, color, 1.8, true);
+            pts.forEach(pt => {
+              ctx.beginPath();
+              ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+              ctx.fillStyle = color;
+              ctx.fill();
+            });
+            // Etiqueta al final
+            if (pts.length > 0) {
+              const lastP = pts[pts.length - 1];
+              ctx.font = '600 10px system-ui, sans-serif';
+              ctx.fillStyle = color;
+              ctx.textAlign = 'right';
+              ctx.fillText(era.name || `Era ${idx + 1}`, Math.min(W - pad, lastP.x), Math.max(pad + 10, lastP.y - 6));
+            }
           }
         });
       }
 
-      // Filled area for G_Loss (Era actual)
-      if (history.g.length >= 2) {
-        ctx.beginPath();
+      // 2. Área rellena para G_Loss de la Era Actual
+      if (hasCurr && history.g.length > 0) {
+        const pts = [];
         history.g.forEach((v, i) => {
-          const x = pad + (i / (n - 1)) * (W - pad * 2);
+          const x = pad + (i / Math.max(1, maxPoints - 1)) * (W - pad * 2);
           const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
-          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          pts.push({ x, y, val: v, epoch: history.labels[i] || (i + 1) });
         });
-        ctx.lineTo(pad + (W - pad * 2), H - pad);
-        ctx.lineTo(pad, H - pad);
-        ctx.closePath();
-        const grad = ctx.createLinearGradient(0, 0, 0, H);
-        grad.addColorStop(0, 'rgba(108,99,255,0.25)');
-        grad.addColorStop(1, 'rgba(108,99,255,0.01)');
-        ctx.fillStyle = grad;
-        ctx.fill();
+        chartPlotPoints = pts;
 
-        plotLine(history.g,  '#6c63ff', 2.5);
-        plotLine(history.l1, '#48bb78', 1.5);
-        plotLine(history.d,  '#ed8936', 1.5);
+        if (pts.length > 1) {
+          ctx.beginPath();
+          pts.forEach((pt, i) => {
+            i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y);
+          });
+          ctx.lineTo(pts[pts.length - 1].x, H - pad);
+          ctx.lineTo(pts[0].x, H - pad);
+          ctx.closePath();
+          const grad = ctx.createLinearGradient(0, 0, 0, H);
+          grad.addColorStop(0, 'rgba(108,99,255,0.35)');
+          grad.addColorStop(1, 'rgba(108,99,255,0.01)');
+          ctx.fillStyle = grad;
+          ctx.fill();
+        }
 
-        // Last value dot for G
-        const lastX = pad + ((history.g.length - 1) / (n - 1)) * (W - pad * 2);
-        const lastY = H - pad - ((history.g[history.g.length - 1] - minV) / (maxV - minV)) * (H - pad * 2);
+        plotLine(history.g, '#6c63ff', 2.5);
+
+        // Marcadores de puntos discretos
+        pts.forEach(pt => {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#818cf8';
+          ctx.fill();
+        });
+
+        // Último punto resaltado
+        const lastPt = pts[pts.length - 1];
         ctx.beginPath();
-        ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+        ctx.arc(lastPt.x, lastPt.y, 5, 0, Math.PI * 2);
         ctx.fillStyle = '#6c63ff';
         ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
       }
+
+      ctx.restore();
+    }
+
+    // ─── INTERACTIVE CHART TOOLTIP ─────────────────────────────────────────────
+    const chartContainer = document.getElementById('chart-container') || canvas.parentElement;
+    const chartTooltip = document.getElementById('m-chart-tooltip');
+
+    if (canvas && chartContainer && chartTooltip) {
+      canvas.addEventListener('mousemove', (e) => {
+        if (!chartPlotPoints || chartPlotPoints.length === 0) return;
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        // Encontrar punto más cercano
+        let closest = null;
+        let minDist = 999999;
+        chartPlotPoints.forEach(pt => {
+          const dist = Math.hypot(pt.x - mx, pt.y - my);
+          if (dist < minDist) {
+            minDist = dist;
+            closest = pt;
+          }
+        });
+
+        if (closest && minDist < 45) {
+          chartTooltip.style.display = 'block';
+          const ttLeft = Math.min(rect.width - 170, Math.max(10, closest.x - 70));
+          const ttTop = Math.max(10, closest.y - 65);
+          chartTooltip.style.left = ttLeft + 'px';
+          chartTooltip.style.top = ttTop + 'px';
+
+          let compHtml = '';
+          if (pastEras && pastEras.length > 0) {
+            pastEras.forEach(era => {
+              const match = (era.history || []).find(h => h.epoch === closest.epoch);
+              if (match) {
+                const prevVal = match.loss !== undefined ? match.loss : match.g_loss;
+                const diffPct = (((closest.val - prevVal) / prevVal) * 100);
+                const better = diffPct < 0;
+                compHtml += `<div style="font-size:10px; color:#38bdf8; margin-top:2px;">${era.name || 'Era 1'}: ${prevVal.toFixed(4)} <span style="color:${better ? '#10b981' : '#f59e0b'};">(${better ? '-' : '+'}${Math.abs(diffPct).toFixed(1)}%)</span></div>`;
+              }
+            });
+          }
+
+          chartTooltip.innerHTML = `
+            <div style="font-weight:700; color:#fff; font-size:11px;">Época ${closest.epoch}</div>
+            <div style="color:#a5b4fc; font-weight:600;">G-Loss Actual: ${closest.val.toFixed(4)}</div>
+            ${compHtml}
+          `;
+        } else {
+          chartTooltip.style.display = 'none';
+        }
+      });
+
+      canvas.addEventListener('mouseleave', () => {
+        chartTooltip.style.display = 'none';
+      });
+    }
+
+    // Auto-redibujar en resize
+    window.addEventListener('resize', drawChart);
+    if (window.ResizeObserver && canvas.parentElement) {
+      new ResizeObserver(() => drawChart()).observe(canvas.parentElement);
     }
 
     // ─── TICKER ───────────────────────────────────────────────────────────────

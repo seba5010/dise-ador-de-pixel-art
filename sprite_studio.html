@@ -937,6 +937,22 @@
           </div>
         </div>
 
+        <!-- CUADRO DE LÍNEA DEL TIEMPO Y REGISTRO DE ERAS -->
+        <div class="monitor-card" id="timelineErasCard" style="border:1px solid rgba(56,189,248,0.25); background:linear-gradient(180deg, #131722, #0d0f17);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="card-title" style="margin:0;">🏛️ Cuadro de Línea del Tiempo (Eras y Sesiones de Entrenamiento)</span>
+              <span id="timelineErasBadge" class="stat-badge" style="color:#38bdf8; background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25);">0 eras archivadas</span>
+            </div>
+            <div style="font-size:11px; color:var(--dim);">
+              Registro comparativo de convergencia, mejor pérdida y evolución entre sesiones de entrenamiento.
+            </div>
+          </div>
+          <div id="timelineErasTableContainer" style="overflow-x:auto;">
+            <div style="color:var(--dim); font-size:11px; padding:6px 0;">Cargando registro de eras...</div>
+          </div>
+        </div>
+
         <!-- COMPARATIVA QUIRÚRGICA EN VIVO -->
         <div class="monitor-card" style="flex:1">
           <div class="card-title">🎨 Comparativa Quirúrgica en Vivo (4 Columnas)</div>
@@ -2974,6 +2990,110 @@
       ctx.restore();
     }
 
+    function renderTimelineErasTable(info) {
+      const container = document.getElementById('timelineErasTableContainer');
+      const badge = document.getElementById('timelineErasBadge');
+      if (!container) return;
+
+      const pastEras = Array.isArray(info.past_eras) ? info.past_eras : [];
+      const hasCurrent = (Array.isArray(info.history) && info.history.length > 0) || (typeof info.epoch === 'number' && info.epoch > 0);
+
+      if (badge) {
+        badge.textContent = `${pastEras.length} era${pastEras.length !== 1 ? 's' : ''} archivada${pastEras.length !== 1 ? 's' : ''}`;
+        badge.style.display = pastEras.length > 0 ? 'inline-block' : 'none';
+      }
+
+      if (pastEras.length === 0 && !hasCurrent) {
+        container.innerHTML = '<div style="color:var(--dim); font-size:11px; padding:6px 0;">No hay sesiones de entrenamiento archivadas todavía.</div>';
+        return;
+      }
+
+      const eraColors = ['#38bdf8', '#fbbf24', '#f43f5e', '#a78bfa', '#34d399'];
+      let html = `
+        <table style="width:100%; border-collapse:collapse; text-align:left; font-size:11px;">
+          <thead>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.1); color:var(--dim); font-size:10px; text-transform:uppercase;">
+              <th style="padding:6px 8px;">Era / Sesión</th>
+              <th style="padding:6px 8px; text-align:center;">Épocas</th>
+              <th style="padding:6px 8px; text-align:right;">Pérdida Inicial</th>
+              <th style="padding:6px 8px; text-align:right;">Mejor Pérdida (Min)</th>
+              <th style="padding:6px 8px; text-align:center;">Evolución Relativa</th>
+              <th style="padding:6px 8px; text-align:right;">Hora / Fecha</th>
+              <th style="padding:6px 8px; text-align:center;">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      pastEras.forEach((era, idx) => {
+        const color = eraColors[idx % eraColors.length];
+        const initL = typeof era.initial_loss === 'number' ? era.initial_loss.toFixed(4) : (era.history && era.history[0]?.loss ? Number(era.history[0].loss).toFixed(4) : '--');
+        const bestL = typeof era.best_loss === 'number' ? era.best_loss.toFixed(4) : '--';
+        const epCount = era.epochs || (era.history ? era.history.length : '--');
+
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05); color:#cbd5e1;">
+            <td style="padding:6px 8px; display:flex; align-items:center; gap:6px;">
+              <span style="display:inline-block; width:12px; height:2px; border-top:2px dashed ${color};"></span>
+              <strong style="color:${color}">${era.name || `Era ${idx + 1}`}</strong>
+            </td>
+            <td style="padding:6px 8px; text-align:center;">${epCount} épocas</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${initL}</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:${color}; font-weight:600;">${bestL}</td>
+            <td style="padding:6px 8px; text-align:center; font-size:10px; color:#94a3b8;">Base histórica</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#64748b;">${era.timestamp || '--'}</td>
+            <td style="padding:6px 8px; text-align:center;">
+              <span style="font-size:9px; padding:2px 7px; border-radius:3px; background:rgba(56,189,248,0.12); color:#38bdf8; border:1px solid rgba(56,189,248,0.25);">Archivada</span>
+            </td>
+          </tr>
+        `;
+      });
+
+      if (hasCurrent) {
+        const currBest = typeof info.best_loss === 'number' ? info.best_loss.toFixed(4) : (typeof info.g_loss === 'number' ? info.g_loss.toFixed(4) : '--');
+        const currInit = typeof info.initial_loss === 'number' ? info.initial_loss.toFixed(4) : (info.history && info.history[0]?.loss ? Number(info.history[0].loss).toFixed(4) : '--');
+        const currEp = info.epoch || (info.history ? info.history.length : 1);
+        const totEp = info.total_epochs || 25;
+
+        let compText = '<span style="color:#60a5fa;">Calibrando</span>';
+        if (pastEras.length > 0 && typeof info.best_loss === 'number' && typeof pastEras[0].best_loss === 'number') {
+          const diffPct = (((info.best_loss - pastEras[0].best_loss) / pastEras[0].best_loss) * 100);
+          if (diffPct < 0) {
+            compText = `<strong style="color:#10b981;">🟢 ${Math.abs(diffPct).toFixed(1)}% mejor convergencia</strong>`;
+          } else if (diffPct > 0) {
+            compText = `<span style="color:#f59e0b;">+${diffPct.toFixed(1)}%</span>`;
+          } else {
+            compText = `<span style="color:#94a3b8;">Sin variación</span>`;
+          }
+        }
+
+        const isRunning = (info.status || '').toUpperCase() === 'ENTRENANDO';
+        const statusColor = isRunning ? '#10b981' : ((info.status || '').toUpperCase() === 'COMPLETADO' ? '#6366f1' : '#f59e0b');
+
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05); background:rgba(99,102,241,0.08); color:#fff;">
+            <td style="padding:6px 8px; display:flex; align-items:center; gap:6px;">
+              <span style="display:inline-block; width:12px; height:3px; background:#6366f1; border-radius:2px;"></span>
+              <strong style="color:#a5b4fc">Era Actual ${pastEras.length > 0 ? `(Sesión ${pastEras.length + 1})` : ''}</strong>
+            </td>
+            <td style="padding:6px 8px; text-align:center;">${currEp} / ${totEp} épocas</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${currInit}</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#10b981; font-weight:700;">${currBest}</td>
+            <td style="padding:6px 8px; text-align:center; font-size:10px;">${compText}</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${info.timestamp || '--'}</td>
+            <td style="padding:6px 8px; text-align:center;">
+              <span style="font-size:9px; padding:2px 7px; border-radius:3px; background:${statusColor}22; color:${statusColor}; border:1px solid ${statusColor}44; font-weight:600;">
+                ${info.status || 'Activa'}
+              </span>
+            </td>
+          </tr>
+        `;
+      }
+
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
     function updateMonitorTab(info) {
       if (!info || Object.keys(info).length === 0) return;
       const ep = info.epoch || '--';
@@ -3095,6 +3215,7 @@
         }
       }
       renderLossChart();
+      renderTimelineErasTable(info);
 
       // 7. Botones y Badges de Control
       const tBadge = document.getElementById('trainStatusBadge');
