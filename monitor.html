@@ -479,6 +479,7 @@
     let zoom       = 1.5;
     let tickerVal  = RELOAD_INTERVAL_S;
     let history    = { g: [], l1: [], d: [], labels: [] };
+    let pastEras   = [];
     let lastEpoch  = null;
     let stopped    = false;
 
@@ -557,6 +558,9 @@
 
     // ─── UPDATE UI ─────────────────────────────────────────────────────────────
     function updateUI(d) {
+      if (Array.isArray(d.past_eras)) {
+        pastEras = d.past_eras;
+      }
       // Badge de estado y fase
       const isStopped = d.status === 'DETENIDO';
       stopped = isStopped;
@@ -723,55 +727,83 @@
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
       }
 
-      if (history.g.length < 2) return;
+      if (history.g.length < 2 && (!pastEras || pastEras.length === 0)) return;
 
       const allVals = [...history.g, ...history.l1, ...history.d];
+      if (pastEras && pastEras.length > 0) {
+        pastEras.forEach(era => {
+          (era.history || []).forEach(h => {
+            const v = h.loss !== undefined ? h.loss : h.g_loss;
+            if (v !== null && v !== undefined && !isNaN(v) && isFinite(v)) allVals.push(v);
+          });
+        });
+      }
+
+      if (allVals.length === 0) return;
+
       const maxV = Math.max(...allVals) * 1.1 || 1;
       const minV = 0;
-      const n    = history.g.length;
+      const n    = Math.max(2, history.g.length);
       const pad  = 12;
 
-      function plotLine(data, color, lw = 2) {
+      function plotLine(data, color, lw = 2, isDashed = false) {
+        if (!data || data.length < 2) return;
         ctx.beginPath();
         ctx.strokeStyle = color;
         ctx.lineWidth   = lw;
         ctx.lineJoin    = 'round';
         ctx.lineCap     = 'round';
+        if (isDashed) ctx.setLineDash([4, 4]);
+        else ctx.setLineDash([]);
         data.forEach((v, i) => {
           const x = pad + (i / (n - 1)) * (W - pad * 2);
           const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
           i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         });
         ctx.stroke();
+        ctx.setLineDash([]);
       }
 
-      // Filled area for G_Loss
-      ctx.beginPath();
-      history.g.forEach((v, i) => {
-        const x = pad + (i / (n - 1)) * (W - pad * 2);
-        const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
-      ctx.lineTo(pad + (W - pad * 2), H - pad);
-      ctx.lineTo(pad, H - pad);
-      ctx.closePath();
-      const grad = ctx.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, 'rgba(108,99,255,0.25)');
-      grad.addColorStop(1, 'rgba(108,99,255,0.01)');
-      ctx.fillStyle = grad;
-      ctx.fill();
+      // Trazar eras anteriores (líneas punteadas comparativas)
+      if (pastEras && pastEras.length > 0) {
+        const eraColors = ['rgba(56, 189, 248, 0.60)', 'rgba(251, 191, 36, 0.60)', 'rgba(244, 63, 94, 0.60)'];
+        pastEras.forEach((era, idx) => {
+          const eraG = (era.history || []).map(h => (h.loss !== undefined ? h.loss : h.g_loss)).filter(v => v !== null && isFinite(v));
+          if (eraG.length > 1) {
+            plotLine(eraG, eraColors[idx % eraColors.length], 1.6, true);
+          }
+        });
+      }
 
-      plotLine(history.g,  '#6c63ff', 2.5);
-      plotLine(history.l1, '#48bb78', 1.5);
-      plotLine(history.d,  '#ed8936', 1.5);
+      // Filled area for G_Loss (Era actual)
+      if (history.g.length >= 2) {
+        ctx.beginPath();
+        history.g.forEach((v, i) => {
+          const x = pad + (i / (n - 1)) * (W - pad * 2);
+          const y = H - pad - ((v - minV) / (maxV - minV)) * (H - pad * 2);
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.lineTo(pad + (W - pad * 2), H - pad);
+        ctx.lineTo(pad, H - pad);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, 'rgba(108,99,255,0.25)');
+        grad.addColorStop(1, 'rgba(108,99,255,0.01)');
+        ctx.fillStyle = grad;
+        ctx.fill();
 
-      // Last value dot for G
-      const lastX = pad + ((n - 1) / (n - 1)) * (W - pad * 2);
-      const lastY = H - pad - ((history.g[n - 1] - minV) / (maxV - minV)) * (H - pad * 2);
-      ctx.beginPath();
-      ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#6c63ff';
-      ctx.fill();
+        plotLine(history.g,  '#6c63ff', 2.5);
+        plotLine(history.l1, '#48bb78', 1.5);
+        plotLine(history.d,  '#ed8936', 1.5);
+
+        // Last value dot for G
+        const lastX = pad + ((history.g.length - 1) / (n - 1)) * (W - pad * 2);
+        const lastY = H - pad - ((history.g[history.g.length - 1] - minV) / (maxV - minV)) * (H - pad * 2);
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#6c63ff';
+        ctx.fill();
+      }
     }
 
     // ─── TICKER ───────────────────────────────────────────────────────────────

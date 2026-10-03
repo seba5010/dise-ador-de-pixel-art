@@ -364,6 +364,63 @@ def test_gpu_specific_checks():
     print("[PASS] 5.1: Guardado y restauración de estado RNG CUDA y GradScalers verificado exitosamente.")
 
 
+def test_past_eras_archiving():
+    print("\n--- TEST 6: Archivo y Línea del Tiempo de Eras Anteriores ---")
+    tmp_dir = tempfile.mkdtemp()
+    temp_status = Path(tmp_dir) / "training_status.json"
+    orig_status_file = train_mod.STATUS_FILE
+    train_mod.STATUS_FILE = temp_status
+
+    try:
+        t0 = time.time()
+        # Simular Era 1
+        train_mod.update_status(1, 10, "ENTRENANDO", 0.12, 0.05, 0.05, 0.01, t0)
+        train_mod.update_status(2, 10, "COMPLETADO", 0.095, 0.04, 0.04, 0.01, t0)
+
+        with open(temp_status, "r", encoding="utf-8") as f:
+            data_era1 = json.load(f)
+        assert len(data_era1["history"]) == 2
+        assert data_era1["best_loss"] == 0.095
+
+        # Simular inicio de nuevo experimento (mode="start") archivando Era 1
+        old_hist = data_era1.get("history", [])
+        past_eras = data_era1.get("past_eras", [])
+        era_idx = len(past_eras) + 1
+        past_eras.append({
+            "era": era_idx,
+            "name": f"Era {era_idx}",
+            "timestamp": "12:00:00",
+            "epochs": 2,
+            "initial_loss": data_era1.get("initial_loss"),
+            "best_loss": data_era1.get("best_loss"),
+            "history": old_hist
+        })
+        data_era1["past_eras"] = past_eras
+        data_era1["history"] = []
+        data_era1["initial_loss"] = None
+        data_era1["best_loss"] = None
+        data_era1["epoch"] = 0
+        data_era1["status"] = "INICIANDO"
+        with open(temp_status, "w", encoding="utf-8") as f:
+            json.dump(data_era1, f, indent=2, allow_nan=False)
+
+        # Ahora simular Era 2 con update_status
+        train_mod.update_status(1, 10, "ENTRENANDO", 0.088, 0.03, 0.03, 0.01, t0)
+
+        with open(temp_status, "r", encoding="utf-8") as f:
+            data_era2 = json.load(f)
+
+        assert "past_eras" in data_era2, "past_eras debe conservarse en training_status.json"
+        assert len(data_era2["past_eras"]) == 1, f"Debe haber 1 era archivada, hay {len(data_era2['past_eras'])}"
+        assert data_era2["past_eras"][0]["name"] == "Era 1"
+        assert data_era2["past_eras"][0]["best_loss"] == 0.095
+        assert len(data_era2["history"]) == 1, "La era actual debe tener su propio historial limpio (1 época)"
+        assert data_era2["history"][0]["loss"] == 0.088
+        print("[PASS] 6.1: Era anterior archivada con éxito y línea del tiempo comparativa verificada en JSON.")
+    finally:
+        train_mod.STATUS_FILE = orig_status_file
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("EJECUTANDO BATERIA DE PRUEBAS CPU Y GPU")
@@ -372,6 +429,7 @@ if __name__ == "__main__":
     test_alpha_certification()
     test_monitor_historical_metrics()
     test_checkpoint_schedulers_and_rng()
+    test_past_eras_archiving()
     test_gpu_specific_checks()
     print("\n==============================================")
     print("TODAS LAS PRUEBAS COMPLETADAS EXITOSAMENTE")

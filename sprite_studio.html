@@ -888,8 +888,13 @@
                 📈 Curva de Pérdida en Tiempo Real (Evolución de Loss por Época)
               </span>
               <span id="chartPointsCount" class="stat-badge" style="color:var(--accent);">0 puntos</span>
+              <span id="chartErasCountBadge" class="stat-badge" style="color:#38bdf8; background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.2); display:none;">0 eras archivadas</span>
             </div>
-            <div style="display:flex; align-items:center; gap:10px;">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text); cursor:pointer; margin:0;" title="Superpone las curvas de entrenamiento de sesiones y experimentos pasados para comparar convergencia">
+                <input type="checkbox" id="chartCompareErasCheckbox" checked onchange="renderLossChart()" style="accent-color:var(--accent); cursor:pointer;">
+                <span>Comparar Eras Anteriores</span>
+              </label>
               <div style="display:flex; align-items:center; gap:6px;">
                 <label for="chartMetricSelect" style="font-size:11px; color:var(--dim); margin:0;">Métrica:</label>
                 <select id="chartMetricSelect" onchange="renderLossChart()" style="background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:3px 8px; font-size:11px;">
@@ -911,10 +916,10 @@
 
           <!-- LEYENDA Y RESUMEN INFERIOR DEL GRÁFICO -->
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; font-size:11px; color:var(--dim); padding:0 4px;">
-            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;" id="chartLegendList">
               <span style="display:flex; align-items:center; gap:5px;">
-                <span style="display:inline-block; width:10px; height:10px; background:#6366f1; border-radius:50%;"></span>
-                Pérdida Actual: <strong id="chartLegendCurrent" style="color:#fff;">--</strong>
+                <span style="display:inline-block; width:12px; height:3px; background:#6366f1; border-radius:2px;"></span>
+                <strong>Era Actual</strong>: <span id="chartLegendCurrent" style="color:#fff;">--</span>
               </span>
               <span style="display:flex; align-items:center; gap:5px;">
                 <span style="display:inline-block; width:10px; height:10px; background:#10b981; border-radius:50%;"></span>
@@ -924,6 +929,7 @@
                 <span style="display:inline-block; width:10px; height:10px; background:#a855f7; border-radius:50%;"></span>
                 Pérdida Inicial: <strong id="chartLegendInit" style="color:#cbd5e1;">--</strong>
               </span>
+              <span id="chartPastErasLegendContainer" style="display:flex; align-items:center; gap:10px;"></span>
             </div>
             <div>
               <span id="chartLegendTrend" style="color:#10b981; font-weight:600;">📉 Tendencia: Aprendizaje Estable</span>
@@ -2465,10 +2471,11 @@
       document.getElementById('zoomVal').textContent = val + 'x';
     }
 
-        // -------------------------------------------------------------
+    // -------------------------------------------------------------
     // GRÁFICO LINEAL EN VIVO & GESTOR DE MÉTRICAS HISTÓRICAS (ALTA DEFINICIÓN)
     // -------------------------------------------------------------
     let trainingHistoryData = [];
+    let trainingPastEras = [];
     let chartHoverPoint = null;
     let chartTotalEpochs = 50;
 
@@ -2489,7 +2496,11 @@
       });
 
       canvas.addEventListener('mousemove', (e) => {
-        if (!trainingHistoryData || trainingHistoryData.length === 0) return;
+        const isCompare = document.getElementById('chartCompareErasCheckbox')?.checked ?? true;
+        const hasCurrent = trainingHistoryData && trainingHistoryData.length > 0;
+        const hasPast = isCompare && trainingPastEras && trainingPastEras.length > 0;
+        if (!hasCurrent && !hasPast) return;
+
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
@@ -2503,9 +2514,22 @@
         if (w <= 0 || h <= 0) return;
 
         const metricKey = document.getElementById('chartMetricSelect') ? document.getElementById('chartMetricSelect').value : 'loss';
-        const vals = trainingHistoryData.map(d => getMetricValue(d, metricKey));
-        let minVal = Math.min(...vals);
-        let maxVal = Math.max(...vals);
+        
+        let allVals = [];
+        if (hasCurrent) {
+          allVals.push(...trainingHistoryData.map(d => getMetricValue(d, metricKey)).filter(v => v !== null && isFinite(v)));
+        }
+        if (hasPast) {
+          trainingPastEras.forEach(era => {
+            if (era.history) {
+              allVals.push(...era.history.map(d => getMetricValue(d, metricKey)).filter(v => v !== null && isFinite(v)));
+            }
+          });
+        }
+        if (allVals.length === 0) return;
+
+        let minVal = Math.min(...allVals);
+        let maxVal = Math.max(...allVals);
         if (minVal === maxVal) {
           minVal = Math.max(0, minVal * 0.8 || 0.005);
           maxVal = maxVal * 1.2 || 0.02;
@@ -2516,22 +2540,28 @@
         }
         const range = maxVal - minVal || 1.0;
 
-        const maxEpoch = Math.max(chartTotalEpochs || 50, ...trainingHistoryData.map(d => d.epoch || 1));
+        let allEpochs = [chartTotalEpochs || 50];
+        if (hasCurrent) allEpochs.push(...trainingHistoryData.map(d => d.epoch || 1));
+        if (hasPast) trainingPastEras.forEach(era => (era.history || []).forEach(d => allEpochs.push(d.epoch || 1)));
+
+        const maxEpoch = Math.max(...allEpochs);
         const minEpoch = 1;
         const epochRange = Math.max(1, maxEpoch - minEpoch);
 
         let closest = null;
         let minDist = 999999;
 
+        // Buscar primero en la era actual
         trainingHistoryData.forEach((d, idx) => {
           const ep = d.epoch || (idx + 1);
           const ptX = padLeft + ((ep - minEpoch) / epochRange) * w;
           const val = getMetricValue(d, metricKey);
+          if (val === null) return;
           const ptY = padTop + h - ((val - minVal) / range) * h;
           const dist = Math.hypot(mouseX - ptX, mouseY - ptY);
-          if (dist < minDist && dist < 50) {
+          if (dist < minDist && dist < 60) {
             minDist = dist;
-            closest = { d, idx, ptX, ptY, val };
+            closest = { d, idx, ptX, ptY, val, ep };
           }
         });
 
@@ -2541,23 +2571,55 @@
         const tooltip = document.getElementById('lossChartTooltip');
         if (closest && tooltip) {
           tooltip.style.display = 'block';
-          const ttLeft = Math.min(rect.width - 170, Math.max(10, closest.ptX - 70));
-          const ttTop = Math.max(10, closest.ptY - 80);
+          const ttLeft = Math.min(rect.width - 210, Math.max(10, closest.ptX - 85));
+          const ttTop = Math.max(10, closest.ptY - 95);
           tooltip.style.left = ttLeft + 'px';
           tooltip.style.top = ttTop + 'px';
 
-          const epNum = closest.d.epoch || (closest.idx + 1);
+          const epNum = closest.ep;
           const valStr = typeof closest.val === 'number' ? closest.val.toFixed(4) : closest.val;
           const lrStr = closest.d.lr ? Number(closest.d.lr).toExponential(2) : '1.00e-4';
           const tempStr = closest.d.gpu_temp ? `${closest.d.gpu_temp}°C` : '--';
           const elapStr = closest.d.elapsed_sec ? (closest.d.elapsed_sec > 60 ? `${Math.round(closest.d.elapsed_sec / 60)}m ${Math.round(closest.d.elapsed_sec % 60)}s` : `${Math.round(closest.d.elapsed_sec)}s`) : '--';
 
+          // Comparación con eras anteriores en esta misma época
+          let eraCompareHtml = '';
+          if (hasPast) {
+            const eraColors = ['#38bdf8', '#fbbf24', '#f43f5e', '#a78bfa', '#34d399'];
+            trainingPastEras.forEach((era, eIdx) => {
+              const match = (era.history || []).find(p => (p.epoch || 0) === epNum);
+              if (match) {
+                const pVal = getMetricValue(match, metricKey);
+                if (pVal !== null) {
+                  const pValStr = typeof pVal === 'number' ? pVal.toFixed(4) : pVal;
+                  let diffBadge = '';
+                  if (typeof closest.val === 'number' && typeof pVal === 'number' && pVal > 0) {
+                    const diffPct = (((pVal - closest.val) / pVal) * 100).toFixed(1);
+                    if (diffPct > 0) {
+                      diffBadge = `<span style="color:#10b981; font-weight:700;">(-${diffPct}% mejor)</span>`;
+                    } else if (diffPct < 0) {
+                      diffBadge = `<span style="color:#ef4444; font-weight:700;">(+${Math.abs(diffPct)}%)</span>`;
+                    }
+                  }
+                  const eCol = eraColors[eIdx % eraColors.length];
+                  eraCompareHtml += `
+                    <div style="display:flex; justify-content:space-between; gap:6px; font-size:10px; color:${eCol}; margin-top:2px;">
+                      <span>${era.name || `Era ${eIdx+1}`}:</span>
+                      <span><strong>${pValStr}</strong> ${diffBadge}</span>
+                    </div>
+                  `;
+                }
+              }
+            });
+          }
+
           tooltip.innerHTML = `
             <div style="display:flex; justify-content:space-between; gap:10px; font-weight:700; color:#fff; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:4px; margin-bottom:4px;">
-              <span>Época ${epNum} / ${chartTotalEpochs}</span>
+              <span>Época ${epNum}</span>
               <span style="color:#10b981;">#${epNum}</span>
             </div>
-            <div style="color:#818cf8; font-size:11px;">Pérdida: <strong style="color:#fff;">${valStr}</strong></div>
+            <div style="color:#818cf8; font-size:11px;">Era Actual: <strong style="color:#fff;">${valStr}</strong></div>
+            ${eraCompareHtml}
             <div style="color:#60a5fa; font-size:10px; margin-top:2px;">Learning Rate: ${lrStr}</div>
             <div style="display:flex; justify-content:space-between; gap:8px; color:var(--dim); font-size:10px; margin-top:2px;">
               <span>GPU: <strong style="color:#f59e0b;">${tempStr}</strong></span>
@@ -2625,6 +2687,7 @@
 
       const metricSelect = document.getElementById('chartMetricSelect');
       const metricKey = metricSelect ? metricSelect.value : 'loss';
+      const isCompare = document.getElementById('chartCompareErasCheckbox')?.checked ?? true;
 
       // Filtrar unicamente puntos que contienen valores finitos para omitir null/NaN de la curva
       const validPointsData = (trainingHistoryData || []).filter(d => {
@@ -2632,7 +2695,22 @@
         return v !== null && !isNaN(v) && isFinite(v);
       });
 
-      if (!validPointsData || validPointsData.length === 0) {
+      // Recopilar datos de eras anteriores si está activada la comparativa
+      const eraColors = ['#38bdf8', '#fbbf24', '#f43f5e', '#a78bfa', '#34d399'];
+      const pastErasData = (isCompare && Array.isArray(trainingPastEras)) ? trainingPastEras.map((era, eIdx) => {
+        const pts = (era.history || []).filter(d => {
+          const v = getMetricValue(d, metricKey);
+          return v !== null && !isNaN(v) && isFinite(v);
+        });
+        return {
+          era,
+          name: era.name || `Era ${eIdx + 1}`,
+          color: eraColors[eIdx % eraColors.length],
+          points: pts
+        };
+      }).filter(e => e.points.length > 0) : [];
+
+      if ((!validPointsData || validPointsData.length === 0) && pastErasData.length === 0) {
         ctx.fillStyle = '#64748b';
         ctx.font = '500 12px system-ui, -apple-system, sans-serif';
         ctx.textAlign = 'center';
@@ -2642,9 +2720,13 @@
         return;
       }
 
-      const vals = validPointsData.map(d => getMetricValue(d, metricKey));
-      let minVal = Math.min(...vals);
-      let maxVal = Math.max(...vals);
+      let allVals = validPointsData.map(d => getMetricValue(d, metricKey));
+      pastErasData.forEach(e => {
+        allVals.push(...e.points.map(d => getMetricValue(d, metricKey)));
+      });
+
+      let minVal = Math.min(...allVals);
+      let maxVal = Math.max(...allVals);
 
       if (minVal === maxVal) {
         minVal = Math.max(0, minVal * 0.8 || 0.005);
@@ -2656,7 +2738,11 @@
       }
       const range = maxVal - minVal || 1.0;
 
-      const maxEpoch = Math.max(chartTotalEpochs || 50, ...validPointsData.map(d => d.epoch || 1));
+      let allEpochs = [chartTotalEpochs || 50];
+      if (validPointsData.length > 0) allEpochs.push(...validPointsData.map(d => d.epoch || 1));
+      pastErasData.forEach(e => allEpochs.push(...e.points.map(d => d.epoch || 1)));
+
+      const maxEpoch = Math.max(...allEpochs);
       const minEpoch = 1;
       const epochRange = Math.max(1, maxEpoch - minEpoch);
 
@@ -2705,7 +2791,48 @@
         ctx.fillText(`Ép ${ep}`, xPos, padTop + chartH + 10);
       });
 
-      // 3. Puntos de la curva trazada (solo puntos validos)
+      // 2.5. Trazado de ERAS ANTERIORES (líneas punteadas comparativas con marcadores)
+      pastErasData.forEach((eraItem) => {
+        const eraPts = eraItem.points.map((d, idx) => {
+          const ep = d.epoch || (idx + 1);
+          const x = padLeft + ((ep - minEpoch) / epochRange) * chartW;
+          const val = getMetricValue(d, metricKey);
+          const y = padTop + chartH - ((val - minVal) / range) * chartH;
+          return { x, y, d, val, ep };
+        });
+
+        if (eraPts.length > 0) {
+          ctx.beginPath();
+          ctx.moveTo(eraPts[0].x, eraPts[0].y);
+          for (let i = 1; i < eraPts.length; i++) {
+            ctx.lineTo(eraPts[i].x, eraPts[i].y);
+          }
+          ctx.strokeStyle = eraItem.color;
+          ctx.lineWidth = 1.6;
+          ctx.setLineDash([4, 4]);
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Puntos discretos de la era previa
+          eraPts.forEach(pt => {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = eraItem.color;
+            ctx.fill();
+          });
+
+          // Etiqueta al final de la línea
+          const lastP = eraPts[eraPts.length - 1];
+          ctx.font = '600 10px system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = eraItem.color;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(eraItem.name, Math.min(padLeft + chartW - 35, lastP.x + 5), lastP.y);
+        }
+      });
+
+      // 3. Puntos de la curva trazada de la ERA ACTUAL (solo puntos validos)
       const points = validPointsData.map((d, idx) => {
         const ep = d.epoch || (idx + 1);
         const x = padLeft + ((ep - minEpoch) / epochRange) * chartW;
@@ -2829,6 +2956,21 @@
         }
       }
 
+      // 9. Actualizar contenedor de leyenda de eras pasadas
+      const pastLegendEl = document.getElementById('chartPastErasLegendContainer');
+      if (pastLegendEl) {
+        if (pastErasData.length > 0) {
+          pastLegendEl.innerHTML = pastErasData.map(e => `
+            <span style="display:flex; align-items:center; gap:4px; font-size:10px; color:${e.color}; background:${e.color}15; padding:2px 7px; border-radius:4px; border:1px solid ${e.color}35;">
+              <span style="display:inline-block; width:10px; height:2px; border-top:2px dashed ${e.color};"></span>
+              <strong>${e.name}</strong>: Min ${typeof e.era.best_loss === 'number' ? e.era.best_loss.toFixed(4) : '--'}
+            </span>
+          `).join('');
+        } else {
+          pastLegendEl.innerHTML = '';
+        }
+      }
+
       ctx.restore();
     }
 
@@ -2918,6 +3060,20 @@
         } else {
           tempBadge.textContent = '🔴 Termostato Activo';
           tempBadge.style.color = '#ef4444';
+        }
+      }
+
+      // 5.5 Sincronizar eras anteriores archivadas para la línea del tiempo comparativa
+      if (Array.isArray(info.past_eras)) {
+        trainingPastEras = info.past_eras;
+        const erasBadge = document.getElementById('chartErasCountBadge');
+        if (erasBadge) {
+          if (trainingPastEras.length > 0) {
+            erasBadge.style.display = 'inline-block';
+            erasBadge.textContent = `${trainingPastEras.length} era${trainingPastEras.length > 1 ? 's' : ''} archivada${trainingPastEras.length > 1 ? 's' : ''}`;
+          } else {
+            erasBadge.style.display = 'none';
+          }
         }
       }
 

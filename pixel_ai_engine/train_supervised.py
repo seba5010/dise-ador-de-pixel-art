@@ -154,6 +154,7 @@ def get_available_snapshots():
 def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0):
     elapsed = round(time.time() - start_time, 1)
     history = []
+    past_eras = []
     best_loss = None
     initial_loss = None
     last_error = None
@@ -163,6 +164,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
             with open(STATUS_FILE, "r", encoding="utf-8") as f:
                 prev = json.load(f)
                 history = prev.get("history", [])
+                past_eras = prev.get("past_eras", [])
                 raw_best = prev.get("best_loss")
                 raw_init = prev.get("initial_loss")
                 last_error = prev.get("error_details")
@@ -173,6 +175,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                     initial_loss = float(raw_init)
         except Exception:
             history = []
+            past_eras = []
 
     # Recuperar de historial valido si aun no estan inicializados o eran 0.0 heredados
     valid_losses = [h["loss"] for h in history if isinstance(h.get("loss"), (int, float)) and math.isfinite(h["loss"]) and h["loss"] > 0.0]
@@ -267,6 +270,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "skipped_amp_steps": int(skipped_amp),
         "error_details": last_error,
         "snapshots": get_available_snapshots(),
+        "past_eras": past_eras,
         "history": history
     }
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
@@ -435,11 +439,27 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             except Exception as e:
                 print(f"[!] Error al reanudar checkpoint: {e}")
     elif mode == "start":
-        # Restablecer historial de entrenamiento en STATUS_FILE para nuevo experimento
+        # Restablecer historial de entrenamiento en STATUS_FILE para nuevo experimento,
+        # pero archivando la era anterior en past_eras para comparar lineas del tiempo
         if STATUS_FILE.exists():
             try:
                 with open(STATUS_FILE, "r", encoding="utf-8") as f:
                     sdata = json.load(f)
+                old_hist = sdata.get("history", [])
+                past_eras = sdata.get("past_eras", [])
+                if old_hist and len(old_hist) > 0:
+                    era_idx = len(past_eras) + 1
+                    past_eras.append({
+                        "era": era_idx,
+                        "name": f"Era {era_idx}",
+                        "timestamp": sdata.get("timestamp", time.strftime("%H:%M:%S")),
+                        "epochs": sdata.get("epoch", len(old_hist)),
+                        "initial_loss": sdata.get("initial_loss"),
+                        "best_loss": sdata.get("best_loss"),
+                        "history": old_hist
+                    })
+                    print(f"[HISTORIAL] Era {era_idx} archivada con {len(old_hist)} épocas para comparativa en la línea del tiempo.")
+                sdata["past_eras"] = past_eras
                 sdata["history"] = []
                 sdata["initial_loss"] = None
                 sdata["best_loss"] = None
@@ -447,9 +467,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 sdata["epoch"] = 0
                 sdata["status"] = "INICIANDO"
                 with open(STATUS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(sdata, f, indent=2)
-            except Exception:
-                pass
+                    json.dump(sdata, f, indent=2, allow_nan=False)
+            except Exception as e:
+                print(f"[!] Aviso al archivar era previa: {e}")
 
         # Warm start: Si existe best_generator o base_generator, iniciar desde pesos entrenados
         warm_ckpt = CHECKPOINT_DIR / "best_generator.pt"
