@@ -197,14 +197,15 @@ Auditoría técnica automatizada que certifica si una hoja cumple con los están
 
 ## 7. Resolución Quirúrgica de Auditoría Técnica (Octubre 2026)
 
-A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguientes 5 correcciones arquitecturales:
+A raíz de la auditoría exhaustiva del repositorio (commit `f3f8da8` y sucesivos), se implementaron y verificaron las siguientes correcciones arquitecturales:
 
 1. **Reanudación y Preservación de `best_loss` y Schedulers**:
    - `save_checkpoint` unifica el guardado de checkpoints normales, pausas, paradas y snapshots de 10 épocas.
-   - Preserva `best_loss`, optimizadores `opt_g`/`opt_d` (8-bit AdamW / Adam), escaladores AMP `scaler_g`/`scaler_d`, schedulers CosineAnnealing (`scheduler_g`/`scheduler_d`) y estados de generadores de números aleatorios (RNG en CPU/CUDA con validación de tipo de tensor).
+   - Preserva `best_loss`, optimizadores `opt_g`/`opt_d` (8-bit AdamW / Adam), escaladores AMP `scaler_g`/`scaler_d`, schedulers CosineAnnealing (`scheduler_g`/`scheduler_d`) y estados de generadores de números aleatorios (RNG en CPU como `torch.uint8` en CPU y en CUDA mediante `torch.cuda.set_rng_state_all`).
    - En caso de reanudar desde checkpoints antiguos que carezcan de `best_loss`, se recupera automáticamente desde `best_generator.pt`.
-   - Protección integral contra `NaN`: `update_status` intercepta pérdidas no finitas independientemente del estado (`COMPLETADO` o `ENTRENANDO`), asignando `status: "ERROR_NAN"` y serializando métricas inválidas como `null` en lugar de `0.0`.
-   - Recuperación de métricas históricas: descarta valores `0.0` heredados para `best_loss` e `initial_loss`, recuperándolos del historial válido.
+   - Protección integral contra `NaN`: Comprueba la finitud de cada pérdida componente antes de backward/acumulación. Si se detecta un valor inválido, aborta con `status: "ERROR_NAN"`, registra época, lote y métrica (`error_details`), preserva los checkpoints previos sin sobrescribirlos y serializa el JSON con `allow_nan=False`.
+   - Recuperación de métricas históricas: descarta valores `0.0` heredados para `best_loss` e `initial_loss`, recuperándolos automáticamente del historial válido (ej. inicial 0.0941 y mejor 0.09 refleja 4.4% de reducción).
+   - Pausa limpia en frontera de época: Al pulsar pausa, el bucle procesa los lotes restantes de la época activa antes de suspenderse, evitando el salto silencioso de lotes al reanudar.
 
 2. **Sincronización Reactiva de Respawn**:
    - El selector `#respawnEpochSelect` se alimenta dinámicamente de `/api/train/snapshots` y de la telemetría en tiempo real (`info.snapshots`).
@@ -218,10 +219,10 @@ A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguie
    - El manejador `sheetImg.onload` redibuja el fotograma en el lienzo inmediatamente tras la carga asíncrona de la imagen, garantizando actualización visual instantánea incluso si la animación está en pausa.
 
 4. **Control de Calidad Quirúrgico de Canal Alfa**:
-   - `run_quality_audit` incluye formalmente el análisis de `blurry_alpha_cells` en la condición de certificación `is_ready`.
-   - Detecta y rechaza de forma inmediata celdas completamente semitransparentes (por ejemplo, bloques o sprites fantasma con alfa 128 donde `solid == 0 and semi >= 5`), marcándolas con ratio `1.0`.
-   - Para celdas con píxeles opacos, rechaza cualquier sangrado con semitransparencias mayores al 2% (`semi / solid > 0.02`) o con más de 15 píxeles difusos.
-   - Se exige que `len(blurry_alpha_cells) == 0` y `alpha_purity_score >= 95.0%`. Cualquier hoja con píxeles semitransparentes o bordes difuminados es calificada como `BORRADOR / REVISIÓN REQUERIDA`.
+   - `run_quality_audit` aplica el estándar binario estricto: alfa exclusivamente `0` o `255`.
+   - Detecta cualquier valor intermedio `1 <= alpha <= 254`, detectando incluso celdas donde el personaje está completamente en semitransparencia (ej. bloque fantasma en alfa 128 con `solid == 0`).
+   - Dichas celdas se registran en `blurry_alpha_cells`, impidiendo la certificación (`certified: false`) hasta que todos los frames tengan alfa puro.
+   - Mantiene comprobaciones de celdas vacías, frames faltantes y toque de bordes.
 
 5. **Colores, Acabado Unificado y Transparencia de Inferencia**:
    - `Albumentations.ColorJitter` bloquea explícitamente `saturation=0.0` y `hue=0.0`, limitando las variaciones exclusivamente a cambios sutiles de brillo y contraste sin alterar los tonos de la ropa ni la piel del personaje.
@@ -229,4 +230,15 @@ A raíz de la auditoría exhaustiva del repositorio, se implementaron las siguie
    - `remap_image_to_palette` incorpora tolerancia euclídea (35.0) para no destruir colores de accesorios legítimos y binariza estrictamente el canal alfa a 0 o 255.
    - `PixelArtEnhancer.enhance_frame` sella la salida con `binarize_alpha(threshold=40)`, unificando el acabado entre la generación/exportación de Sprite Studio y el entrenamiento supervisado.
    - `generate_preview` evalúa muestras fijas sin aumentos aleatorios (`dataset.samples[s_idx]`) y renderiza una tira de 5 columnas: `[Frontal Chibi] | [Pose] | [Predicción IA Cruda] | [IA Remapeada con Alfa Puro] | [Ground Truth Real]`.
+
+---
+
+## 8. Verificación y Pruebas Unitarias
+El script automatizado `test_audit_suite.py` verifica los 5 subsistemas con baterías diferenciadas para CPU y GPU CUDA:
+- **Test 1:** Inyección de NaN/Inf, JSON `allow_nan=False`, preservación de checkpoints y bloqueo de estado completado falso.
+- **Test 2:** 4 casos sintéticos de auditoría alfa (opaco con márgenes, alfa 128 puro, mezcla 128/255, y frames vacíos/tocando bordes).
+- **Test 3:** Reconstrucción de métricas históricas de reducción de pérdida y conservación de mínimos.
+- **Test 4:** Guardado y restauración de schedulers y RNG de CPU (`torch.uint8`).
+- **Test 5:** Guardado y restauración de RNG CUDA y escaladores AMP en GPU.
+
 

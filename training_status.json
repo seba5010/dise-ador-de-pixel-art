@@ -1,22 +1,22 @@
 {
-  "epoch": 23,
+  "epoch": 25,
   "total_epochs": 25,
   "phase": "Supervisado Pix2Pix + Kornia GPU + 8bit AdamW",
   "phase_id": 3,
-  "status": "ENTRENANDO",
-  "g_loss": 0.0739,
-  "d_loss": 0.5076,
+  "status": "COMPLETADO",
+  "g_loss": 0.075,
+  "d_loss": 0.4892,
   "l1_loss": 0.0127,
   "edge_loss": 0.0009,
   "best_loss": 0.0683,
   "initial_loss": 0.0933,
-  "loss_reduction_pct": 20.8,
+  "loss_reduction_pct": 19.6,
   "lr": 0.00015,
-  "gpu_temp": 82,
-  "elapsed_sec": 593.0,
-  "eta_sec": 52,
-  "fps": 39.1,
-  "timestamp": "05:16:18",
+  "gpu_temp": 77,
+  "elapsed_sec": 645.9,
+  "eta_sec": 0,
+  "fps": 39.02,
+  "timestamp": "05:17:10",
   "total_frames": 1008,
   "snapshots": [
     {
@@ -283,6 +283,28 @@
       "lr": 0.00015,
       "gpu_temp": 82,
       "elapsed_sec": 593.0
+    },
+    {
+      "epoch": 24,
+      "loss": 0.0743,
+      "g_loss": 0.0743,
+      "d_loss": 0.4992,
+      "l1_loss": 0.0127,
+      "edge_loss": 0.0009,
+      "lr": 0.00015,
+      "gpu_temp": 82,
+      "elapsed_sec": 618.9
+    },
+    {
+      "epoch": 25,
+      "loss": 0.075,
+      "g_loss": 0.075,
+      "d_loss": 0.4892,
+      "l1_loss": 0.0127,
+      "edge_loss": 0.0009,
+      "lr": 0.00015,
+      "gpu_temp": 77,
+      "elapsed_sec": 645.9
     }
   ]
 }

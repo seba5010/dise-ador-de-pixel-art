@@ -610,6 +610,7 @@ def save_run_metadata(
 
 def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any]:
     """Auditoria quirurgica completa del spritesheet generado o en borrador con diagnostico en vivo."""
+    run_dir = Path(run_dir)
     meta = {}
     meta_file = run_dir / "metadata.json"
     if meta_file.exists():
@@ -684,32 +685,28 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
 
             # Verificar binaridad del canal alfa
             # En pixel art retro certificado para Unity, el alfa debe ser estrictamente binario (0 o 255).
-            # Cualquier valor intermedio (2 a 253) representa semitransparencia no permitida.
-            semi = ((alpha >= 2) & (alpha <= 253)).sum()
-            solid = (alpha >= 254).sum()
+            # Cualquier valor intermedio (1 <= alpha <= 254) representa semitransparencia no permitida.
+            semi = int(((alpha > 0) & (alpha < 255)).sum())
+            solid = int((alpha == 255).sum())
             is_blurry = False
             ratio_val = 0.0
 
-            if solid == 0 and semi >= 5:
+            if solid == 0 and semi > 0:
                 # Caso critico: Personaje completamente fantasmal / semitransparente sin ningun pixel opaco
                 is_blurry = True
                 ratio_val = 1.0
-            elif solid > 0 and (semi / solid) > 0.02:
-                # Halos difuminados o bordes antialiasing no binarios
+            elif solid > 0 and semi > 0:
+                # Mezcla pixeles solidos con semitransparencias (halos, bordes difusos o antialiasing)
                 is_blurry = True
                 ratio_val = round(float(semi / solid), 3)
-            elif semi >= 15:
-                # Mas de 15 pixeles con transparencia intermedia absoluta
-                is_blurry = True
-                ratio_val = round(float(semi / max(1, solid)), 3)
 
             if is_blurry:
                 blurry_alpha_cells.append({
                     "frame": f_idx,
                     "desc": desc,
                     "ratio": ratio_val,
-                    "semi_pixels": int(semi),
-                    "solid_pixels": int(solid)
+                    "semi_pixels": semi,
+                    "solid_pixels": solid
                 })
         except Exception as e:
             empty_cells.append({
@@ -759,10 +756,12 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
         "completeness_score": completeness_score,
         "empty_cells": empty_cells,
         "border_touch_cells": border_touch_cells,
+        "border_touching_cells": border_touch_cells,
         "blurry_alpha_cells": blurry_alpha_cells,
         "alpha_purity_score": alpha_purity_score,
         "border_safety_score": border_safety_score,
         "is_ready_for_game": is_ready,
+        "certified": is_ready,
         "metadata": meta,
         "logs": audit_logs
     }

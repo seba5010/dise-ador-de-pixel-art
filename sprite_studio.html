@@ -2578,9 +2578,13 @@
     }
 
     function getMetricValue(d, metricKey) {
-      if (metricKey === 'l1') return d.l1_loss || d.loss || 0;
-      if (metricKey === 'temp') return d.gpu_temp || 0;
-      return d.loss !== undefined ? d.loss : (d.g_loss !== undefined ? d.g_loss : 0);
+      if (!d) return null;
+      let val = null;
+      if (metricKey === 'l1') val = (d.l1_loss !== undefined ? d.l1_loss : d.loss);
+      else if (metricKey === 'temp') val = d.gpu_temp;
+      else val = (d.loss !== undefined ? d.loss : d.g_loss);
+      if (val === null || val === undefined || isNaN(val) || !isFinite(val)) return null;
+      return Number(val);
     }
 
     function renderLossChart() {
@@ -2622,17 +2626,23 @@
       const metricSelect = document.getElementById('chartMetricSelect');
       const metricKey = metricSelect ? metricSelect.value : 'loss';
 
-      if (!trainingHistoryData || trainingHistoryData.length === 0) {
+      // Filtrar unicamente puntos que contienen valores finitos para omitir null/NaN de la curva
+      const validPointsData = (trainingHistoryData || []).filter(d => {
+        const v = getMetricValue(d, metricKey);
+        return v !== null && !isNaN(v) && isFinite(v);
+      });
+
+      if (!validPointsData || validPointsData.length === 0) {
         ctx.fillStyle = '#64748b';
         ctx.font = '500 12px system-ui, -apple-system, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('Recopilando datos de entrenamiento en vivo... La curva aparecerá automáticamente.', wCss / 2, hCss / 2);
+        ctx.fillText('Sin datos validos para graficar esta metrica.', wCss / 2, hCss / 2);
         ctx.restore();
         return;
       }
 
-      const vals = trainingHistoryData.map(d => getMetricValue(d, metricKey));
+      const vals = validPointsData.map(d => getMetricValue(d, metricKey));
       let minVal = Math.min(...vals);
       let maxVal = Math.max(...vals);
 
@@ -2646,7 +2656,7 @@
       }
       const range = maxVal - minVal || 1.0;
 
-      const maxEpoch = Math.max(chartTotalEpochs || 50, ...trainingHistoryData.map(d => d.epoch || 1));
+      const maxEpoch = Math.max(chartTotalEpochs || 50, ...validPointsData.map(d => d.epoch || 1));
       const minEpoch = 1;
       const epochRange = Math.max(1, maxEpoch - minEpoch);
 
@@ -2695,8 +2705,8 @@
         ctx.fillText(`Ép ${ep}`, xPos, padTop + chartH + 10);
       });
 
-      // 3. Puntos de la curva trazada
-      const points = trainingHistoryData.map((d, idx) => {
+      // 3. Puntos de la curva trazada (solo puntos validos)
+      const points = validPointsData.map((d, idx) => {
         const ep = d.epoch || (idx + 1);
         const x = padLeft + ((ep - minEpoch) / epochRange) * chartW;
         const val = getMetricValue(d, metricKey);
@@ -2850,20 +2860,20 @@
       if (monEtaEl) monEtaEl.textContent = `ETA: ${etaVal}`;
 
       // 2. Pérdidas & Convergencia
-      const glossVal = (info.g_loss && !isNaN(info.g_loss)) ? Number(info.g_loss).toFixed(4) : (info.g_loss || '--');
+      const glossVal = (info.g_loss !== null && info.g_loss !== undefined && !isNaN(info.g_loss) && isFinite(info.g_loss)) ? Number(info.g_loss).toFixed(4) : 'Sin dato';
       const monGlossEl = document.getElementById('monGloss');
       if (monGlossEl) monGlossEl.textContent = glossVal;
 
-      const bestLossVal = (info.best_loss && !isNaN(info.best_loss)) ? Number(info.best_loss).toFixed(4) : glossVal;
+      const bestLossVal = (info.best_loss !== null && info.best_loss !== undefined && !isNaN(info.best_loss) && isFinite(info.best_loss)) ? Number(info.best_loss).toFixed(4) : (glossVal !== 'Sin dato' ? glossVal : 'Sin dato');
       const monBestEl = document.getElementById('monBestLoss');
       if (monBestEl) monBestEl.textContent = `Mínima: ${bestLossVal}`;
 
-      const redPct = info.loss_reduction_pct !== undefined ? `${info.loss_reduction_pct}% Reducción` : '0.0% Reducción';
+      const redPct = (info.loss_reduction_pct !== null && info.loss_reduction_pct !== undefined && !isNaN(info.loss_reduction_pct) && isFinite(info.loss_reduction_pct) && glossVal !== 'Sin dato') ? `${info.loss_reduction_pct}% Reducción` : 'Sin dato';
       const monDeltaEl = document.getElementById('monLossDelta');
       if (monDeltaEl) monDeltaEl.textContent = redPct;
 
-      const l1_str = (info.l1_loss && !isNaN(info.l1_loss)) ? Number(info.l1_loss).toFixed(4) : (info.l1_loss || '--');
-      const edge_str = (info.edge_loss && !isNaN(info.edge_loss)) ? Number(info.edge_loss).toFixed(4) : (info.edge_loss || '--');
+      const l1_str = (info.l1_loss !== null && info.l1_loss !== undefined && !isNaN(info.l1_loss) && isFinite(info.l1_loss)) ? Number(info.l1_loss).toFixed(4) : 'Sin dato';
+      const edge_str = (info.edge_loss !== null && info.edge_loss !== undefined && !isNaN(info.edge_loss) && isFinite(info.edge_loss)) ? Number(info.edge_loss).toFixed(4) : 'Sin dato';
       const monL1El = document.getElementById('monL1');
       if (monL1El) monL1El.textContent = `L1: ${l1_str} | Borde: ${edge_str}`;
 

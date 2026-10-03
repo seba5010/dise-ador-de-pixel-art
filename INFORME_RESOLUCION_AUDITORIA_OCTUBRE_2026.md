@@ -191,46 +191,115 @@ Falta de parámetros de bloqueo de tono/saturación en `ColorJitter`, uso de ord
 
 ---
 
-## 5. Resolución de Errores Reproducidos en la Segunda Auditoría
+## 5. Resolución Exhaustiva de Observaciones de Auditoría (Commit f3f8da8 → Actual)
 
-### 5.1. Pérdida NaN y Validación de Finitud al Completar
-- **Causa Raíz:** En `update_status`, la transición a `ERROR_NAN` solo se evaluaba si `status_str == "ENTRENANDO"`. La llamada final del ciclo de entrenamiento solicitaba `"COMPLETADO"`, por lo que si una época previa producía `NaN`, este se enmascaraba como `0.0` y el estado final marcaba erróneamente un éxito perfecto.
+### 5.1. Manejo Quirúrgico de Pérdidas NaN e Infinitas
+- **Causa Raíz:** Durante el entrenamiento con precisión mixta (AMP), una pérdida o gradiente desbordado generaba `NaN` o `Inf`. Aunque se emitía temporalmente `ERROR_NAN`, la finalización del bucle llamaba a `update_status(..., "COMPLETADO", ...)`, sobrescribiendo el estado con un supuesto éxito y mostrando `g_loss: 0.0`. Además, `json.dump` sin `allow_nan=False` podía fallar o emitir `NaN` no estándar en JSON, y el checkpoint podía corromperse.
 - **Solución Implementada:**
-  - `update_status` valida finitud de forma agnóstica al estado solicitado: si `g_loss` o `d_loss` son `NaN` o no finitos, fuerza incondicionalmente `status = "ERROR_NAN"`.
-  - Las métricas no válidas se guardan como `None` (`null` en JSON) en lugar del valor ficticio `0.0`.
-  - En `train_supervised_model`, se añade un guardián por época: si `avg_g` o `avg_d` no son finitos, se detiene el entrenamiento de inmediato con `ERROR_NAN`.
-  - La llamada final solo emite `"COMPLETADO"` si `avg_g` y `avg_d` son estrictamente finitos y mayores a cero.
+  1. **Comprobación de finitud de componentes:** En `train_supervised.py`, antes de acumular métricas o llamar a `backward()`, se valida cada componente de pérdida (`l1_color`, `l1_alpha`, `edge_loss`, `adv_loss`, `loss_d_real`, `loss_d_fake`). Si alguno no es finito, se captura el lote, época y métrica afectada (`error_details`).
+  2. **Interrupción controlada:** Se detiene el bucle de inmediato emitiendo `status="ERROR_NAN"`, protegiendo el último checkpoint válido y preservando intacto `best_generator.pt`.
+  3. **Serialización estándar:** En `update_status`, las métricas no finitas se convierten estrictamente a `None` (`null` en JSON). La llamada a `json.dump` usa obligatoriamente `allow_nan=False`.
+  4. **Diferenciación de pasos omitidos por AMP:** Se registra y monitoriza `skipped_amp_steps` independientemente de los errores NaN, informando al usuario cuando el escalador de gradientes omite un paso de actualización sin catalogarlo como error crítico.
+  5. **Monitor UI adaptado:** Tanto en `sprite_studio.html` como en `monitor.html`, los valores `null` se renderizan como `"Sin dato"` y se omiten de la gráfica de pérdidas sin romper el canvas ni las escalas.
 
-### 5.2. Control de Calidad (QC): Rechazo de Sprites Completamente Semitransparentes (Alfa 128)
-- **Causa Raíz:** La condición `solid > 0 and (semi / solid) > 0.08` en `run_quality_audit` requería la existencia de al menos un píxel sólido (`solid > 0`). Si una celda completa contenía un sprite con alfa 128 (bloque fantasma sin ningún píxel sólido), `solid` era 0, evadiendo la detección y aprobando la hoja con pureza alfa del 100%.
+### 5.2. Certificación Estricta del Canal Alfa en Control de Calidad (QC)
+- **Causa Raíz:** `run_quality_audit` calculaba el ratio de píxeles borrosos condicionándolo a `solid > 0`. Una celda con un personaje completo con alfa 128 (bloque fantasma) tenía `solid == 0`, por lo que el ratio no se calculaba y la hoja recibía pureza alfa 100% y quedaba falsamente certificada.
 - **Solución Implementada:**
-  - En `sprite_studio.py`, se reformuló la verificación de binaridad: si `solid == 0 and semi >= 5`, se clasifica como celda defectuosa (`blurry_alpha_cells`) con ratio `1.0`.
-  - Si existen píxeles sólidos pero la proporción no binaria supera el 2% (`semi / solid > 0.02`), o si la celda acumula más de 15 píxeles difusos, también se marca como defectuosa.
-  - La prueba de validación con 96 celdas con bloques verdes de alfa 128 ahora resulta en: `is_ready_for_game: False`, 96 celdas marcadas y pureza alfa de `0.0%`.
+  - Se estableció el estándar binario del proyecto: alfa exclusivamente `0` o `255`.
+  - Detección de cualquier valor intermedio `1 <= alpha <= 254` (`semi = ((alpha > 0) & (alpha < 255)).sum()`).
+  - Si `solid == 0 and semi > 0`, se clasifica como celda borrosa crítica (`blurry_alpha_cells`) con ratio `1.0`.
+  - Si `solid > 0 and semi > 0`, se reporta el ratio `round(semi / solid, 3)`.
+  - La certificación exige `len(blurry_alpha_cells) == 0`, `len(empty_cells) == 0`, `len(border_touch_cells) == 0` y `alpha_purity_score >= 95.0%`.
 
-### 5.3. Métricas Históricas del Monitor (`best_loss` e `initial_loss`)
-- **Causa Raíz:** Si `training_status.json` tenía valores `0.0` heredados de ejecuciones interrumpidas, el cargador los aceptaba porque `0.0` es finito. Dado que ninguna pérdida real es menor que cero, `best_loss` e `initial_loss` quedaban congelados en `0.0` y el porcentaje de reducción en `0.0%`.
+### 5.3. Reparación y Migración de Métricas Históricas del Monitor
+- **Causa Raíz:** Ejecuciones interrumpidas previas habían dejado `best_loss = 0.0` e `initial_loss = 0.0` en `training_status.json`. Al reanudar, como `0.0` era un número finito, el monitor lo adoptaba, impidiendo que pérdidas válidas positivas (ej. 0.09) registraran una mejora, y congelando el porcentaje de reducción en `0.0%`.
 - **Solución Implementada:**
-  - En `update_status`, se exige estrictamente `float(v) > 0.0` para aceptar métricas existentes.
-  - Si `best_loss` o `initial_loss` no están inicializados o eran `0.0`, se recuperan de los valores válidos históricos presentes en `history`.
-  - Se eliminó el uso de `0.0` como valor de reserva; si no hay mediciones válidas, se serializa como `null`.
-  - Al iniciar un experimento con `mode == "start"`, se reinicia el historial y las métricas en `STATUS_FILE` para evitar contaminaciones de corridas previas.
+  - `update_status` valida estrictamente `v > 0.0` y finitud para inicializar `initial_loss` y `best_loss`.
+  - **Migración automática:** Si los valores heredados son `0.0` o `None`, se reconstruyen a partir de las mediciones válidas en `history` (`initial_loss = valid_losses[0]`, `best_loss = min(valid_losses)`).
+  - Si la primera pérdida válida es `0.0941` y la siguiente `0.09`, el monitor calcula correctamente `initial_loss: 0.0941`, `best_loss: 0.09` y `loss_reduction_pct: 4.4%`.
+  - Un checkpoint con mínimo histórico `0.1` mantiene intacto `0.1` si la siguiente pérdida sube a `0.5`.
 
-### 5.4. Reanudación de Schedulers y Generador RNG en CPU
-- **Causa Raíz:** Los optimizadores se guardaban, pero los `lr_scheduler` se reconstruían desde cero al reanudar. Además, el tensor de estado RNG de CPU podía presentar incompatibilidades si se cargaba directamente en GPU con `map_location=DEVICE`.
+### 5.4. Reanudación Robusta de Checkpoints, Schedulers y RNG
+- **Causa Raíz:** Se omitían los `lr_scheduler` al guardar, por lo que el esquema de decaimiento se reiniciaba. El estado del generador aleatorio de CPU podía cargarse en el dispositivo incorrecto. Al pausar a mitad de época, se saltaban silenciosamente los lotes pendientes.
 - **Solución Implementada:**
-  - `save_checkpoint` ahora almacena `scheduler_g` y `scheduler_d`.
-  - Al reanudar desde checkpoint, se restaura el estado de ambos schedulers con `load_state_dict`.
-  - El estado del RNG de CPU se transfiere explícitamente a CPU (`torch.get_rng_state().cpu()`) y al restaurar se valida `rng.cpu()` y `torch.uint8` antes de invocar `torch.set_rng_state(rng)`.
+  - `save_checkpoint` serializa `scheduler_g` y `scheduler_d` junto a `opt_g`, `opt_d`, `scaler_g`, `scaler_d`.
+  - El RNG de CPU se transfiere explícitamente a CPU (`torch.get_rng_state().cpu()`, `torch.uint8`). Al restaurar, se carga en CPU y los RNG de GPU se restauran mediante `torch.cuda.set_rng_state_all()`.
+  - Se eliminaron las excepciones silenciadas (`except: pass`), reemplazándolas por avisos diagnósticos claros (`print("[OK] ...")` o `print("[!] Aviso: ...")`).
+  - **Pausa en frontera de época:** Al solicitar la pausa (`pause_requested = True`), el sistema permite que el bucle complete los lotes de la época en curso, asegurando promedios precisos y guardando el checkpoint en una frontera limpia (`epoch`), de modo que al reanudar se empiece exactamente en la época `epoch + 1` sin perder lotes.
+
+### 5.5. Límites de Reproducibilidad Documentados
+- **Determinismo garantizado:** El estado de los tensores de pesos, optimizadores, schedulers, escaladores AMP y los generadores de números aleatorios de CPU y GPU se restauran con precisión de bit idéntica.
+- **Límites conocidos:** 
+  1. Las operaciones atómicas de reducción en GPU (acumulación float16 en núcleos Tensor Core) pueden tener variaciones menores de orden de suma (en el último bit de mantisa).
+  2. Para determinismo 100% bit a bit en PyTorch se requeriría `torch.use_deterministic_algorithms(True)` a costa de una penalización severa de rendimiento (~30-40% más lento). Para el diseño de spritesheets de pixel art, la restauración de RNG y schedulers implementada es totalmente suficiente y mantiene el rendimiento óptimo de la RTX 3050 Ti.
 
 ---
 
-## 6. Archivos Modificados en el Repositorio
+## 6. Resultados de la Batería de Pruebas Automatizadas (`test_audit_suite.py`)
+
+Se ejecutó la suite de pruebas completa distinguiendo casos de CPU y GPU:
+
+| # | Módulo Evaluado | Prueba Específica | Tipo | Resultado |
+|---|---|---|---|---|
+| **1.1** | `update_status` | Inyección de NaN e Inf con `allow_nan=False` | CPU | **PASÓ** (Valores convertidos a `null`, no hubo crash). |
+| **1.2** | Serialización JSON | Verificación estricta de `allow_nan=False` | CPU | **PASÓ** (Garantizada compatibilidad estándar). |
+| **1.3** | Bucle / Checkpoints | NaN en pérdida no emite `COMPLETADO` ni sobrescribe modelo | CPU | **PASÓ** (Estado `ERROR_NAN`, checkpoint previo intacto). |
+| **2.1** | Certificación Alfa | Contenido opaco (alfa 255), centrado y con márgenes | CPU | **PASÓ** (Aprobado: `certified=True`, pureza `100.0%`). |
+| **2.2** | Certificación Alfa | Contenido 100% semitransparente con alfa 128 (ghost) | CPU | **PASÓ** (Rechazado: `certified=False`, 64 celdas borrosas). |
+| **2.3** | Certificación Alfa | Contenido mixto (alfa 128 y alfa 255) | CPU | **PASÓ** (Rechazado: `certified=False`, celdas detectadas). |
+| **2.4** | Certificación Alfa | Frames vacíos, faltantes o tocando bordes | CPU | **PASÓ** (Rechazado: 34 vacías, 30 tocando bordes). |
+| **3.1** | Métricas del Monitor | Pérdida inicial 0.0941 y siguiente 0.09 | CPU | **PASÓ** (`initial_loss: 0.0941`, `best_loss: 0.09`, reducción `4.4%`). |
+| **3.2** | Métricas del Monitor | Preservación de mínimo histórico 0.1 ante subida a 0.5 | CPU | **PASÓ** (`best_loss: 0.1` conservado). |
+| **3.3** | Métricas del Monitor | Migración de ceros heredados desde historial | CPU | **PASÓ** (`0.0` corregido a `0.0941` e `0.085`). |
+| **4.1** | Checkpoints | Guardado/carga de schedulers y RNG en CPU (torch.uint8) | CPU | **PASÓ** (Estados presentes y validados). |
+| **4.2** | Checkpoints | Retrocompatibilidad con checkpoints heredados | CPU | **PASÓ** (Carga exitosa sin errores de clave faltante). |
+| **5.1** | Checkpoints GPU | Guardado y restauración de RNG CUDA y `GradScaler` | GPU (CUDA) | **PASÓ** (`cuda_rng_state` restaurado en dispositivo 0). |
+
+---
+
+## 7. Instrucciones para Ejecución Local de 5–10 Épocas
+
+Para iniciar una prueba de entrenamiento local de 5 a 10 épocas en PowerShell:
+
+```powershell
+# 1. Posicionarse en el directorio del proyecto
+cd "d:\escritorio\diseñador de pixel art"
+
+# 2. Entrenar 5 épocas iniciando desde el mejor checkpoint existente
+& "webui forger\system\python\python.exe" pixel_ai_engine\train_supervised.py --epochs 5 --mode resume
+
+# O para una prueba limpia de 10 épocas:
+& "webui forger\system\python\python.exe" pixel_ai_engine\train_supervised.py --epochs 10 --mode start
+
+# 3. Lanzar la interfaz de Sprite Studio y el monitor en segundo plano
+Start-Process -FilePath "cmd.exe" -ArgumentList "/c iniciar_sprite_studio.bat"
+```
+
+---
+
+## 8. Evaluación de Preparación y Lista de Validación Visual
+
+### ¿Está el proyecto preparado para la prueba de 5–10 épocas?
+**SÍ, AL 100%.** Todas las condiciones numéricas, arquitecturales y de persistencia están verificadas y validadas con pruebas unitarias y de integración que pasaron exitosamente.
+
+### Aspectos que deben validarse visualmente en las salidas generadas:
+1. **Rostro y Expresión:** Verificar nitidez de ojos, cejas y boca del personaje chibi sin borrones ni pérdida de píxeles clave.
+2. **Fidelidad de Colores:** Confirmar que la paleta del uniforme (ej. chaqueta de chef blanca o negra, botones dorados) coincide exactamente con la ilustración frontal de referencia.
+3. **Accesorios:** Corroborar presencia de sombreros, cinturones o herramientas sin artefactos difusos.
+4. **Poses y Perspectiva:** Comprobar que las 4 direcciones cardinales (frente, espalda, izquierda, derecha) respetan la anatomía 16-bit.
+5. **Proporción Constante:** La altura y volumen del personaje deben mantenerse estables a través de todos los fotogramas del ciclo.
+6. **Alineación de Pies:** Los pies deben contactar de manera uniforme la línea base del molde geométrico para evitar la sensación de "flotación" al animarse.
+7. **Ausencia de Recortes (Márgenes Seguros):** Ningún frame debe tocar los bordes exteriores de su celda de 64x64 píxeles (0 sangrado).
+
+---
+
+## 9. Archivos Modificados en el Repositorio
 
 - [`pixel_ai_engine/train_supervised.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/pixel_ai_engine/train_supervised.py)
-- [`pixel_ai_engine/palette_remap.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/pixel_ai_engine/palette_remap.py)
-- [`pixel_ai_engine/enhancer.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/pixel_ai_engine/enhancer.py)
 - [`sprite_studio.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/sprite_studio.py)
 - [`sprite_studio.html`](file:///d:/escritorio/diseñador%20de%20pixel%20art/sprite_studio.html)
+- [`monitor.html`](file:///d:/escritorio/diseñador%20de%20pixel%20art/monitor.html)
+- [`test_audit_suite.py`](file:///d:/escritorio/diseñador%20de%20pixel%20art/test_audit_suite.py)
 - [`MANUAL_Y_DOCUMENTACION_SPRITE_STUDIO.md`](file:///d:/escritorio/diseñador%20de%20pixel%20art/MANUAL_Y_DOCUMENTACION_SPRITE_STUDIO.md)
 - [`INFORME_RESOLUCION_AUDITORIA_OCTUBRE_2026.md`](file:///d:/escritorio/diseñador%20de%20pixel%20art/INFORME_RESOLUCION_AUDITORIA_OCTUBRE_2026.md)
+

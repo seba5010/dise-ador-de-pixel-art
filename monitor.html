@@ -575,12 +575,12 @@
       // Métricas principales
       setText('m-epoch',  d.epoch);
       setText('m-epoch-total', d.total_epochs === '∞' ? 'Modo infinito ∞' : `de ${d.total_epochs}`);
-      setText('m-gloss',  d.g_loss.toFixed(2));
-      setText('m-best',   d.best_loss !== null ? d.best_loss.toFixed(2) : '—');
-      setText('m-l1',     d.l1_loss.toFixed(3));
-      setText('m-edge',   d.edge_loss.toFixed(3));
-      setText('m-dloss',  d.d_loss.toFixed(3));
-      setText('m-epsec',  d.epoch_sec + 's');
+      setText('m-gloss',  (d.g_loss !== null && d.g_loss !== undefined && !isNaN(d.g_loss) && isFinite(d.g_loss)) ? d.g_loss.toFixed(4) : 'Sin dato');
+      setText('m-best',   (d.best_loss !== null && d.best_loss !== undefined && !isNaN(d.best_loss) && isFinite(d.best_loss)) ? d.best_loss.toFixed(4) : 'Sin dato');
+      setText('m-l1',     (d.l1_loss !== null && d.l1_loss !== undefined && !isNaN(d.l1_loss) && isFinite(d.l1_loss)) ? d.l1_loss.toFixed(4) : 'Sin dato');
+      setText('m-edge',   (d.edge_loss !== null && d.edge_loss !== undefined && !isNaN(d.edge_loss) && isFinite(d.edge_loss)) ? d.edge_loss.toFixed(4) : 'Sin dato');
+      setText('m-dloss',  (d.d_loss !== null && d.d_loss !== undefined && !isNaN(d.d_loss) && isFinite(d.d_loss)) ? d.d_loss.toFixed(4) : 'Sin dato');
+      setText('m-epsec',  (d.epoch_sec !== undefined && d.epoch_sec !== null) ? d.epoch_sec + 's' : '--');
       setText('m-elapsed', fmtTime(d.elapsed_sec));
 
       // Métricas Quirúrgicas de Control de Calidad
