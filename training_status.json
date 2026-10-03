@@ -1,130 +1,25 @@
 {
-  "epoch": 13,
+  "epoch": 0,
   "total_epochs": 50,
-  "phase": "LoRA Forge SD1.5 (Alex, Amaro, Conny, Dana, Belial)",
-  "phase_id": 4,
-  "status": "DETENIDO",
-  "g_loss": 0.0113,
+  "phase": "PyTorch UNet Supervisado (Pix2Pix + 4 Candados + Kornia GPU Edge)",
+  "phase_id": 1,
+  "status": "LISTO",
+  "g_loss": 0.0,
   "d_loss": 0.0,
-  "l1_loss": 0.0113,
+  "l1_loss": 0.0,
   "edge_loss": 0.0,
-  "best_loss": 0.0109,
-  "initial_loss": 0.0109,
-  "loss_reduction_pct": -3.7,
-  "lr": 0.0001,
-  "gpu_temp": 85,
-  "elapsed_sec": 3590.3,
-  "eta_sec": 10219,
-  "fps": 3.65,
-  "vram_gb": 2.8,
+  "best_loss": 0.0,
+  "initial_loss": 0.0,
+  "loss_reduction_pct": 0.0,
+  "lr": 0.0002,
+  "gpu_temp": 0,
+  "elapsed_sec": 0.0,
+  "eta_sec": 0,
+  "fps": 0.0,
+  "vram_gb": 1.5,
   "vram_total_gb": 4.0,
-  "checkpoint_saved": "villa_del_chef_characters.safetensors",
-  "timestamp": "23:38:33",
+  "checkpoint_saved": "best_generator.pt",
+  "timestamp": "--:--:--",
   "total_frames": 1008,
-  "history": [
-    {
-      "epoch": 1,
-      "loss": 0.0109,
-      "g_loss": 0.0109,
-      "lr": 0.0001,
-      "gpu_temp": 79,
-      "elapsed_sec": 292.6
-    },
-    {
-      "epoch": 2,
-      "loss": 0.0138,
-      "g_loss": 0.0138,
-      "lr": 0.0001,
-      "gpu_temp": 82,
-      "elapsed_sec": 585.8
-    },
-    {
-      "epoch": 3,
-      "loss": 0.0166,
-      "g_loss": 0.0166,
-      "lr": 0.0001,
-      "gpu_temp": 83,
-      "elapsed_sec": 879.9
-    },
-    {
-      "epoch": 4,
-      "loss": 0.0195,
-      "g_loss": 0.0195,
-      "lr": 0.0001,
-      "gpu_temp": 85,
-      "elapsed_sec": 1173.4
-    },
-    {
-      "epoch": 5,
-      "loss": 0.0225,
-      "g_loss": 0.0225,
-      "lr": 0.0001,
-      "gpu_temp": 87,
-      "elapsed_sec": 1469.8
-    },
-    {
-      "epoch": 6,
-      "loss": 0.0251,
-      "g_loss": 0.0251,
-      "lr": 0.0001,
-      "gpu_temp": 86,
-      "elapsed_sec": 1767.3
-    },
-    {
-      "epoch": 7,
-      "loss": 0.0238,
-      "g_loss": 0.0238,
-      "lr": 0.0001,
-      "gpu_temp": 86,
-      "elapsed_sec": 2067.9
-    },
-    {
-      "epoch": 8,
-      "loss": 0.0201,
-      "g_loss": 0.0201,
-      "lr": 0.0001,
-      "gpu_temp": 87,
-      "elapsed_sec": 2370.8
-    },
-    {
-      "epoch": 9,
-      "loss": 0.0141,
-      "g_loss": 0.0141,
-      "lr": 0.0001,
-      "gpu_temp": 87,
-      "elapsed_sec": 2671.3
-    },
-    {
-      "epoch": 10,
-      "loss": 0.0187,
-      "g_loss": 0.0187,
-      "lr": 0.0001,
-      "gpu_temp": 87,
-      "elapsed_sec": 2973.2
-    },
-    {
-      "epoch": 11,
-      "loss": 0.0128,
-      "g_loss": 0.0128,
-      "lr": 0.0001,
-      "gpu_temp": 86,
-      "elapsed_sec": 3274.8
-    },
-    {
-      "epoch": 12,
-      "loss": 0.0113,
-      "g_loss": 0.0113,
-      "lr": 0.0001,
-      "gpu_temp": 87,
-      "elapsed_sec": 3576.8
-    },
-    {
-      "epoch": 13,
-      "loss": 0.0113,
-      "g_loss": 0.0113,
-      "lr": 0.0001,
-      "gpu_temp": 85,
-      "elapsed_sec": 3590.3
-    }
-  ]
+  "history": []
 }

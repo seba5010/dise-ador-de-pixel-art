@@ -128,17 +128,8 @@ def check_gpu_training_status() -> Tuple[bool, Dict[str, Any]]:
 
 
 def check_forge_status(forge_url: str = "http://127.0.0.1:7860") -> Tuple[bool, str]:
-    """Comprueba la disponibilidad de la API local de Forge."""
-    try:
-        req = urllib.request.Request(f"{forge_url}/sdapi/v1/options", headers={"User-Agent": "SpriteStudio"})
-        with urllib.request.urlopen(req, timeout=1.2) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode("utf-8"))
-                model_name = data.get("sd_model_checkpoint", "Modelo cargado")
-                return True, model_name
-    except Exception:
-        pass
-    return False, "Desconectado"
+    """Comprueba la disponibilidad del motor. Forge ha sido desactivado en favor de PyTorch UNet."""
+    return False, "Desactivado (Motor PyTorch Canónico Activo)"
 
 
 def scan_available_characters() -> List[Dict[str, Any]]:
@@ -185,6 +176,8 @@ def scan_checkpoints() -> Dict[str, List[Dict[str, Any]]]:
     seen = set()
     dirs = [
         PROJECT_ROOT / "checkpoints",
+        PROJECT_ROOT / "checkpoints" / "snapshots",
+        PROJECT_ROOT / "checkpoints" / "supervised",
         SCRIPT_DIR / "checkpoints",
         PROJECT_ROOT.parent / "checkpoints"
     ]
@@ -837,7 +830,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             runs = []
             if OUTPUT_DIR.exists():
                 for d in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if d.is_dir() and (d / "enhanced_frames").exists():
+                    if d.is_dir() and ((d / "enhanced_frames").exists() or (d / "raw_frames").exists() or (d / "spritesheet_clean.png").exists()):
                         meta = {}
                         meta_file = d / "metadata.json"
                         if meta_file.exists():
@@ -990,30 +983,16 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
 
             def worker():
                 try:
-                    if engine == "forge":
-                        forge_ok, forge_model = check_forge_status()
-                        if not forge_ok:
-                            raise ConnectionError("Forge WebUI no esta respondiendo en http://127.0.0.1:7860. Inicia Forge o cambia al motor PyTorch.")
-                        # Si Forge esta activo, ejecutar generacion via Forge API
-                        run_forge_generation(
-                            character_name=char_name,
-                            front_image_path=front_path,
-                            format_type=format_type,
-                            mode=mode,
-                            single_frame_idx=single_f_idx if single_f_idx is not None else 0,
-                            seed=body.get("seed", None),
-                            run_dir=target_run_dir
-                        )
-                    else:
-                        run_pytorch_generation(
-                            character_name=char_name,
-                            front_image_path=front_path,
-                            format_type=format_type,
-                            mode=mode,
-                            single_frame_idx=single_f_idx,
-                            checkpoint_path=ckpt_path,
-                            run_dir=target_run_dir
-                        )
+                    # Siempre ejecutar con motor canonico PyTorch UNet Supervisado
+                    run_pytorch_generation(
+                        character_name=char_name,
+                        front_image_path=front_path,
+                        format_type=format_type,
+                        mode=mode,
+                        single_frame_idx=single_f_idx,
+                        checkpoint_path=ckpt_path,
+                        run_dir=target_run_dir
+                    )
                 except Exception as e:
                     traceback.print_exc()
                     with JOB_LOCK:
@@ -1044,8 +1023,8 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 except Exception: pass
 
             epochs = int(body.get("epochs", 50))
-            target_engine = body.get("engine", "forge_lora")
-            batch_size = int(body.get("batch_size", 1 if target_engine == "forge_lora" else 4))
+            target_engine = "pytorch"  # Siempre PyTorch Supervisado
+            batch_size = int(body.get("batch_size", 4))
             
             python_exe = sys.executable
             embedded_python = PROJECT_ROOT / "webui forger" / "system" / "python" / "python.exe"
@@ -1122,8 +1101,8 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 except Exception: pass
 
             epochs = int(body.get("epochs", 50))
-            target_engine = body.get("engine", "forge_lora")
-            batch_size = int(body.get("batch_size", 1 if target_engine == "forge_lora" else 4))
+            target_engine = "pytorch"  # Siempre PyTorch Supervisado
+            batch_size = int(body.get("batch_size", 4))
             
             python_exe = sys.executable
             embedded_python = PROJECT_ROOT / "webui forger" / "system" / "python" / "python.exe"

@@ -73,7 +73,7 @@
       animation: pulse 2s infinite;
     }
     .badge.train-idle { color: var(--dim); }
-    .badge.forge-on { color: var(--success); border-color: rgba(16, 185, 129, 0.4); }
+    .badge.engine-active { color: var(--success); border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.1); }
     .badge.forge-off { color: var(--dim); }
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
     nav.tabs {
@@ -526,7 +526,7 @@
     <div class="status-bar">
       <div class="badge gpu" id="gpuBadge">💻 GPU: Detectando...</div>
       <div class="badge train-idle" id="trainingBadge">⚪ GPU Libre para Inferencia</div>
-      <div class="badge forge-off" id="forgeBadge">⚪ Forge SD1.5: Desconectado</div>
+      <div class="badge engine-active" id="engineBadge">⚡ Motor: PyTorch UNet (Canónico Activo)</div>
     </div>
   </header>
 
@@ -572,12 +572,14 @@
             <div class="group-title">⚡ Motor de Generación</div>
             <label>Motor:
               <select id="engineSelect" onchange="onEngineChange()">
-                <option value="forge" selected>⚡ Stable Diffusion Forge + LoRA (127.0.0.1:7860) [Recomendado]</option>
-                <option value="pytorch">PyTorch UNet (Motor Antiguo - Obsoleto / No Usar)</option>
+                <option value="pytorch" selected>⚡ PyTorch UNet (Motor Canónico Supervisado + 4 Candados)</option>
               </select>
             </label>
-            <label id="ckptLabel" style="display:none;">Pesos / Checkpoint: <select id="ckptSelect"></select></label>
+            <label id="ckptLabel">Pesos / Checkpoint: <select id="ckptSelect"></select></label>
             <label>Semilla (Seed): <input type="text" id="seedInput" placeholder="Auto / Aleatorio"></label>
+            <div id="engineNotice" style="font-size:11px; color:var(--dim); margin-top:4px;">
+              🔒 4 Candados: Matriz RGB + Molde Canónico + Kornia Edge Loss + Remap Paleta Frontal.
+            </div>
           </div>
 
           <div class="control-group">
@@ -651,6 +653,15 @@
       <div class="animator-layout">
         <aside class="animator-controls">
           <div class="control-group">
+            <div class="group-title">📁 Spritesheet / Personaje</div>
+            <label>Hoja a Reproducir:
+              <select id="animRunSelect" onchange="onAnimRunSelectChange()">
+                <option value="">⚡ Cargando hojas...</option>
+              </select>
+            </label>
+            <div style="font-size:11px; color:var(--dim); margin-top:4px;" id="animRunInfo">Sin hoja cargada</div>
+          </div>
+          <div class="control-group">
             <div class="group-title">🎬 Ciclo de Animación</div>
             <label>Acción:
               <select id="animCycleSelect" onchange="onAnimationCycleChange()">
@@ -682,9 +693,13 @@
             </label>
           </div>
           <div style="display:flex; gap:8px;">
-            <button class="btn btn-secondary" onclick="prevAnimFrame()">⏮️</button>
+            <button class="btn btn-secondary" onclick="prevAnimFrame()" title="Frame Anterior">⏮️</button>
             <button class="btn btn-primary" id="playBtn" onclick="togglePlayPause()">⏸️ Pausar</button>
-            <button class="btn btn-secondary" onclick="nextAnimFrame()">⏭️</button>
+            <button class="btn btn-secondary" onclick="nextAnimFrame()" title="Frame Siguiente">⏭️</button>
+          </div>
+          <div style="margin-top:14px; display:flex; flex-direction:column; gap:6px;">
+            <button class="btn btn-secondary" onclick="switchTab('quality')" style="font-size:11px;">🔍 Abrir en Control de Calidad</button>
+            <button class="btn btn-secondary" onclick="switchTab('studio')" style="font-size:11px;">🎮 Editar en Generador</button>
           </div>
         </aside>
         <section class="animator-viewport">
@@ -716,8 +731,7 @@
               <div style="display:flex; align-items:center; gap:6px;">
                 <label for="trainTargetSelect" style="font-size:11px; color:var(--dim); font-weight:600; margin:0;">Motor:</label>
                 <select id="trainTargetSelect" style="background:var(--bg); color:var(--accent2); border:1px solid var(--accent2); border-radius:4px; padding:5px 8px; font-size:11px; font-weight:600;">
-                  <option value="forge_lora" selected>🌟 LoRA para Forge SD1.5 (Personajes & Estilo)</option>
-                  <option value="pytorch">⚡ PyTorch UNet (Generador Quirúrgico Local)</option>
+                  <option value="pytorch" selected>⚡ PyTorch UNet (Supervisado Pix2Pix + Kornia GPU Edge)</option>
                 </select>
               </div>
               <div style="display:flex; align-items:center; gap:6px;">
@@ -800,7 +814,7 @@
           <!-- CARD 2: Pérdida Actual & Mínima -->
           <div class="monitor-card">
             <div class="card-title">
-              <span>Pérdida Actual (G / LoRA)</span>
+              <span>Pérdida Actual (Generador G-Loss)</span>
               <span id="monLossDelta" class="stat-badge" style="color:#10b981;">0.0% Reducción</span>
             </div>
             <div class="metric-big" style="color:var(--accent);" id="monGloss">--</div>
@@ -818,7 +832,7 @@
             </div>
             <div class="metric-big" style="color:#60a5fa;" id="monLr">1.00e-4</div>
             <div class="metric-sub">
-              <span id="monOptDetails">Rank 16 LoRA | FP16</span>
+              <span id="monOptDetails">AdamW 8-bit | Kornia Edge Loss</span>
               <span id="monGradAccum">Acum: 4 steps</span>
             </div>
           </div>
@@ -879,7 +893,7 @@
               <div style="display:flex; align-items:center; gap:6px;">
                 <label for="chartMetricSelect" style="font-size:11px; color:var(--dim); margin:0;">Métrica:</label>
                 <select id="chartMetricSelect" onchange="renderLossChart()" style="background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:3px 8px; font-size:11px;">
-                  <option value="loss" selected>Pérdida Principal (LoRA / G-Loss)</option>
+                  <option value="loss" selected>Pérdida Principal (Generador G-Loss)</option>
                   <option value="l1">Color L1</option>
                   <option value="temp">Temperatura GPU (°C)</option>
                 </select>
@@ -1149,11 +1163,91 @@
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       const el = document.getElementById('tab-' + tabId);
       if (el) el.classList.add('active');
-      if (tabId === 'monitor') {
-        setTimeout(renderLossChart, 50);
+
+      if (tabId === 'animator') {
+        refreshAnimatorTab();
+      } else if (tabId === 'monitor') {
+        setTimeout(renderLossChart, 60);
       } else if (tabId === 'quality') {
         initQualityTab();
       }
+    }
+
+    function refreshAnimatorTab() {
+      if (qcState.runsList && qcState.runsList.length > 0) {
+        populateAnimRunsSelect();
+      }
+      const animSel = document.getElementById('animRunSelect');
+      if (appState.activeRunDir && animSel) {
+        animSel.value = appState.activeRunDir;
+      }
+      const canvas = document.getElementById('animCanvas');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        drawAnimFrame(ctx);
+      }
+      const infoEl = document.getElementById('animRunInfo');
+      if (infoEl && appState.activeRunDir) {
+        infoEl.textContent = `Hoja: ${appState.activeRunDir.split('/').pop()}`;
+      }
+    }
+
+    function populateAnimRunsSelect() {
+      const sel = document.getElementById('animRunSelect');
+      if (!sel) return;
+      const prevVal = sel.value || appState.activeRunDir;
+      sel.innerHTML = '';
+      if (!qcState.runsList || qcState.runsList.length === 0) {
+        sel.innerHTML = '<option value="">Sin hojas disponibles en output/</option>';
+        return;
+      }
+      qcState.runsList.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.path;
+        const charName = (r.metadata && r.metadata.character) ? r.metadata.character.toUpperCase() : r.run_id;
+        const fmt = (r.metadata && r.metadata.format) ? r.metadata.format : '';
+        const frames = (r.metadata && r.metadata.frames_generated_count) ? `${r.metadata.frames_generated_count}f` : '';
+        opt.textContent = `📁 ${charName} (${fmt}) ${frames}`;
+        sel.appendChild(opt);
+      });
+      if (prevVal && Array.from(sel.options).some(o => o.value === prevVal)) {
+        sel.value = prevVal;
+      } else if (sel.options.length > 0) {
+        sel.selectedIndex = 0;
+        if (!appState.activeRunDir) {
+          loadRunSheet(sel.value);
+        }
+      }
+    }
+
+    function onAnimRunSelectChange() {
+      const sel = document.getElementById('animRunSelect');
+      if (sel && sel.value) {
+        loadRunSheet(sel.value);
+        const qcSel = document.getElementById('qcRunSelect');
+        if (qcSel) qcSel.value = sel.value;
+        const canvas = document.getElementById('animCanvas');
+        if (canvas) drawAnimFrame(canvas.getContext('2d'));
+      }
+    }
+
+    function prevAnimFrame() {
+      appState.animPlaying = false;
+      const playBtn = document.getElementById('playBtn');
+      if (playBtn) playBtn.textContent = '▶️ Reproducir';
+      appState.animFrameIndex = (appState.animFrameIndex > 0) ? appState.animFrameIndex - 1 : 0;
+      const canvas = document.getElementById('animCanvas');
+      if (canvas) drawAnimFrame(canvas.getContext('2d'));
+    }
+
+    function nextAnimFrame() {
+      appState.animPlaying = false;
+      const playBtn = document.getElementById('playBtn');
+      if (playBtn) playBtn.textContent = '▶️ Reproducir';
+      appState.animFrameIndex++;
+      const canvas = document.getElementById('animCanvas');
+      if (canvas) drawAnimFrame(canvas.getContext('2d'));
     }
 
     async function initApp() {
@@ -1164,6 +1258,10 @@
       setGridZoom(0.6);
       initLossChart();
       onEngineChange();
+      await refreshQualityRunsList();
+      if (qcState.runsList && qcState.runsList.length > 0 && !appState.activeRunDir) {
+        loadRunSheet(qcState.runsList[0].path);
+      }
       startStatusPolling();
       startAnimationLoop();
     }
@@ -1189,14 +1287,10 @@
           warnBanner.style.display = 'none';
         }
 
-        appState.forgeConnected = !!data.forge_connected;
-        const fBadge = document.getElementById('forgeBadge');
-        if (data.forge_connected) {
-          fBadge.className = "badge forge-on";
-          fBadge.textContent = `🟢 Forge SD1.5 Activo`;
-        } else {
-          fBadge.className = "badge forge-off";
-          fBadge.textContent = "⚪ Forge Desconectado";
+        const eBadge = document.getElementById('engineBadge');
+        if (eBadge) {
+          eBadge.className = "badge engine-active";
+          eBadge.textContent = `⚡ Motor: PyTorch UNet (Supervisado Activo)`;
         }
 
         populateCheckpoints(data.checkpoints);
@@ -1308,16 +1402,8 @@
     }
 
         function onEngineChange() {
-      const eng = document.getElementById('engineSelect').value;
       const ckptLabel = document.getElementById('ckptLabel');
-      if (eng === 'forge') {
-        if (ckptLabel) ckptLabel.style.display = 'none';
-        if (!appState.forgeConnected) {
-          alert("ℹ️ Has seleccionado Stable Diffusion Forge.\nActualmente Forge figura DESCONECTADO en http://127.0.0.1:7860.\n\nSi deseas generar con Forge, inicia el WebUI de Forge.\nSi deseas generar de inmediato de forma 100% local, selecciona 'PyTorch UNet (Motor Local Propio)'.");
-        }
-      } else {
-        if (ckptLabel) ckptLabel.style.display = 'flex';
-      }
+      if (ckptLabel) ckptLabel.style.display = 'flex';
     }
 
     function onFormatChange() {
@@ -1413,11 +1499,7 @@
     }
 
     async function startGeneration(mode) {
-      const engine = document.getElementById('engineSelect').value;
-      if (engine === 'forge' && !appState.forgeConnected) {
-        alert("⚠️ El motor Forge SD1.5 no está disponible porque figura desconectado en http://127.0.0.1:7860.\n\nPor favor cambia el motor a 'PyTorch UNet (Motor Local Propio)' para generar con tu modelo local.");
-        return;
-      }
+      const engine = document.getElementById('engineSelect').value || 'pytorch';
       const charSel = document.getElementById('charSelect');
       const charName = (appState.selectedChar && appState.selectedChar.name) || (charSel ? charSel.value : '');
       if (!charName) {
@@ -2702,7 +2784,7 @@
           tBadge.className = 'badge train-active';
           tBadge.style.background = '';
           tBadge.style.color = '';
-          const mName = (info.phase_id === 4 || (info.phase && info.phase.includes('LoRA'))) ? 'LoRA Forge' : 'PyTorch UNet';
+          const mName = 'PyTorch UNet';
           tBadge.textContent = `⚙️ Aprendiendo ${mName} (${ep}/${totEp})`;
         }
         if (btnStart) btnStart.disabled = true;
@@ -2755,7 +2837,7 @@
         if (btnStop) btnStop.disabled = true;
       } else if (status === 'COMPLETADO') {
         if (tBadge) {
-          tBadge.className = 'badge forge-on';
+          tBadge.className = 'badge engine-active';
           tBadge.style.background = '';
           tBadge.style.color = '';
           tBadge.textContent = `✅ Modelo Entrenado (${ep} Épocas)`;
@@ -2800,10 +2882,10 @@
         alert('Por favor selecciona una época válida en el desplegable de Respawn.');
         return;
       }
-      if (!confirm(¿Confirmas volver en el tiempo a la Época ? El entrenamiento continuará desde ese punto exacto descartando épocas posteriores.)) {
+      if (!confirm(`¿Confirmas volver en el tiempo a la Época ${epVal}? El entrenamiento continuará desde ese punto exacto descartando épocas posteriores.`)) {
         return;
       }
-      if (feedback) feedback.textContent = ⏳ Ejecutando Respawn hacia la Época ...;
+      if (feedback) feedback.textContent = `⏳ Ejecutando Respawn hacia la Época ${epVal}...`;
       try {
         const res = await fetch('/api/train/respawn', {
           method: 'POST',
@@ -2828,7 +2910,7 @@
       const epochsEl = document.getElementById('trainEpochsSelect');
       const targetEl = document.getElementById('trainTargetSelect');
       const epochs = epochsEl ? parseInt(epochsEl.value, 10) : 50;
-      const targetEngine = targetEl ? targetEl.value : 'forge_lora';
+      const targetEngine = targetEl ? targetEl.value : 'pytorch';
 
       const setFeedback = (msg, isErr = false) => {
         if (feedback) {

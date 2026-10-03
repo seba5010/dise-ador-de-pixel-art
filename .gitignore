@@ -37,3 +37,6 @@ __pycache__/
 
 # WebUI Forge externa
 stable-diffusion-webui-forge-main/
+
+# Backups temporales
+*.bak
