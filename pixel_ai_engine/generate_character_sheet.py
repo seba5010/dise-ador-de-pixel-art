@@ -97,7 +97,7 @@ def generate_spritesheet(input_image_path: Path,
                          output_image_path: Optional[Path] = None,
                          template_path: Optional[Path] = None,
                          alpha_threshold: int = 60,
-                         phase: Optional[str] = None,
+                         phase: Optional[str] = "2",
                          export_unity_meta: bool = False) -> Path:
     
     input_image_path = resolve_character_input(str(input_image_path))
@@ -235,7 +235,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", "-c", type=str, default=str(CHECKPOINT_DIR / "best_generator.pt"), help="Ruta al checkpoint del generador (.pt)")
     parser.add_argument("--output", "-o", type=str, default=None, help="Ruta de salida para la hoja de sprites generada")
     parser.add_argument("--template", "-t", type=str, default=None, help="Ruta a plantilla personalizada (opcional)")
-    parser.add_argument("--phase", "-p", type=str, default=None, choices=["1", "2"], help="Fase / Formato: '2' para 8x12 (96 frames, por defecto), '1' para 16x4 (64 frames)")
+    parser.add_argument("--phase", "-p", type=str, default="2", choices=["1", "2"], help="Fase / Formato: '2' para 8x12 (96 frames, por defecto), '1' para 16x4 (64 frames)")
     parser.add_argument("--alpha-threshold", type=int, default=60, help="Umbral de recorte alfa para pixel art (0-255)")
     args = parser.parse_args()
 

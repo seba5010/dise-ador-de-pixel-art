@@ -16,6 +16,8 @@ system/
 webui_forge_cu121_torch231/
 
 # Checkpoints y caches masivos (> 100MB)
+*.pt
+**/dataset_supervisado/*.pt
 **/dataset_cache_*.pt
 **/latest_checkpoint*.pt
 **/checkpoints/*.pt

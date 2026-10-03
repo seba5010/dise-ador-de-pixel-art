@@ -371,7 +371,7 @@ def train(epochs: int = EPOCHS,
           lr_g: float = LEARNING_RATE_G,
           lr_d: float = LEARNING_RATE_D,
           infinite: bool = False,
-          phase: str = "1",
+          phase: str = "2",
           transfer_from: Optional[str] = None):
     """
     Ciclo de entrenamiento principal con soporte de 2 Fases (Transfer Learning).
@@ -679,7 +679,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Tamaño del batch")
     parser.add_argument("--resume", action="store_true", help="Reanudar desde último checkpoint de la fase")
     parser.add_argument("--infinite", action="store_true", help="Modo infinito: entrena sin límite hasta Ctrl+C")
-    parser.add_argument("--phase", type=str, default="1", choices=["1", "2", "16x4", "8x12"], help="Fase: 1 (base 16x4) o 2 (transferencia 8x12)")
+    parser.add_argument("--phase", type=str, default="2", choices=["1", "2", "16x4", "8x12"], help="Fase: 1 (base 16x4) o 2 (transferencia 8x12)")
     parser.add_argument("--transfer", type=str, default="", help="Ruta al checkpoint de Fase 1 para transferir pesos a Fase 2")
     args = parser.parse_args()
     

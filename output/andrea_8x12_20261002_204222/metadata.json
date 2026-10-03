@@ -1,0 +1,14 @@
+{
+  "character": "andrea",
+  "front_image": "D:\\escritorio\\diseñador de pixel art\\personajes\\andrea\\andrea_rnormal.png",
+  "engine": "pytorch",
+  "format": "8x12",
+  "checkpoint": "D:\\escritorio\\diseñador de pixel art\\checkpoints\\latest_checkpoint.pt",
+  "mode": "test_4poses",
+  "seed": null,
+  "timestamp": "2026-10-02 20:42:23",
+  "total_frames_expected": 96,
+  "frames_generated_count": 4,
+  "is_complete": false,
+  "is_draft": true
+}

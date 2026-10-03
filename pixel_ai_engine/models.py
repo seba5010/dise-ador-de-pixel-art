@@ -476,6 +476,28 @@ class FacialExpressionLoss(nn.Module):
         return face_l1 * 10.0 + face_edge * 12.0
 
 
+class SilhouetteAlignmentLoss(nn.Module):
+    """
+    Perdida de alineacion de silueta y molde (IoU + L1).
+    Obliga a que la silueta generada calce milimetricamente con el cuerpo objetivo y el molde,
+    eliminando amputaciones, extremidades fantasma y desbordes fuera de la figura (resolviendo la desviacion IoU).
+    Totalmente seguro con FP16 AMP.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred_rgba: torch.Tensor, target_rgba: torch.Tensor) -> torch.Tensor:
+        p_alpha = ((pred_rgba[:, 3:4].float() + 1.0) * 0.5).clamp(0.0, 1.0)
+        t_alpha = ((target_rgba[:, 3:4].float() + 1.0) * 0.5).clamp(0.0, 1.0)
+        
+        l1_mask = F.l1_loss(p_alpha, t_alpha)
+        intersection = torch.sum(p_alpha * t_alpha, dim=[1, 2, 3])
+        union = torch.sum(p_alpha + t_alpha, dim=[1, 2, 3]) - intersection
+        iou = (intersection + 1e-6) / (union + 1e-6)
+        iou_loss = torch.mean(1.0 - iou)
+        return l1_mask * 5.0 + iou_loss * 10.0
+
+
 class FocalColorDefectLoss(nn.Module):
     """
     Penaliza fuertemente y de forma cuadrática los píxeles del cuerpo donde el desvío de color
@@ -515,7 +537,8 @@ class PixelArtLoss(nn.Module):
                  lambda_discrete: float = 12.0,
                  lambda_shoes: float = 6.0,
                  lambda_face: float = 8.0,
-                 lambda_focal_defect: float = 18.0):
+                 lambda_focal_defect: float = 18.0,
+                 lambda_silhouette: float = 12.0):
         super().__init__()
         self.lambda_l1 = lambda_l1
         self.lambda_edge = lambda_edge
@@ -529,6 +552,7 @@ class PixelArtLoss(nn.Module):
         self.lambda_shoes = lambda_shoes
         self.lambda_face = lambda_face
         self.lambda_focal_defect = lambda_focal_defect
+        self.lambda_silhouette = lambda_silhouette
         
         self.edge_loss_fn = SobelEdgeLoss()
         self.detail_loss_fn = LaplacianMicroDetailLoss()
@@ -539,6 +563,7 @@ class PixelArtLoss(nn.Module):
         self.shoe_grounding_fn = ShoeGroundingLoss()
         self.facial_fn = FacialExpressionLoss()
         self.focal_defect_fn = FocalColorDefectLoss()
+        self.silhouette_fn = SilhouetteAlignmentLoss()
 
         try:
             self.vgg_loss_fn = VGGPerceptualLoss()
@@ -600,6 +625,9 @@ class PixelArtLoss(nn.Module):
         # 12. Castigo Focal Cuadrático a Píxeles Defectuosos del Cuerpo (>35 RGB)
         loss_focal_defect = self.focal_defect_fn(fake_sprites, real_sprites)
             
+                # 13. Alineacion Milimetrica de Silueta con el Molde (IoU + BCE)
+        loss_silhouette = self.silhouette_fn(fake_sprites, real_sprites)
+
         total_g_loss = (
             self.lambda_adv * loss_adv +
             self.lambda_l1 * loss_l1 +
@@ -612,7 +640,8 @@ class PixelArtLoss(nn.Module):
             self.lambda_discrete * loss_discrete +
             self.lambda_shoes * loss_shoes +
             self.lambda_face * loss_face +
-            self.lambda_focal_defect * loss_focal_defect
+            self.lambda_focal_defect * loss_focal_defect +
+            self.lambda_silhouette * loss_silhouette
         )
         
         metrics = {
@@ -628,7 +657,8 @@ class PixelArtLoss(nn.Module):
             "g_discrete": loss_discrete.item(),
             "g_shoes": loss_shoes.item(),
             "g_face": loss_face.item(),
-            "g_focal_defect": loss_focal_defect.item()
+            "g_focal_defect": loss_focal_defect.item(),
+            "g_silhouette": loss_silhouette.item()
         }
         return total_g_loss, metrics
 

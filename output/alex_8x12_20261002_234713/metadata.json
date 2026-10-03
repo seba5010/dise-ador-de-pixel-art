@@ -1,0 +1,14 @@
+{
+  "character": "alex",
+  "front_image": "D:\\escritorio\\diseñador de pixel art\\personajes\\alex\\alex_rnormal.png",
+  "engine": "pytorch",
+  "format": "8x12",
+  "checkpoint": "D:\\escritorio\\diseñador de pixel art\\checkpoints\\best_generator.pt",
+  "mode": "single_frame",
+  "seed": null,
+  "timestamp": "2026-10-02 23:47:35",
+  "total_frames_expected": 96,
+  "frames_generated_count": 4,
+  "is_complete": false,
+  "is_draft": true
+}
