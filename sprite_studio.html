@@ -1174,9 +1174,7 @@
     }
 
     function refreshAnimatorTab() {
-      if (qcState.runsList && qcState.runsList.length > 0) {
-        populateAnimRunsSelect();
-      }
+      populateAnimRunsSelect();
       const animSel = document.getElementById('animRunSelect');
       if (appState.activeRunDir && animSel) {
         animSel.value = appState.activeRunDir;
@@ -1748,7 +1746,11 @@
           setTimeout(() => { btn.innerHTML = '⚡ Auditar Ahora'; btn.disabled = false; }, 1200);
         }
       } catch (err) {
-        console.error("Error en auditoria:", err);
+        if (targetDir === 'auto' || targetDir === 'latest') {
+          console.info("Info: Sin hojas previas para auditar en output/");
+        } else {
+          console.error("Error en auditoria:", err);
+        }
         const title = document.getElementById('qcVerdictTitle');
         const desc = document.getElementById('qcVerdictDesc');
         if (title) title.textContent = "SIN DATOS DE AUDITORÍA";
