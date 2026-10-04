@@ -40,7 +40,7 @@ def _environment_flag(name: str, default: bool) -> bool:
 
 
 ENABLE_QUALITY_GUIDANCE = _environment_flag("PIXEL_AI_ENABLE_QUALITY_GUIDANCE", True)
-ENABLE_SMART_SAMPLING = False
+ENABLE_SMART_SAMPLING = _environment_flag("PIXEL_AI_ENABLE_SMART_SAMPLING", True)
 ENABLE_ADAPTIVE_LOSS = False
 ENABLE_QUALITY_CHECKPOINT = False
 

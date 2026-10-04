@@ -2,8 +2,10 @@ import json
 import time
 
 import torch
+from torch.utils.data import WeightedRandomSampler
 
 from pixel_ai_engine import train_supervised
+from pixel_ai_engine.quality_guidance import SamplingPlan
 
 
 def _telemetry():
@@ -179,6 +181,95 @@ def test_frame_quality_batch_is_per_sample_and_detached_from_training_graph():
     assert measurements[0]["quality"] == 100.0
     assert measurements[1]["quality"] < measurements[0]["quality"]
     assert predictions.grad is None
+
+
+def test_active_sampling_plan_uses_weighted_sampler_and_is_persisted():
+    dataset = torch.utils.data.TensorDataset(torch.arange(3))
+    plan = SamplingPlan(
+        active=True,
+        reason="hard_example_sampling_active",
+        weights=(2.0, 1.0, 1.5),
+        sample_keys=("hero:0", "hero:1", "hero:2"),
+        eligible_frames=3,
+        hard_frames=2,
+        min_weight=1.0,
+        max_weight=2.0,
+        effective_sample_size=2.7931,
+    )
+
+    loader = train_supervised._build_training_dataloader(dataset, 1, plan)
+    status = train_supervised._attach_sampling_plan(
+        {"epoch": 4, "history": [], "guidance_state": {}, "guidance": {"action": "CONTINUE"}},
+        plan,
+    )
+
+    assert isinstance(loader.sampler, WeightedRandomSampler)
+    assert status["guidance"]["action"] == "ADJUST_SAMPLING"
+    assert status["guidance"]["training_modified"] is True
+    assert status["guidance_state"]["sampling_weights"] == {"hero:0": 2.0, "hero:2": 1.5}
+    assert status["sampling"]["max_weight"] == 2.0
+    assert status["sampling"]["ab"]["quality_improvement_claimed"] is False
+
+
+def test_inactive_sampling_plan_keeps_random_sampler():
+    dataset = torch.utils.data.TensorDataset(torch.arange(2))
+    plan = SamplingPlan(
+        active=False,
+        reason="feature_disabled",
+        weights=(1.0, 1.0),
+        sample_keys=("hero:0", "hero:1"),
+        eligible_frames=0,
+        hard_frames=0,
+        min_weight=1.0,
+        max_weight=1.0,
+        effective_sample_size=2.0,
+    )
+
+    loader = train_supervised._build_training_dataloader(dataset, 1, plan)
+
+    assert not isinstance(loader.sampler, WeightedRandomSampler)
+
+
+def test_guidance_runtime_frame_state_reaches_checkpoint(monkeypatch, tmp_path):
+    _configure_status_test(monkeypatch, tmp_path)
+    frame_state = {
+        "hero:2": {
+            "char_id": "hero",
+            "frame_idx": 2,
+            "quality": 42.0,
+            "confidence": 1.0,
+            "observations": 3,
+            "last_epoch": 5,
+        }
+    }
+    train_supervised.update_status(
+        1,
+        2,
+        "ENTRENANDO",
+        1.0,
+        0.5,
+        0.2,
+        0.1,
+        time.time(),
+        quality=_quality(60),
+        guidance_runtime={"frame_quality": frame_state},
+    )
+    checkpoint_file = tmp_path / "runtime-checkpoint.pt"
+    train_supervised.save_checkpoint(
+        checkpoint_file,
+        1,
+        1.0,
+        1.0,
+        torch.nn.Linear(1, 1),
+        torch.nn.Linear(1, 1),
+    )
+
+    payload = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
+    restored = payload["guidance_state"]["frame_quality"]["hero:2"]
+    assert restored["quality"] == 42.0
+    assert restored["confidence"] == 1.0
+    assert restored["observations"] == 3
+    assert restored["last_epoch"] == 5
 
 
 def test_monitor_reads_new_guidance_contract():

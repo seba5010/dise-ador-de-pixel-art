@@ -11,7 +11,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from typing import Any, Optional, Dict
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torch.cuda.amp import autocast, GradScaler
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -34,7 +34,12 @@ from pixel_ai_engine.dataset import place_in_cell
 from pixel_ai_engine.enhancer import PixelArtEnhancer
 from pixel_ai_engine.quality_guidance import (
     ENABLE_QUALITY_GUIDANCE,
+    ENABLE_SMART_SAMPLING,
+    FrameQualityTracker,
+    HardExampleMiningPolicy,
     QualityGuidanceController,
+    SamplingPlan,
+    compare_sampling_ab,
 )
 from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette, clean_orphan_pixels
 from pixel_ai_engine.training_recovery import (
@@ -94,6 +99,83 @@ def _evaluate_observational_guidance(
         epoch=epoch,
     )
     return decision, controller.export_state()
+
+
+def _dataset_sample_descriptors(dataset: Any) -> list[Dict[str, Any]]:
+    samples = getattr(dataset, "samples", None)
+    if isinstance(samples, list):
+        return [
+            {
+                "char_id": sample.get("char_id", "unknown"),
+                "frame_idx": sample.get("frame_idx", index),
+            }
+            for index, sample in enumerate(samples)
+            if isinstance(sample, dict)
+        ]
+    return [{"char_id": "unknown", "frame_idx": index} for index in range(len(dataset))]
+
+
+def _build_sampling_plan(
+    dataset: Any,
+    frame_quality: Optional[Dict[str, Any]],
+    guidance: Optional[Dict[str, Any]],
+) -> SamplingPlan:
+    recommendation = "CONTINUE"
+    if isinstance(guidance, dict):
+        recommendation = str(guidance.get("recommended_action", "CONTINUE"))
+    return HardExampleMiningPolicy().build_plan(
+        _dataset_sample_descriptors(dataset),
+        frame_quality,
+        enabled=bool(ENABLE_QUALITY_GUIDANCE and ENABLE_SMART_SAMPLING),
+        recommendation=recommendation,
+    )
+
+
+def _build_training_dataloader(dataset: Dataset, batch_size: int, plan: SamplingPlan) -> DataLoader:
+    if plan.active and len(plan.weights) == len(dataset):
+        sampler = WeightedRandomSampler(
+            weights=torch.as_tensor(plan.weights, dtype=torch.double),
+            num_samples=len(dataset),
+            replacement=True,
+        )
+        return DataLoader(dataset, batch_size=batch_size, sampler=sampler, shuffle=False, drop_last=True)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+
+
+def _attach_sampling_plan(status_data: Dict[str, Any], plan: SamplingPlan) -> Dict[str, Any]:
+    data = dict(status_data)
+    plan_payload = plan.to_dict()
+    summary = {key: value for key, value in plan_payload.items() if key not in {"weights", "sample_keys"}}
+    summary["ab"] = compare_sampling_ab(plan)
+    weights = {
+        key: weight
+        for key, weight in zip(plan.sample_keys, plan.weights)
+        if weight > 1.0
+    }
+    guidance_state = dict(data.get("guidance_state", {}))
+    guidance_state["sampling_weights"] = weights
+    guidance_state["sampling_plan"] = summary
+    data["guidance_state"] = guidance_state
+    data["sampling"] = summary
+
+    guidance = data.get("guidance")
+    if isinstance(guidance, dict):
+        guidance = dict(guidance)
+        guidance["sampling_change"] = summary
+        if plan.active:
+            guidance["action"] = "ADJUST_SAMPLING"
+            guidance["training_modified"] = True
+        data["guidance"] = guidance
+        data["quality_guidance"] = guidance
+        for entry in data.get("history", []):
+            if isinstance(entry, dict) and entry.get("epoch") == data.get("epoch"):
+                entry["guidance"] = guidance
+                entry["quality_guidance"] = guidance
+        decisions = guidance_state.get("decision_history")
+        if isinstance(decisions, list) and decisions:
+            decisions[-1] = dict(decisions[-1])
+            decisions[-1]["sampling_change"] = summary
+    return data
 
 
 def _guidance_state_from_checkpoint(
@@ -590,7 +672,7 @@ def get_available_snapshots():
                 pass
     return snaps
 
-def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None):
+def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None, guidance_runtime=None):
     elapsed = round(time.time() - start_time, 1)
     history = []
     past_eras = []
@@ -717,6 +799,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     fps = round(1008.0 / max(0.1, sec_per_epoch), 2) if sec_per_epoch > 0 else 0.0
 
     resolved_quality = quality if isinstance(quality, dict) and quality else prev_quality
+    if isinstance(guidance_runtime, dict):
+        guidance_state = {**guidance_state, **guidance_runtime}
     quality_guidance = prev_guidance if isinstance(prev_guidance, dict) else None
     if not ENABLE_QUALITY_GUIDANCE:
         quality_guidance = _disabled_guidance()
@@ -1101,7 +1185,13 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         )
 
     dataset = SupervisedTensorDataset(CACHE_PATH, augment=True)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    starting_guidance_state = status_at_start.get("guidance_state", {}) if isinstance(status_at_start.get("guidance_state"), dict) else {}
+    frame_quality_tracker = FrameQualityTracker(starting_guidance_state.get("frame_quality", {}))
+    current_sampling_plan = _build_sampling_plan(
+        dataset,
+        frame_quality_tracker.export(),
+        status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
+    )
 
     from pixel_ai_engine.dataset import TemplateManager
     tmpl_path = PROJECT_ROOT / "dataset_moldes" / "plantilla de los spritesheets.png"
@@ -1228,6 +1318,21 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             persisted_status = load_status_file(STATUS_FILE)
             persisted_status["guidance_state"] = restored_guidance_state
             write_status_file(STATUS_FILE, persisted_status)
+
+    # Rebuild runtime controllers after checkpoint metadata restoration.  This
+    # keeps status-only, modern checkpoint and legacy checkpoint resumes
+    # behaviorally equivalent.
+    restored_runtime_state = (
+        status_at_start.get("guidance_state", {})
+        if isinstance(status_at_start.get("guidance_state"), dict)
+        else {}
+    )
+    frame_quality_tracker = FrameQualityTracker(restored_runtime_state.get("frame_quality", {}))
+    current_sampling_plan = _build_sampling_plan(
+        dataset,
+        frame_quality_tracker.export(),
+        status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
+    )
 
     # Recuperar best_loss de best_generator.pt para archivos antiguos compatibles
     if mode != "start" and (best_loss is None or (isinstance(best_loss, (int, float)) and best_loss >= 990.0)):
@@ -1367,6 +1472,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         epoch_start_time = time.time()
         previous_epoch_metrics = (avg_g, avg_d, avg_l1, avg_edge)
         current_lr = float(opt_g.param_groups[0].get("lr", effective_lr))
+        dataloader = _build_training_dataloader(dataset, batch_size, current_sampling_plan)
         if PAUSE_FLAG_FILE.exists():
             print("\n[PAUSA] Senal de pausa previa a la epoca recibida. Guardando checkpoint...")
             try: PAUSE_FLAG_FILE.unlink()
@@ -1390,7 +1496,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         epoch_l1 = 0.0
         epoch_edge = 0.0
 
-        for batch_i, (fronts, f_indices, targets, _) in enumerate(dataloader):
+        for batch_i, (fronts, f_indices, targets, char_ids) in enumerate(dataloader):
             # Pequeño desahogo cooperativo para que el sistema operativo, VS Code y el navegador no se congelen
             if batch_i % 10 == 0:
                 time.sleep(0.002)
@@ -1443,6 +1549,11 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                                   error_details={"epoch": epoch, "batch": batch_i, "metric": c_name, "error": diag},
                                   skipped_amp=skipped_amp_g + skipped_amp_d)
                     return
+
+            frame_quality_tracker.update_many(
+                compute_frame_quality_batch(preds, targets, f_indices, char_ids),
+                epoch=epoch,
+            )
 
             scaler_g.scale(total_g).backward()
             scaler_g.unscale_(opt_g)
@@ -1574,7 +1685,29 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             return
 
         # La epoca es sana: actualizar estado y avanzar schedulers antes de serializarlos.
-        published_status = update_status(epoch, total_target_epochs, "ENTRENANDO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration, quality=last_qc)
+        published_status = update_status(
+            epoch,
+            total_target_epochs,
+            "ENTRENANDO",
+            avg_g,
+            avg_d,
+            avg_l1,
+            avg_edge,
+            start_time,
+            current_lr,
+            skipped_amp=skipped_amp_g + skipped_amp_d,
+            epoch_duration=epoch_duration,
+            quality=last_qc,
+            guidance_runtime={"frame_quality": frame_quality_tracker.export()},
+        )
+        next_sampling_plan = _build_sampling_plan(
+            dataset,
+            frame_quality_tracker.export(),
+            published_status.get("guidance"),
+        )
+        published_status = _attach_sampling_plan(published_status, next_sampling_plan)
+        write_status_file(STATUS_FILE, published_status)
+        current_sampling_plan = next_sampling_plan
         _print_quality_guidance(published_status.get("guidance"))
         scheduler_g.step()
         scheduler_d.step()

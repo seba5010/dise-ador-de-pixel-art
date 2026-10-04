@@ -4,9 +4,9 @@
 
 Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
 
-Incremento actual: Incremento 1 — COMPLETADO; Incremento 2 no iniciado
+Incremento actual: Incremento 2 — COMPLETADO; Incremento 3 pendiente
 
-Sprint actual: Ninguno (detenido tras Increment Review)
+Sprint actual: Ninguno (Increment Review aprobado)
 
 Última fase validada: Incremento 1 — Quality Guidance Observacional
 
@@ -16,13 +16,13 @@ Bloqueos: Ninguno. El árbol de trabajo contiene cambios y datasets previos del 
 
 Último checkpoint compatible: verificado en smoke CPU; checkpoints nuevos persisten Guidance y checkpoints antiguos cargan sin el campo.
 
-Último commit validado: `83b758e41` (usar `HEAD` para el documento maestro vigente)
+Último commit validado: `e6e88afa6`
 
 Última actualización: 2026-10-04
 
 Branch: `main`
 
-Estado general: INCREMENTO 1 COMPLETADO — DETENIDO ANTES DEL INCREMENTO 2
+Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado por el usuario
 
 ---
 
@@ -30,7 +30,8 @@ Estado general: INCREMENTO 1 COMPLETADO — DETENIDO ANTES DEL INCREMENTO 2
 
 - [x] INCREMENTO 1 — Quality Guidance Observacional — COMPLETADO
   - Evidencia: Increment Review aprobado; 53 tests PASS; commits `24369376f`, `2357b5e88`, `9c93ab6fa`, `f7d1a72b3`, `83b758e41`.
-- [ ] INCREMENTO 2 — Smart Reinforcement — PENDIENTE
+- [x] INCREMENTO 2 — Smart Reinforcement — COMPLETADO
+  - Evidencia: seguimiento por frame, sampling 1.0–2.0, persistencia, A/B determinista y 63 tests PASS.
 - [ ] INCREMENTO 3 — Adaptive Loss — PENDIENTE
 - [ ] INCREMENTO 4 — Guidance + Recovery — PENDIENTE
 - [ ] INCREMENTO 5 — Anatomical Guidance — PENDIENTE
@@ -326,49 +327,146 @@ Estado del Incremento: COMPLETADO
 
 ---
 
-# INCREMENTOS FUTUROS
+# INCREMENTOS 2–6
 
 ## INCREMENTO 2 — SMART REINFORCEMENT
 
-- [ ] Métricas confiables por frame
-- [ ] Hard example mining con pesos acotados
-- [ ] Feature flag de sampling adaptativo
-- [ ] Protección contra dominación de pocos frames
-- [ ] Comparación A/B contra baseline
-- [ ] Persistencia y reanudación de sampling
-- [ ] Tests y revisión formal
+Objetivo: activar únicamente sampling adaptativo dirigido, sin modificar losses ni LR.
+
+### Sprint 1 — Métricas por frame
+
+- [x] Definir contrato `frame_quality`
+  - Evidencia: `FrameQualityTracker`; commit `4a4e21ccb`.
+- [x] Calcular score por muestra sin perder `char_id`/`frame_idx`
+  - Evidencia: `compute_frame_quality_batch`; test per-sample PASS.
+- [x] Agregar confiabilidad y mínimo de observaciones
+  - Evidencia: tracker y política rechazan señales insuficientes; tests PASS.
+- [x] Persistir métricas por frame
+  - Evidencia: round-trip dentro de `guidance_state`; test PASS.
+- [x] Añadir tests unitarios e integración
+  - Evidencia: 34 tests Guidance/integración PASS.
+- [x] Ejecutar Sprint Review
+  - Resultado: APROBADO; regresiones dirigidas 11/11 PASS; no se activó sampling durante este Sprint.
+
+### Sprint 2 — Hard example mining
+
+- [x] Crear pesos acotados 1.0–2.0
+- [x] Evitar dominación permanente con mezcla uniforme
+- [x] Activar `WeightedRandomSampler` mediante feature flag
+- [x] Persistir/restaurar sampling weights
+- [x] No modificar loss ni LR
+- [x] Añadir tests y ejecutar Sprint Review
+  - Resultado: APROBADO; sampler ponderado sólo activo ante `REINFORCE`, pesos máximos 2.0 y fallback uniforme.
+
+### Sprint 3 — Comparación A/B
+
+- [x] Crear reporte baseline vs sampling
+- [x] Comparar distribución, cobertura y estabilidad
+- [x] Verificar fallback cuando no hay métricas confiables
+- [x] Ejecutar suite completa
+- [x] Ejecutar Increment Review
+  - Resultado: APROBADO; 63 tests del proyecto PASS. El reporte A/B es determinista y no afirma mejora de calidad sin una corrida controlada.
 
 ## INCREMENTO 3 — ADAPTIVE LOSS
 
-- [ ] Multiplicadores acotados sobre losses base
-- [ ] Una intervención atribuible por vez
-- [ ] Registro explícito de multiplicadores
-- [ ] Restauración de valores base
-- [ ] Comparación A/B
-- [ ] Tests y revisión formal
+Objetivo: aplicar una sola corrección diferenciable atribuible y acotada por intervención.
+
+### Sprint 1 — Capa de multiplicadores
+
+- [ ] Crear `LossMultiplierController`
+- [ ] Definir límites y paso gradual
+- [ ] Mantener valores base intactos
+- [ ] Añadir tests unitarios
+
+### Sprint 2 — Integración y persistencia
+
+- [ ] Aplicar multiplicadores efectivos en `total_g`
+- [ ] Registrar valores efectivos por época
+- [ ] Persistir/restaurar en checkpoint
+- [ ] Feature flag y restauración neutral
+- [ ] Tests de integración
+
+### Sprint 3 — A/B y revisión
+
+- [ ] Comparar baseline vs multiplicadores
+- [ ] Verificar finitud/NaN/AMP
+- [ ] Ejecutar suite completa e Increment Review
 
 ## INCREMENTO 4 — GUIDANCE + RECOVERY
 
-- [ ] Jerarquía Guidance/Recovery sin reemplazar detector actual
-- [ ] Cooldown y máximo de intervenciones
-- [ ] Rollback por degradación sostenida
-- [ ] Persistencia completa de `guidance_state`
-- [ ] Compatibilidad con checkpoints antiguos
-- [ ] Tests y revisión formal
+Objetivo: permitir acciones seguras respetando que TrainingRecovery conserva autoridad sobre fallos críticos.
+
+### Sprint 1 — Política de intervención
+
+- [ ] Jerarquía CONTINUE/REINFORCE/ADJUST/RECOVERY/ROLLBACK/STOP
+- [ ] Cooldown y máximo consecutivo
+- [ ] Una intervención atribuible por vez
+- [ ] Tests de límites
+
+### Sprint 2 — Recovery y rollback
+
+- [ ] Complementar detector existente sin reemplazarlo
+- [ ] Rollback por regresión sostenida confirmada
+- [ ] Restaurar parámetros base al empeorar
+- [ ] Mantener ERROR_NAN como autoridad existente
+- [ ] Tests de rollback
+
+### Sprint 3 — Persistencia y revisión
+
+- [ ] Persistencia completa y checkpoints antiguos
+- [ ] Pruebas pausa/cierre/reanudación
+- [ ] Suite completa e Increment Review
 
 ## INCREMENTO 5 — ANATOMICAL GUIDANCE
 
-- [ ] Métricas geométricas de cuerpo, centro, pies, silueta y pose
-- [ ] Observación validada antes de loss diferenciable
-- [ ] Calibración con datos reales
-- [ ] Tests y revisión formal
+Objetivo: medir geometría corporal de forma explícita y evaluar una loss de silueta separada.
+
+### Sprint 1 — Métricas geométricas
+
+- [ ] `body_height_ratio`, `body_width_ratio`, `center_offset_x`
+- [ ] `foot_anchor_error`, `silhouette_iou`, `pose_alignment`
+- [ ] `body_proportion_error`
+- [ ] Tests con máscaras sintéticas
+
+### Sprint 2 — Integración observacional
+
+- [ ] Integrar métricas al QualityVector
+- [ ] Persistir y mostrar en monitor
+- [ ] Calibrar sobre ejemplos reales/sintéticos
+- [ ] Tests de integración
+
+### Sprint 3 — Loss diferenciable experimental
+
+- [ ] Implementar loss de silueta tensorial bajo feature flag
+- [ ] Confirmar gradiente y finitud
+- [ ] Mantenerla desactivada por defecto hasta A/B
+- [ ] Suite completa e Increment Review
 
 ## INCREMENTO 6 — CRITICAL DETAIL GUIDANCE
 
-- [ ] Extraer solo métricas no destructivas de `Phase3CriticalReviewer`
-- [ ] Integrar borde, tinta, sombra, paleta y rostro al vector
-- [ ] No transformar ground truth automáticamente
-- [ ] Tests y revisión formal
+Objetivo: integrar métricas críticas no destructivas y cerrar comparación entre eras/checkpoints de calidad.
+
+### Sprint 1 — Métricas críticas
+
+- [ ] Extraer auditoría pura sin `elevate_frame`
+- [ ] Integrar borde, tinta, sombra, paleta y rostro
+- [ ] Verificar que ground truth no se transforma
+- [ ] Tests unitarios
+
+### Sprint 2 — Eras y quality checkpoint
+
+- [ ] Completar resumen de calidad entre eras
+- [ ] Crear `best_quality_generator.pt` sin reemplazar `best_generator.pt`
+- [ ] Feature flag y criterio compuesto con mínimos críticos
+- [ ] Persistencia y compatibilidad
+
+### Sprint 3 — Observabilidad y cierre
+
+- [ ] Mostrar detalle crítico y comparación de eras
+- [ ] Ejecutar pruebas A/B deterministas disponibles
+- [ ] Suite completa
+- [ ] Auditoría final de checklist
+- [ ] Increment Review final
 
 ---
 
