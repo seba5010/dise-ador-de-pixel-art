@@ -3,7 +3,7 @@
   "total_epochs": 100,
   "phase": "Supervisado Pix2Pix + Kornia GPU + 8bit AdamW",
   "phase_id": 3,
-  "status": "PAUSADO",
+  "status": "ENTRENANDO",
   "g_loss": 0.2257,
   "d_loss": 0.4309,
   "l1_loss": 0.0721,
@@ -12069,7 +12069,66 @@
         "recommendation": "Se recomienda revisar estabilidad y una reducci\u00f3n acotada de LR en el incremento de Recovery.",
         "training_modified": false,
         "reinforcement_rounds_remaining": 3,
-        "epoch": 26
+        "epoch": 26,
+        "authorized_action": "CONTINUE",
+        "intervention_policy": {
+          "requested_action": "REDUCE_LR",
+          "authorized_action": "CONTINUE",
+          "reason": "no_action_requested"
+        },
+        "sampling_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_sampling",
+          "eligible_frames": 3124,
+          "hard_frames": 0,
+          "min_weight": 1.0,
+          "max_weight": 1.0,
+          "effective_sample_size": 3124.0,
+          "ab": {
+            "sample_count": 3124,
+            "active": false,
+            "baseline_max_probability": 0.0003201,
+            "experiment_max_probability": 0.0003201,
+            "effective_sample_size": 3124.0,
+            "hard_frames": 0,
+            "weight_ratio": 1.0,
+            "quality_improvement_claimed": false
+          }
+        },
+        "loss_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_loss_adjustment",
+          "target": null,
+          "multipliers": {
+            "color": 1.0,
+            "alpha": 1.0,
+            "edge": 1.0,
+            "adversarial": 1.0
+          },
+          "effective_weights": {
+            "color": 5.0,
+            "alpha": 2.5,
+            "edge": 1.5,
+            "adversarial": 0.05
+          },
+          "changed_count": 0,
+          "ab": {
+            "baseline_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "experiment_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "changed_count": 0,
+            "quality_improvement_claimed": false
+          }
+        }
       },
       "quality_guidance": {
         "enabled": true,
@@ -12189,7 +12248,66 @@
         "recommendation": "Se recomienda revisar estabilidad y una reducci\u00f3n acotada de LR en el incremento de Recovery.",
         "training_modified": false,
         "reinforcement_rounds_remaining": 3,
-        "epoch": 26
+        "epoch": 26,
+        "authorized_action": "CONTINUE",
+        "intervention_policy": {
+          "requested_action": "REDUCE_LR",
+          "authorized_action": "CONTINUE",
+          "reason": "no_action_requested"
+        },
+        "sampling_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_sampling",
+          "eligible_frames": 3124,
+          "hard_frames": 0,
+          "min_weight": 1.0,
+          "max_weight": 1.0,
+          "effective_sample_size": 3124.0,
+          "ab": {
+            "sample_count": 3124,
+            "active": false,
+            "baseline_max_probability": 0.0003201,
+            "experiment_max_probability": 0.0003201,
+            "effective_sample_size": 3124.0,
+            "hard_frames": 0,
+            "weight_ratio": 1.0,
+            "quality_improvement_claimed": false
+          }
+        },
+        "loss_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_loss_adjustment",
+          "target": null,
+          "multipliers": {
+            "color": 1.0,
+            "alpha": 1.0,
+            "edge": 1.0,
+            "adversarial": 1.0
+          },
+          "effective_weights": {
+            "color": 5.0,
+            "alpha": 2.5,
+            "edge": 1.5,
+            "adversarial": 0.05
+          },
+          "changed_count": 0,
+          "ab": {
+            "baseline_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "experiment_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "changed_count": 0,
+            "quality_improvement_claimed": false
+          }
+        }
       }
     }
   ],
@@ -12358,7 +12476,66 @@
     "recommendation": "Se recomienda revisar estabilidad y una reducci\u00f3n acotada de LR en el incremento de Recovery.",
     "training_modified": false,
     "reinforcement_rounds_remaining": 3,
-    "epoch": 26
+    "epoch": 26,
+    "authorized_action": "CONTINUE",
+    "intervention_policy": {
+      "requested_action": "REDUCE_LR",
+      "authorized_action": "CONTINUE",
+      "reason": "no_action_requested"
+    },
+    "sampling_change": {
+      "active": false,
+      "reason": "guidance_did_not_request_sampling",
+      "eligible_frames": 3124,
+      "hard_frames": 0,
+      "min_weight": 1.0,
+      "max_weight": 1.0,
+      "effective_sample_size": 3124.0,
+      "ab": {
+        "sample_count": 3124,
+        "active": false,
+        "baseline_max_probability": 0.0003201,
+        "experiment_max_probability": 0.0003201,
+        "effective_sample_size": 3124.0,
+        "hard_frames": 0,
+        "weight_ratio": 1.0,
+        "quality_improvement_claimed": false
+      }
+    },
+    "loss_change": {
+      "active": false,
+      "reason": "guidance_did_not_request_loss_adjustment",
+      "target": null,
+      "multipliers": {
+        "color": 1.0,
+        "alpha": 1.0,
+        "edge": 1.0,
+        "adversarial": 1.0
+      },
+      "effective_weights": {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05
+      },
+      "changed_count": 0,
+      "ab": {
+        "baseline_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "experiment_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "changed_count": 0,
+        "quality_improvement_claimed": false
+      }
+    }
   },
   "quality_guidance": {
     "enabled": true,
@@ -12478,7 +12655,66 @@
     "recommendation": "Se recomienda revisar estabilidad y una reducci\u00f3n acotada de LR en el incremento de Recovery.",
     "training_modified": false,
     "reinforcement_rounds_remaining": 3,
-    "epoch": 26
+    "epoch": 26,
+    "authorized_action": "CONTINUE",
+    "intervention_policy": {
+      "requested_action": "REDUCE_LR",
+      "authorized_action": "CONTINUE",
+      "reason": "no_action_requested"
+    },
+    "sampling_change": {
+      "active": false,
+      "reason": "guidance_did_not_request_sampling",
+      "eligible_frames": 3124,
+      "hard_frames": 0,
+      "min_weight": 1.0,
+      "max_weight": 1.0,
+      "effective_sample_size": 3124.0,
+      "ab": {
+        "sample_count": 3124,
+        "active": false,
+        "baseline_max_probability": 0.0003201,
+        "experiment_max_probability": 0.0003201,
+        "effective_sample_size": 3124.0,
+        "hard_frames": 0,
+        "weight_ratio": 1.0,
+        "quality_improvement_claimed": false
+      }
+    },
+    "loss_change": {
+      "active": false,
+      "reason": "guidance_did_not_request_loss_adjustment",
+      "target": null,
+      "multipliers": {
+        "color": 1.0,
+        "alpha": 1.0,
+        "edge": 1.0,
+        "adversarial": 1.0
+      },
+      "effective_weights": {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05
+      },
+      "changed_count": 0,
+      "ab": {
+        "baseline_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "experiment_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "changed_count": 0,
+        "quality_improvement_claimed": false
+      }
+    }
   },
   "guidance_state": {
     "version": 1,
@@ -58111,9 +58347,96 @@
         "recommendation": "Se recomienda revisar estabilidad y una reducci\u00f3n acotada de LR en el incremento de Recovery.",
         "training_modified": false,
         "reinforcement_rounds_remaining": 3,
-        "epoch": 26
+        "epoch": 26,
+        "sampling_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_sampling",
+          "eligible_frames": 3124,
+          "hard_frames": 0,
+          "min_weight": 1.0,
+          "max_weight": 1.0,
+          "effective_sample_size": 3124.0,
+          "ab": {
+            "sample_count": 3124,
+            "active": false,
+            "baseline_max_probability": 0.0003201,
+            "experiment_max_probability": 0.0003201,
+            "effective_sample_size": 3124.0,
+            "hard_frames": 0,
+            "weight_ratio": 1.0,
+            "quality_improvement_claimed": false
+          }
+        },
+        "loss_change": {
+          "active": false,
+          "reason": "guidance_did_not_request_loss_adjustment",
+          "target": null,
+          "multipliers": {
+            "color": 1.0,
+            "alpha": 1.0,
+            "edge": 1.0,
+            "adversarial": 1.0
+          },
+          "effective_weights": {
+            "color": 5.0,
+            "alpha": 2.5,
+            "edge": 1.5,
+            "adversarial": 0.05
+          },
+          "changed_count": 0,
+          "ab": {
+            "baseline_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "experiment_weights": {
+              "color": 5.0,
+              "alpha": 2.5,
+              "edge": 1.5,
+              "adversarial": 0.05
+            },
+            "changed_count": 0,
+            "quality_improvement_claimed": false
+          }
+        }
       }
-    ]
+    ],
+    "loss_plan": {
+      "active": false,
+      "reason": "guidance_did_not_request_loss_adjustment",
+      "target": null,
+      "multipliers": {
+        "color": 1.0,
+        "alpha": 1.0,
+        "edge": 1.0,
+        "adversarial": 1.0
+      },
+      "effective_weights": {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05
+      },
+      "changed_count": 0,
+      "ab": {
+        "baseline_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "experiment_weights": {
+          "color": 5.0,
+          "alpha": 2.5,
+          "edge": 1.5,
+          "adversarial": 0.05
+        },
+        "changed_count": 0,
+        "quality_improvement_claimed": false
+      }
+    }
   },
   "recovery": null,
   "recovery_events": [
@@ -59351,7 +59674,7 @@
   "best_quality_score": 91.23,
   "quality_checkpoint": {
     "eligible": true,
-    "score": 89.6701,
+    "score": 90.165,
     "observed_dimensions": 8,
     "critical_breaches": [],
     "criterion": "weighted_quality_with_critical_floors",
@@ -59359,5 +59682,58 @@
     "improved": false,
     "file": "best_quality_generator.pt",
     "epoch": 6
+  },
+  "sampling": {
+    "active": false,
+    "reason": "guidance_did_not_request_sampling",
+    "eligible_frames": 3124,
+    "hard_frames": 0,
+    "min_weight": 1.0,
+    "max_weight": 1.0,
+    "effective_sample_size": 3124.0,
+    "ab": {
+      "sample_count": 3124,
+      "active": false,
+      "baseline_max_probability": 0.0003201,
+      "experiment_max_probability": 0.0003201,
+      "effective_sample_size": 3124.0,
+      "hard_frames": 0,
+      "weight_ratio": 1.0,
+      "quality_improvement_claimed": false
+    }
+  },
+  "adaptive_loss": {
+    "active": false,
+    "reason": "guidance_did_not_request_loss_adjustment",
+    "target": null,
+    "multipliers": {
+      "color": 1.0,
+      "alpha": 1.0,
+      "edge": 1.0,
+      "adversarial": 1.0
+    },
+    "effective_weights": {
+      "color": 5.0,
+      "alpha": 2.5,
+      "edge": 1.5,
+      "adversarial": 0.05
+    },
+    "changed_count": 0,
+    "ab": {
+      "baseline_weights": {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05
+      },
+      "experiment_weights": {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05
+      },
+      "changed_count": 0,
+      "quality_improvement_claimed": false
+    }
   }
 }
