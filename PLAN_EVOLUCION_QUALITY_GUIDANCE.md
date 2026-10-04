@@ -2,33 +2,34 @@
 
 # RESUMEN DEL ESTADO
 
-Progreso general: pendiente de recálculo al cerrar el Incremento 1
+Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
 
-Incremento actual: Incremento 1 — Quality Guidance Observacional
+Incremento actual: Incremento 1 — COMPLETADO; Incremento 2 no iniciado
 
-Sprint actual: Sprint 2 — Quality Guidance Controller
+Sprint actual: Ninguno (detenido tras Increment Review)
 
-Última fase validada: Sprint 1 — Quality Vector
+Última fase validada: Incremento 1 — Quality Guidance Observacional
 
 Bloqueos: Ninguno. El árbol de trabajo contiene cambios y datasets previos del usuario; se preservarán y los commits del incremento se limitarán a archivos propios.
 
-Último test completo: PASS — 6 pruebas Guidance + 11 regresiones
+Último test completo: PASS — suite raíz completa, 53 pruebas
 
-Último checkpoint compatible: Pendiente de verificación; el formato moderno admite checkpoints completos y `best_generator.pt` ligero.
+Último checkpoint compatible: verificado en smoke CPU; checkpoints nuevos persisten Guidance y checkpoints antiguos cargan sin el campo.
 
-Último commit: `24369376f`
+Último commit validado: `83b758e41` (usar `HEAD` para el documento maestro vigente)
 
 Última actualización: 2026-10-04
 
 Branch: `main`
 
-Estado general: EN PROGRESO
+Estado general: INCREMENTO 1 COMPLETADO — DETENIDO ANTES DEL INCREMENTO 2
 
 ---
 
 # ROADMAP GENERAL
 
-- [ ] INCREMENTO 1 — Quality Guidance Observacional — EN PROGRESO
+- [x] INCREMENTO 1 — Quality Guidance Observacional — COMPLETADO
+  - Evidencia: Increment Review aprobado; 53 tests PASS; commits `24369376f`, `2357b5e88`, `9c93ab6fa`, `f7d1a72b3`, `83b758e41`.
 - [ ] INCREMENTO 2 — Smart Reinforcement — PENDIENTE
 - [ ] INCREMENTO 3 — Adaptive Loss — PENDIENTE
 - [ ] INCREMENTO 4 — Guidance + Recovery — PENDIENTE
@@ -157,18 +158,30 @@ Diagnosticar el cuello de botella, su tendencia y severidad, y producir una reco
 
 ### Backlog
 
-- [ ] Crear `QualityGuidanceController`
-- [ ] Crear `diagnose_quality_bottleneck`
-- [ ] Crear clasificación LOW/MEDIUM/HIGH/CRITICAL
-- [ ] Crear `QualityTrendAnalyzer`
-- [ ] Detectar IMPROVING/PLATEAU/REGRESSION/COLLAPSE/OSCILLATION
-- [ ] Crear recomendación con acciones normalizadas
-- [ ] Mantener acción aplicada en `CONTINUE` por modo observacional
-- [ ] Registrar decisión y estado serializable
-- [ ] Añadir tests
-- [ ] Ejecutar tests
-- [ ] Verificar regresiones
-- [ ] Documentar
+- [x] Crear `QualityGuidanceController`
+  - Evidencia: `pixel_ai_engine/quality_guidance.py`; commit `2357b5e88`.
+- [x] Crear `diagnose_quality_bottleneck`
+  - Evidencia: test de rostro débil oculto por global alto; PASS.
+- [x] Crear clasificación LOW/MEDIUM/HIGH/CRITICAL
+  - Evidencia: test parametrizado de cuatro severidades; PASS.
+- [x] Crear `QualityTrendAnalyzer`
+  - Evidencia: `test_trend_analyzer_detects_required_states`; PASS.
+- [x] Detectar IMPROVING/PLATEAU/REGRESSION/COLLAPSE/OSCILLATION
+  - Evidencia: cinco casos parametrizados; PASS.
+- [x] Crear recomendación con acciones normalizadas
+  - Evidencia: vocabulario `GUIDANCE_ACTIONS` y test del controlador; PASS.
+- [x] Mantener acción aplicada en `CONTINUE` por modo observacional
+  - Evidencia: `recommended_action=REINFORCE`, `action=CONTINUE`, `training_modified=false`; PASS.
+- [x] Registrar decisión y estado serializable
+  - Evidencia: round-trip JSON de `export_state`/`load_state`; PASS.
+- [x] Añadir tests
+  - Evidencia: suite ampliada a 20 tests.
+- [x] Ejecutar tests
+  - Evidencia: 20/20 PASS con `.venv`.
+- [x] Verificar regresiones
+  - Evidencia: `test_audit_suite.py test_training_recovery.py` → 11/11 PASS.
+- [x] Documentar
+  - Evidencia: Sprint Review y matriz actualizados.
 
 ### Archivos
 
@@ -181,21 +194,28 @@ Diagnosticar el cuello de botella, su tendencia y severidad, y producir una reco
 
 ### Definition of Done
 
-- [ ] Código terminado
-- [ ] Tests terminados
-- [ ] Integración verificada
-- [ ] Documentación actualizada
-- [ ] Sin regresión crítica
+- [x] Código terminado
+- [x] Tests terminados
+- [x] Integración verificada
+- [x] Documentación actualizada
+- [x] Sin regresión crítica
 
-Estado Sprint: PENDIENTE
+Estado Sprint: COMPLETADO
 
 ### Sprint Review
 
-Resultado: PENDIENTE
+Resultado: APROBADO
+
+Evidencias:
+
+- Archivos: `pixel_ai_engine/quality_guidance.py`, `pixel_ai_engine/__init__.py`, `test_quality_guidance.py`.
+- Commit: `2357b5e88 feat(guidance): add bottleneck and trend diagnosis`.
+- Tests: 20/20 Guidance y 11/11 regresiones PASS.
+- Regresiones encontradas: ninguna.
 
 ### Decisión
 
-- [ ] Sprint aprobado
+- [x] Sprint aprobado
 - [ ] Sprint requiere correcciones
 
 ---
@@ -208,20 +228,34 @@ Publicar Quality Guidance en estado, historial y monitor sin cambiar el comporta
 
 ### Backlog
 
-- [ ] Integrar con `train_supervised.py`
-- [ ] Añadir feature flag apagable
-- [ ] Persistir `guidance` en `training_status.json`
-- [ ] Mantener alias retrocompatible `quality_guidance`
-- [ ] Persistir `quality` y `guidance` por entrada histórica
-- [ ] Restaurar historial de tendencia tras reanudación
-- [ ] Mantener entrenamiento e hiperparámetros sin cambios
-- [ ] Mostrar métricas y modo observacional en monitor
-- [ ] Ejecutar entrenamiento de prueba equivalente sin GPU
-- [ ] Ejecutar suite de regresión
-- [ ] Verificar reanudación y estado antiguo sin Guidance
-- [ ] Verificar checkpoints sin cambios de esquema
-- [ ] Crear `QUALITY_GUIDANCE_ARCHITECTURE.md`
-- [ ] Documentar
+- [x] Integrar con `train_supervised.py`
+  - Evidencia: estado por época y smoke de cuatro épocas; commit `9c93ab6fa`.
+- [x] Añadir feature flag apagable
+  - Evidencia: `PIXEL_AI_ENABLE_QUALITY_GUIDANCE=0` y test de flag; PASS.
+- [x] Persistir `guidance` en `training_status.json`
+  - Evidencia: `test_status_persists_observational_guidance_and_epoch_history`; PASS.
+- [x] Mantener alias retrocompatible `quality_guidance`
+  - Evidencia: igualdad del alias verificada en test; PASS.
+- [x] Persistir `quality` y `guidance` por entrada histórica
+  - Evidencia: tres entradas auditadas en integración; PASS.
+- [x] Restaurar historial de tendencia tras reanudación
+  - Evidencia: regresión 71→68→63 y smoke START→RESUME; PASS.
+- [x] Mantener entrenamiento e hiperparámetros sin cambios
+  - Evidencia: `action=CONTINUE`, `training_modified=false`, loss/LR invariantes; PASS.
+- [x] Mostrar métricas y modo observacional en monitor
+  - Evidencia: test de contrato HTML para `monitor.html` y `sprite_studio.html`; PASS.
+- [x] Ejecutar entrenamiento de prueba equivalente sin GPU
+  - Evidencia: smoke CPU con modelo/dataset mínimos, épocas 1–4, pausa y reanudación; PASS.
+- [x] Ejecutar suite de regresión
+  - Evidencia: 53/53 tests raíz PASS.
+- [x] Verificar reanudación y estado antiguo sin Guidance
+  - Evidencia: round-trip, checkpoint legado y reanudación CPU; PASS.
+- [x] Verificar checkpoints sin cambios de esquema
+  - Evidencia: campo aditivo `guidance_state`; checkpoint sin campo devuelve estado vacío sin error.
+- [x] Crear `QUALITY_GUIDANCE_ARCHITECTURE.md`
+  - Evidencia: commit `83b758e41`.
+- [x] Documentar
+  - Evidencia: arquitectura, Sprint Review e Increment Review.
 
 ### Archivos
 
@@ -234,41 +268,61 @@ Publicar Quality Guidance en estado, historial y monitor sin cambiar el comporta
 
 ### Definition of Done
 
-- [ ] Código terminado
-- [ ] Tests terminados
-- [ ] Integración verificada
-- [ ] Documentación actualizada
-- [ ] Sin regresión crítica
+- [x] Código terminado
+- [x] Tests terminados
+- [x] Integración verificada
+- [x] Documentación actualizada
+- [x] Sin regresión crítica
 
-Estado Sprint: PENDIENTE
+Estado Sprint: COMPLETADO
 
 ### Sprint Review
 
-Resultado: PENDIENTE
+Resultado: APROBADO
+
+### Evidencias
+
+- Archivos modificados: `train_supervised.py`, `quality_guidance.py`, `monitor.html`, `sprite_studio.html`.
+- Archivos nuevos: `test_quality_guidance_integration.py`, `QUALITY_GUIDANCE_ARCHITECTURE.md`.
+- Commits: `9c93ab6fa`, `f7d1a72b3`, `83b758e41`.
+- Tests: 53 PASS, 0 FAIL.
+- Regresiones: ninguna; quedan cinco warnings de deprecación AMP preexistentes.
 
 ### Decisión
 
-- [ ] Sprint aprobado
+- [x] Sprint aprobado
 - [ ] Sprint requiere correcciones
 
 ---
 
 ## Validación del Incremento 1
 
-- [ ] Sprint 1 completado
-- [ ] Sprint 2 completado
-- [ ] Sprint 3 completado
-- [ ] Tests unitarios aprobados
-- [ ] Tests de integración aprobados
-- [ ] Entrenamiento inicia correctamente
-- [ ] Entrenamiento puede pausarse
-- [ ] Entrenamiento puede reanudarse
-- [ ] Checkpoints compatibles
-- [ ] No existen regresiones críticas
-- [ ] Quality Guidance funciona en modo observacional
-- [ ] Documentación actualizada
+- [x] Sprint 1 completado
+  - Evidencia: Sprint Review 1 aprobado.
+- [x] Sprint 2 completado
+  - Evidencia: Sprint Review 2 aprobado.
+- [x] Sprint 3 completado
+  - Evidencia: Sprint Review 3 aprobado.
+- [x] Tests unitarios aprobados
+  - Evidencia: 20 tests de vector/controlador incluidos en suite PASS.
+- [x] Tests de integración aprobados
+  - Evidencia: 7 tests de integración, incluido lifecycle CPU, PASS.
+- [x] Entrenamiento inicia correctamente
+  - Evidencia: smoke CPU inició START y completó época 1.
+- [x] Entrenamiento puede pausarse
+  - Evidencia: smoke solicitó pausa dentro del lote y publicó `PAUSADO` en época 3.
+- [x] Entrenamiento puede reanudarse
+  - Evidencia: smoke reanudó épocas 2 y 4, restaurando optimizadores, schedulers, RNG y Guidance.
+- [x] Checkpoints compatibles
+  - Evidencia: tests de formato moderno/legado y smoke de carga.
+- [x] No existen regresiones críticas
+  - Evidencia: 53 PASS, 0 FAIL.
+- [x] Quality Guidance funciona en modo observacional
+  - Evidencia: recomendación `REINFORCE` con acción aplicada `CONTINUE` y `training_modified=false`.
+- [x] Documentación actualizada
+  - Evidencia: documentos maestro y de arquitectura.
 
-Estado del Incremento: EN PROGRESO
+Estado del Incremento: COMPLETADO
 
 ---
 
@@ -323,13 +377,13 @@ Estado del Incremento: EN PROGRESO
 | ID | Requisito | Estado | Archivo | Test | Commit |
 |---|---|---|---|---|---|
 | QG-001 | QualityVector normalizado | ✅ COMPLETADO | `pixel_ai_engine/quality_guidance.py` | `test_quality_guidance.py` (6 PASS) | `24369376f` |
-| QG-002 | Diagnóstico por categoría | 🚧 EN DESARROLLO | `pixel_ai_engine/quality_guidance.py` | Pendiente | Pendiente |
-| QG-003 | Tendencias multiépoca | ⏳ PENDIENTE | `pixel_ai_engine/quality_guidance.py` | Pendiente | Pendiente |
-| QG-004 | Integración observacional | 🚧 EN DESARROLLO | `pixel_ai_engine/train_supervised.py` | Pendiente | Pendiente |
-| QG-005 | Estado e historial | ⏳ PENDIENTE | `pixel_ai_engine/train_supervised.py` | Pendiente | Pendiente |
-| QG-006 | Monitor Quality Guidance | 🚧 EN DESARROLLO | `monitor.html`, `sprite_studio.html` | Pendiente | Pendiente |
-| QG-007 | Feature flag | ⏳ PENDIENTE | `pixel_ai_engine/train_supervised.py` | Pendiente | Pendiente |
-| QG-008 | Documentación arquitectónica | ⏳ PENDIENTE | `QUALITY_GUIDANCE_ARCHITECTURE.md` | Revisión documental | Pendiente |
+| QG-002 | Diagnóstico por categoría | ✅ COMPLETADO | `pixel_ai_engine/quality_guidance.py` | `test_quality_guidance.py` | `2357b5e88` |
+| QG-003 | Tendencias multiépoca | ✅ COMPLETADO | `pixel_ai_engine/quality_guidance.py` | `test_quality_guidance.py` | `2357b5e88` |
+| QG-004 | Integración observacional | ✅ COMPLETADO | `pixel_ai_engine/train_supervised.py` | `test_quality_guidance_integration.py` | `9c93ab6fa` |
+| QG-005 | Estado e historial | ✅ COMPLETADO | `pixel_ai_engine/train_supervised.py` | persistencia/resume/lifecycle | `9c93ab6fa`, `f7d1a72b3` |
+| QG-006 | Monitor Quality Guidance | ✅ COMPLETADO | `monitor.html`, `sprite_studio.html` | contrato HTML | `9c93ab6fa` |
+| QG-007 | Feature flag | ✅ COMPLETADO | `quality_guidance.py`, `train_supervised.py` | flag disabled | `9c93ab6fa` |
+| QG-008 | Documentación arquitectónica | ✅ COMPLETADO | `QUALITY_GUIDANCE_ARCHITECTURE.md` | revisión documental | `83b758e41` |
 | QG-101 | Smart Sampling | ⏳ PENDIENTE | - | - | - |
 | QG-201 | Adaptive Loss | ⏳ PENDIENTE | - | - | - |
 | QG-301 | Guidance + Recovery | ⏳ PENDIENTE | - | - | - |
@@ -435,21 +489,29 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 | 2026-10-04 | 1 | Auditoría | `python -m pytest --collect-only -q` | TIMEOUT | La colección global superó 30 s; no se considera evidencia de fallo funcional. Se ejecutarán suites dirigidas. |
 | 2026-10-04 | 1 | 1 | `test_quality_guidance.py` | PASS (6) | QualityVector, aliases, finitud, ausentes, JSON y estabilidad. |
 | 2026-10-04 | 1 | 1 | `test_audit_suite.py test_training_recovery.py` | PASS (11) | Regresión de auditoría y recuperación. |
+| 2026-10-04 | 1 | 2 | `test_quality_guidance.py` | PASS (20) | Diagnóstico, severidad, tendencias, observación y estado. |
+| 2026-10-04 | 1 | 2 | `test_audit_suite.py test_training_recovery.py` | PASS (11) | Sin regresiones tras controlador/tendencias. |
+| 2026-10-04 | 1 | 3 | `test_quality_guidance_integration.py` | PASS (7) | Estado, historial, flag, checkpoint, eras, UI y lifecycle CPU. |
+| 2026-10-04 | 1 | 3 | suite raíz `test_*.py` | PASS (53) | 0 FAIL; 5 warnings AMP deprecados preexistentes. |
 
 ---
 
 # AUDITORÍA DEL PLAN
 
-- [ ] Cada `[x]` tiene evidencia.
-- [ ] Cada funcionalidad marcada completa existe.
-- [ ] Tests continúan pasando.
+- [x] Cada `[x]` tiene evidencia.
+  - Evidencia: auditoría final de checkboxes y referencias a archivos/tests/commits.
+- [x] Cada funcionalidad marcada completa existe.
+  - Evidencia: matriz QG-001–QG-008 y suite completa.
+- [x] Tests continúan pasando.
+  - Evidencia: 53 PASS el 2026-10-04.
 - [x] No hay archivos eliminados accidentalmente.
   - Evidencia: revisión inicial de `git status`; no se ejecutaron eliminaciones.
 - [x] No hay funcionalidades antiguas marcadas como recuperadas si no están conectadas.
   - Evidencia: matriz distingue investigación, desarrollo y pendientes.
-- [ ] Documentación coincide con código actual.
+- [x] Documentación coincide con código actual.
+  - Evidencia: `QUALITY_GUIDANCE_ARCHITECTURE.md` describe el contrato validado.
 - [x] Último commit registrado coincide con Git.
-  - Evidencia: `git rev-parse --short HEAD` devolvió `2dc923d3f` al iniciar.
+  - Evidencia: se registra `HEAD`; último commit validado antes del cierre del plan: `83b758e41`.
 - [x] Incremento activo coincide con desarrollo real.
   - Evidencia: solo Incremento 1 figura en desarrollo; Incrementos 2–6 siguen pendientes.
 
@@ -463,7 +525,7 @@ Quality Guidance observacional conectado al entrenamiento.
 
 ## Resultado
 
-PENDIENTE
+APROBADO
 
 ## Baseline anterior
 
@@ -471,18 +533,26 @@ El entrenamiento produce previews y métricas de `PixelArtEnhancer`; la recupera
 
 ## Resultado actual
 
-PENDIENTE
+QualityVector, diagnóstico, tendencias, recomendación observacional, persistencia, checkpoints, historial por época, resumen de eras y monitor están conectados. Ninguna acción adapta el entrenamiento.
 
 ## Diferencias y métricas
 
-PENDIENTE
+- Baseline: preview + métricas sueltas, sin diagnóstico persistente.
+- Actual: vector de 15 dimensiones, cinco estados de tendencia, cuatro severidades y acciones normalizadas.
+- Seguridad: `action=CONTINUE`, `training_modified=false`, flags de sampling/loss/checkpoint en `False`.
+- A/B de calidad: no corresponde todavía; al no existir intervención, no se afirma mejora del modelo.
 
 ## Tests y regresiones
 
-PENDIENTE
+- 53 PASS, 0 FAIL.
+- Smoke CPU START→RESUME→PAUSE→RESUME aprobado.
+- Checkpoint moderno y legado aprobados.
+- Regresiones críticas: ninguna.
+- Deuda detectada: cinco warnings por API AMP deprecada; no se cambió en este incremento para evitar alterar la base.
 
 ## Decisión
 
-- [ ] Incremento aprobado
+- [x] Incremento aprobado
+  - Evidencia: tres Sprint Reviews aprobados y suite completa PASS.
 - [ ] Incremento rechazado
 - [ ] Requiere correcciones
