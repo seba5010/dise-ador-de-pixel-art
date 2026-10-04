@@ -31,6 +31,7 @@ from .dataset import (
 from .enhancer import PixelArtEnhancer
 from .phase3_critical_enhancer import Phase3CriticalReviewer
 from .quality_gate import QualityGate
+from .frame_quality_review import FrameQualityReviewManager, VALID_REVIEW_STATUSES
 from .quality_guidance import (
     QualityGuidanceConfig,
     QualityGuidanceController,
@@ -66,6 +67,8 @@ __all__ = [
     "PixelArtEnhancer",
     "Phase3CriticalReviewer",
     "QualityGate",
+    "FrameQualityReviewManager",
+    "VALID_REVIEW_STATUSES",
     "QualityGuidanceController",
     "QualityGuidanceConfig",
     "QualityTrendAnalyzer",

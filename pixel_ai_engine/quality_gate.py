@@ -37,6 +37,107 @@ class QualityGate:
     Auditor Clínico y Guardián de Transición entre Fases.
     """
 
+    @staticmethod
+    def evaluate_single_frame(
+        generated_frame,
+        target_frame=None,
+        *,
+        reference_front=None,
+        frame_idx=None,
+        metadata=None,
+    ) -> Dict[str, Any]:
+        """Evaluación de un único frame sin depender de un checkpoint completo."""
+        if generated_frame is None:
+            return {
+                "audit_available": False,
+                "aprobado": False,
+                "score_total": None,
+                "quality": {},
+                "issues": [],
+                "diagnostico": "No hay frame generado para evaluar",
+                "status": "ERROR",
+            }
+
+        if target_frame is None:
+            return {
+                "audit_available": False,
+                "aprobado": False,
+                "score_total": None,
+                "quality": {},
+                "issues": [],
+                "diagnostico": "No hay target válido para evaluar el frame",
+                "status": "ERROR",
+            }
+
+        try:
+            if isinstance(generated_frame, (str, Path)):
+                generated = Image.open(generated_frame).convert("RGBA")
+            else:
+                generated = generated_frame.convert("RGBA")
+            if isinstance(target_frame, (str, Path)):
+                target = Image.open(target_frame).convert("RGBA")
+            else:
+                target = target_frame.convert("RGBA")
+        except Exception:
+            return {
+                "audit_available": False,
+                "aprobado": False,
+                "score_total": None,
+                "quality": {},
+                "issues": [],
+                "diagnostico": "No se pudo abrir el frame generado o el target",
+                "status": "ERROR",
+            }
+
+        if generated.size != target.size:
+            target = target.resize(generated.size, Image.Resampling.BILINEAR)
+
+        generated_arr = np.asarray(generated, dtype=np.float32) / 255.0
+        target_arr = np.asarray(target, dtype=np.float32) / 255.0
+        diff = np.abs(generated_arr - target_arr)
+        global_score = max(0.0, min(100.0, 100.0 - float(np.mean(diff)) * 100.0))
+        alpha_score = max(0.0, min(100.0, 100.0 - float(np.mean(np.abs(generated_arr[:, :, 3] - target_arr[:, :, 3]))) * 100.0))
+        silhouette = max(0.0, min(100.0, float(np.mean((generated_arr[:, :, 3] > 0.05) == (target_arr[:, :, 3] > 0.05))) * 100.0))
+        anatomy = max(0.0, min(100.0, global_score * 0.7 + silhouette * 0.3))
+        face = max(0.0, min(100.0, global_score * 0.75 + silhouette * 0.25))
+        props = max(0.0, min(100.0, global_score * 0.8))
+        palette = max(0.0, min(100.0, 100.0 - float(np.mean(np.abs(generated_arr[:, :, :3] - target_arr[:, :, :3]))) * 100.0))
+        micro_detail = max(0.0, min(100.0, silhouette * 0.65 + palette * 0.35))
+
+        quality = {
+            "global": round(float(global_score), 2),
+            "anatomy": round(float(anatomy), 2),
+            "silhouette": round(float(silhouette), 2),
+            "face": round(float(face), 2),
+            "clothing": round(float(global_score * 0.9), 2),
+            "arms_hands": round(float(anatomy * 0.9), 2),
+            "props": round(float(props), 2),
+            "feet": round(float(global_score * 0.85), 2),
+            "palette": round(float(palette), 2),
+            "alpha": round(float(alpha_score), 2),
+            "micro_detail": round(float(micro_detail), 2),
+        }
+
+        issues: List[str] = []
+        for key, threshold in {"face": 60.0, "props": 65.0, "micro_detail": 70.0, "silhouette": 75.0}.items():
+            if float(quality.get(key, 100.0)) < threshold:
+                issues.append(key)
+
+        score_total = round(float(np.mean(list(quality.values()))), 2)
+        return {
+            "audit_available": True,
+            "aprobado": bool(score_total >= 70.0),
+            "score_total": score_total,
+            "quality": quality,
+            "issues": issues,
+            "diagnostico": "Auditoría por frame ejecutada con referencia disponible",
+            "status": "REEVALUATED",
+            "target_frame_path": str(target_frame),
+            "generated_frame_path": str(generated_frame),
+            "metadata": metadata,
+            "frame_idx": frame_idx,
+        }
+
     @classmethod
     def evaluate_model_critical(cls,
                                 checkpoint_path: Path,
