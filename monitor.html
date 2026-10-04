@@ -768,7 +768,7 @@
             const vector = guidance.quality_vector || {};
             const problem = guidance.primary_problem || guidance.problem || 'ninguno';
             guideSummaryEl.textContent = `${problem} · ${String(guidance.severity || 'low').toUpperCase()} · ${guidance.recommended_action || 'CONTINUE'}`;
-            guideSummaryEl.title = `Modo ${guidance.mode || 'observational'}; global ${vector.global ?? 'N/D'}%; acción aplicada ${guidance.action || 'CONTINUE'}; entrenamiento modificado: ${guidance.training_modified === true ? 'sí' : 'no'}.`;
+            guideSummaryEl.title = `Modo ${guidance.mode || 'observational'}; global ${vector.global ?? 'N/D'}%; anatomía ${vector.anatomy ?? 'N/D'}%; silueta ${vector.silhouette ?? 'N/D'}%; pose ${vector.pose ?? 'N/D'}%; acción aplicada ${guidance.action || 'CONTINUE'}; entrenamiento modificado: ${guidance.training_modified === true ? 'sí' : 'no'}.`;
           } else {
             guideSummaryEl.textContent = 'Sin guía';
             guideSummaryEl.title = 'No hay Quality Guidance disponible.';

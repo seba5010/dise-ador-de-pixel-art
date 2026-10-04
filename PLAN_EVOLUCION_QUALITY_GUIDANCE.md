@@ -4,7 +4,7 @@
 
 Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
 
-Incremento actual: Incremento 4 — COMPLETADO; Incremento 5 pendiente
+Incremento actual: Incremento 5 — COMPLETADO; Incremento 6 pendiente
 
 Sprint actual: Ninguno (Increment Review aprobado)
 
@@ -36,7 +36,8 @@ Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado
   - Evidencia: multiplicadores 0.75–1.25, una loss por intervención, persistencia, neutralidad por flag y 68 tests PASS.
 - [x] INCREMENTO 4 — Guidance + Recovery — COMPLETADO
   - Evidencia: política jerárquica, cooldown 5, máximo 3, rollback delegado a Recovery, compatibilidad y 72 tests PASS.
-- [ ] INCREMENTO 5 — Anatomical Guidance — PENDIENTE
+- [x] INCREMENTO 5 — Anatomical Guidance — COMPLETADO
+  - Evidencia: siete señales geométricas, integración observacional, loss de silueta experimental apagada y 76 tests PASS.
 - [ ] INCREMENTO 6 — Critical Detail Guidance — PENDIENTE
 
 ---
@@ -427,24 +428,25 @@ Objetivo: medir geometría corporal de forma explícita y evaluar una loss de si
 
 ### Sprint 1 — Métricas geométricas
 
-- [ ] `body_height_ratio`, `body_width_ratio`, `center_offset_x`
-- [ ] `foot_anchor_error`, `silhouette_iou`, `pose_alignment`
-- [ ] `body_proportion_error`
-- [ ] Tests con máscaras sintéticas
+- [x] `body_height_ratio`, `body_width_ratio`, `center_offset_x`
+- [x] `foot_anchor_error`, `silhouette_iou`, `pose_alignment`
+- [x] `body_proportion_error`
+- [x] Tests con máscaras sintéticas
 
 ### Sprint 2 — Integración observacional
 
-- [ ] Integrar métricas al QualityVector
-- [ ] Persistir y mostrar en monitor
-- [ ] Calibrar sobre ejemplos reales/sintéticos
-- [ ] Tests de integración
+- [x] Integrar métricas al QualityVector
+- [x] Persistir y mostrar en monitor
+- [x] Calibrar sobre ejemplos reales/sintéticos
+- [x] Tests de integración
 
 ### Sprint 3 — Loss diferenciable experimental
 
-- [ ] Implementar loss de silueta tensorial bajo feature flag
-- [ ] Confirmar gradiente y finitud
-- [ ] Mantenerla desactivada por defecto hasta A/B
-- [ ] Suite completa e Increment Review
+- [x] Implementar loss de silueta tensorial bajo feature flag
+- [x] Confirmar gradiente y finitud
+- [x] Mantenerla desactivada por defecto hasta A/B
+- [x] Suite completa e Increment Review
+  - Resultado: APROBADO; 76 tests PASS. Las imágenes auditadas no se transforman y la loss experimental permanece opt-in.
 
 ## INCREMENTO 6 — CRITICAL DETAIL GUIDANCE
 

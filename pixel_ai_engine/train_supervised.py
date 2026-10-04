@@ -32,6 +32,11 @@ from pixel_ai_engine.config import (
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
 from pixel_ai_engine.dataset import place_in_cell
 from pixel_ai_engine.enhancer import PixelArtEnhancer
+from pixel_ai_engine.anatomical_guidance import (
+    ENABLE_SILHOUETTE_LOSS,
+    compute_anatomical_metrics,
+    differentiable_silhouette_loss,
+)
 from pixel_ai_engine.quality_guidance import (
     BASE_LOSS_WEIGHTS,
     ENABLE_ADAPTIVE_LOSS,
@@ -1229,6 +1234,7 @@ def generate_preview(generator, dataset, epoch_label=None):
             try:
                 from pixel_ai_engine.enhancer import PixelArtEnhancer
                 qc = PixelArtEnhancer.analyze_quality(first_raw, palette=first_pal, target_img=first_tgt)
+                qc.update(compute_anatomical_metrics(first_raw, first_tgt))
                 qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(qc)
                 qc_metrics = qc
             except Exception:
@@ -1615,7 +1621,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 # Discriminador: orden canonico (condition, target)
                 d_fake = discriminator(cond, preds)
                 adv_loss = criterion_bce(d_fake.float().clamp(-30.0, 30.0), torch.ones_like(d_fake).float()) * BASE_LOSS_WEIGHTS["adversarial"] * loss_multipliers["adversarial"]
-                total_g = l1_color + l1_alpha + edge_loss + adv_loss
+                silhouette_loss = (
+                    differentiable_silhouette_loss(preds, targets) * 0.5
+                    if ENABLE_SILHOUETTE_LOSS
+                    else preds.new_zeros(())
+                )
+                total_g = l1_color + l1_alpha + edge_loss + adv_loss + silhouette_loss
 
             # 1. Comprobacion estricta de finitud de componentes ANTES de backward y acumulacion
             g_components = [
@@ -1623,6 +1634,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 ("l1_alpha", l1_alpha.item()),
                 ("edge_loss", edge_loss.item()),
                 ("adv_loss", adv_loss.item()),
+                ("silhouette_loss", silhouette_loss.item()),
                 ("total_g", total_g.item())
             ]
             for c_name, c_val in g_components:

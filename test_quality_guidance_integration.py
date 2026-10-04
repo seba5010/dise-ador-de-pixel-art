@@ -354,6 +354,7 @@ def test_monitor_reads_new_guidance_contract():
 
     assert "d.guidance || d.quality_guidance" in monitor
     assert "OBSERVACIONAL" in monitor
+    assert "anatomía ${vector.anatomy" in monitor
     assert "info.guidance || info.quality_guidance" in studio
 
 
