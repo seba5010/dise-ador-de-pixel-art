@@ -286,14 +286,16 @@
     }
     .training-preview-grid {
       display: flex;
+      flex-direction: column;
       gap: 18px;
-      overflow: auto;
+      overflow: visible;
       align-items: flex-start;
       padding-bottom: 4px;
     }
     .training-preview-grid > div {
-      flex: 1 1 48%;
-      min-width: 320px;
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -307,6 +309,26 @@
       border-radius: 4px;
       image-rendering: pixelated;
       box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.08);
+    }
+    .live-comparison-gallery {
+      width: 100%;
+      max-height: 760px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #0b0d13;
+    }
+    .live-comparison-gallery a,
+    .live-comparison-gallery img {
+      display: block;
+      width: max-content;
+      max-width: none;
+    }
+    .live-comparison-gallery img {
+      height: auto;
+    }
+    .live-comparison-gallery a + a {
+      border-top: 6px solid #0b0d13;
     }
     .sample-character-gallery {
       margin-top: 12px;
@@ -1093,9 +1115,12 @@
           <div class="training-preview-grid">
             <div>
               <div style="font-size:11px; color:var(--dim); margin-bottom:4px">Comparativa de Detalle (Zoom Quirúrgico 1:1 HD):</div>
-              <a href="training_samples/latest_detail_comparison.png" target="_blank" title="Clic para ver en tamaño original completo">
-                <img id="monCompImg" src="training_samples/latest_detail_comparison.png" style="max-height:760px;" onerror="this.style.display='none'">
-              </a>
+              <div id="monCompGallery" class="live-comparison-gallery">
+                <a id="monCompFallbackLink" href="training_samples/latest_detail_comparison.png" target="_blank" title="Clic para ver la comparativa actual">
+                  <img id="monCompImg" src="training_samples/latest_detail_comparison.png" style="max-height:760px;" onerror="this.style.display='none'">
+                </a>
+              </div>
+              <div id="monCompCount" style="font-size:10px; color:var(--dim); margin-top:4px;">Esperando comparativa completa...</div>
             </div>
             <div>
               <div style="font-size:11px; color:var(--dim); margin-bottom:4px">Hoja Completa Generada (96 Poses, actualizada en cada época):</div>
@@ -3301,6 +3326,56 @@
       container.innerHTML = html;
     }
 
+    async function loadLiveComparison(token) {
+      const gallery = document.getElementById('monCompGallery');
+      if (!gallery) return;
+      window.__liveComparisonRequestToken = token;
+      const manifestUrl = 'training_samples/live_comparison/manifest.json?t=' + encodeURIComponent(token);
+      try {
+        const response = await fetch(manifestUrl, { cache: 'no-store' });
+        if (!response.ok) throw new Error('No hay manifiesto de comparativa');
+        const manifest = await response.json();
+        if (window.__liveComparisonRequestToken !== token) return;
+        const chunkNames = Array.isArray(manifest.chunks) ? manifest.chunks : [];
+        const safeChunks = chunkNames.filter(name => typeof name === 'string' && /^[\w.-]+\.png$/.test(name));
+        if (safeChunks.length === 0) throw new Error('Comparativa sin bloques');
+        const manifestVersion = `${manifest.generation}:${safeChunks.length}:${manifest.row_count}:${manifest.complete !== false}`;
+        if (window.__lastLoadedComparisonVersion === manifestVersion) return;
+
+        const fragment = document.createDocumentFragment();
+        safeChunks.forEach((name, index) => {
+          const link = document.createElement('a');
+          const image = document.createElement('img');
+          const imageUrl = `training_samples/live_comparison/${encodeURIComponent(name)}?g=${manifest.generation}`;
+          link.href = imageUrl;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.title = `Abrir bloque ${index + 1} de ${safeChunks.length}`;
+          image.src = imageUrl;
+          image.alt = `Comparativa de personajes, bloque ${index + 1} de ${safeChunks.length}`;
+          image.loading = index === 0 ? 'eager' : 'lazy';
+          link.appendChild(image);
+          fragment.appendChild(link);
+        });
+        gallery.replaceChildren(fragment);
+        window.__lastLoadedComparisonVersion = manifestVersion;
+        const count = document.getElementById('monCompCount');
+        if (count) count.textContent = `${manifest.row_count || 0} frames de todos los personajes · ${safeChunks.length} bloques · época ${manifest.epoch}${manifest.complete === false ? ' · generación en curso' : ''}`;
+      } catch (error) {
+        if (window.__liveComparisonRequestToken !== token) return;
+        const fallback = document.getElementById('monCompImg');
+        const fallbackLink = document.getElementById('monCompFallbackLink');
+        const cacheToken = Date.now();
+        if (fallback) {
+          fallback.style.display = 'block';
+          fallback.src = `training_samples/latest_detail_comparison.png?t=${cacheToken}`;
+        }
+        if (fallbackLink) fallbackLink.href = `training_samples/latest_detail_comparison.png?t=${cacheToken}`;
+        const count = document.getElementById('monCompCount');
+        if (count) count.textContent = 'Comparativa completa pendiente de la próxima época.';
+      }
+    }
+
     function updateMonitorTab(info) {
       if (!info || Object.keys(info).length === 0) return;
       const ep = info.epoch || '--';
@@ -3622,13 +3697,9 @@
         window.__lastPreviewToken = currentToken;
         const pImg = document.getElementById('monPreviewImg');
         if (pImg) pImg.src = 'training_samples/latest_preview.png?t=' + Date.now();
-        const cImg = document.getElementById('monCompImg');
-        if (cImg) {
-          cImg.style.display = 'block';
-          cImg.src = 'training_samples/latest_detail_comparison.png?t=' + Date.now();
-        }
         renderSampleCharacterGallery();
       }
+      loadLiveComparison(currentToken);
 
       const lBox = document.getElementById('trainLogBox');
       if (lBox) {

@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import argparse
 
@@ -673,6 +673,106 @@ def _generate_full_sheet_preview(generator, front, template_manager, character_p
     sheet.save(TRAIN_SAMPLES_DIR / "latest_preview.png")
 
 
+def _generate_all_frame_comparison(generator, samples, template_manager, output_dir=None, epoch_label=None, batch_size=4, rows_per_chunk=32):
+    output_dir = Path(output_dir or TRAIN_SAMPLES_DIR / "live_comparison")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Mostrar una sola referencia por personaje/variante para evitar duplicar
+    # todos los frames de la misma variante en la comparativa de auditoría.
+    representative_by_char: dict[str, dict] = {}
+    for sample in samples:
+        char_id = str(sample["char_id"])
+        current = representative_by_char.get(char_id)
+        if current is None or int(sample["frame_idx"]) < int(current["frame_idx"]):
+            representative_by_char[char_id] = sample
+
+    ordered_samples = sorted(
+        representative_by_char.values(),
+        key=lambda sample: (str(sample["char_id"]), int(sample["frame_idx"]))
+    )
+    if not ordered_samples:
+        return None
+
+    columns = ["Referencia", "Pose", "IA cruda", "IA remapeada", "Ground truth"]
+    chunk_rows = []
+    chunk_paths = []
+    generation = time.time_ns()
+    epoch = int(epoch_label or 0)
+    total_width = 128 * 5 + 35
+    row_height = 150
+
+    def save_chunk():
+        chunk_index = len(chunk_paths)
+        image = Image.new("RGBA", (total_width, row_height * len(chunk_rows)), (11, 13, 19, 255))
+        draw = ImageDraw.Draw(image)
+        for row_index, (label, cells) in enumerate(chunk_rows):
+            y = row_index * row_height
+            safe_label = label.encode("ascii", "replace").decode("ascii")
+            draw.text((6, y + 2), safe_label, fill=(220, 226, 236, 255))
+            image.paste(cells[0], (5, y + 20), cells[0])
+            image.paste(cells[1], (138, y + 20), cells[1])
+            image.paste(cells[2], (271, y + 20), cells[2])
+            image.paste(cells[3], (404, y + 20), cells[3])
+            image.paste(cells[4], (537, y + 20), cells[4])
+        filename = f"comparison_epoch_{epoch:03d}_{generation}_part_{chunk_index:03d}.png"
+        image.save(output_dir / filename)
+        chunk_paths.append(filename)
+        chunk_rows.clear()
+
+    generator.eval()
+    with torch.no_grad():
+        for start in range(0, len(ordered_samples), batch_size):
+            batch = ordered_samples[start:start + batch_size]
+            poses = torch.stack([template_manager.get_frame_tensor(int(sample["frame_idx"])) for sample in batch])
+            fronts = torch.stack([sample["front_tensor"] for sample in batch])
+            conditions = torch.cat([fronts, poses], dim=1).to(DEVICE)
+            with autocast(enabled=USE_AMP):
+                predictions = generator(conditions)
+
+            for sample, pose, prediction in zip(batch, poses, predictions):
+                front_image = _tensor_to_preview_image(sample["front_tensor"])
+                front_cell = _fit_preview_cell(front_image)
+                pose_cell = _fit_preview_cell(_tensor_to_preview_image(pose))
+                raw_cell = _fit_preview_cell(_tensor_to_preview_image(prediction, has_alpha=True))
+                palette = extract_character_palette(front_cell, include_props=True)
+                remapped = remap_image_to_palette(raw_cell, palette, tolerance=35.0, binarize_alpha=True)
+                remapped = clean_orphan_pixels(remapped, min_connected_size=3, binarize=True)
+                target_cell = _fit_preview_cell(_tensor_to_preview_image(sample["target_tensor"], has_alpha=True))
+                label = f"{sample['char_id']} / frame {int(sample['frame_idx']):03d}"
+                chunk_rows.append((label, (front_cell, pose_cell, raw_cell, remapped, target_cell)))
+                if len(chunk_rows) >= rows_per_chunk:
+                    save_chunk()
+
+    if chunk_rows:
+        save_chunk()
+
+    manifest = {
+        "epoch": epoch,
+        "generation": generation,
+        "row_count": len(ordered_samples),
+        "complete": True,
+        "columns": columns,
+        "chunks": chunk_paths,
+        "rows": [
+            {"char_id": str(sample["char_id"]), "frame_idx": int(sample["frame_idx"])}
+            for sample in ordered_samples
+        ],
+    }
+    manifest_path = output_dir / "manifest.json"
+    temporary_path = output_dir / f"manifest_{generation}.tmp"
+    temporary_path.write_text(json.dumps(manifest, ensure_ascii=True), encoding="utf-8")
+    os.replace(temporary_path, manifest_path)
+
+    current_paths = set(chunk_paths)
+    for stale_path in output_dir.glob("comparison_epoch_*_part_*.png"):
+        if stale_path.name not in current_paths:
+            try:
+                stale_path.unlink()
+            except OSError:
+                pass
+    return manifest
+
+
 def generate_preview(generator, dataset, epoch_label=None):
     generator.eval()
     with torch.no_grad():
@@ -751,6 +851,7 @@ def generate_preview(generator, dataset, epoch_label=None):
         sheet_front = dataset.samples[sample_indices[0]]["front_tensor"]
         sheet_palette = extract_character_palette(_fit_preview_cell(_tensor_to_preview_image(sheet_front)), include_props=True)
         _generate_full_sheet_preview(generator, sheet_front, tm, sheet_palette)
+        _generate_all_frame_comparison(generator, dataset.samples, tm, epoch_label=epoch_label)
 
         # Auditoría clínica del cuerpo en la primera muestra (Ground Truth)
         qc_metrics = {}
