@@ -457,6 +457,62 @@ def compare_loss_ab(plan: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+class GuidanceInterventionPolicy:
+    """Authorize at most one safe Guidance intervention after Recovery checks."""
+
+    ACTIONABLE = {"REINFORCE", "ADJUST_SAMPLING", "ADJUST_WEIGHTS", "ROLLBACK"}
+
+    def __init__(self, *, cooldown_epochs: int = 5, max_consecutive: int = 3):
+        self.cooldown_epochs = max(1, int(cooldown_epochs))
+        self.max_consecutive = max(1, int(max_consecutive))
+
+    def decide(
+        self,
+        epoch: int,
+        guidance: Optional[Mapping[str, Any]],
+        state: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        previous = dict(state) if isinstance(state, Mapping) else {}
+        recommendation = str((guidance or {}).get("recommended_action", "CONTINUE"))
+        trend = str(((guidance or {}).get("trend") or {}).get("status", "INSUFFICIENT_DATA"))
+        candidate = "ADJUST_SAMPLING" if recommendation == "REINFORCE" else recommendation
+        last_epoch = int(_finite_number(previous.get("last_intervention_epoch")) or -10_000)
+        consecutive = max(0, int(_finite_number(previous.get("consecutive_interventions")) or 0))
+        total = max(0, int(_finite_number(previous.get("total_interventions")) or 0))
+
+        authorized = candidate if candidate in self.ACTIONABLE else "CONTINUE"
+        reason = "authorized" if authorized != "CONTINUE" else "no_action_requested"
+        if authorized == "ROLLBACK" and trend != "COLLAPSE":
+            authorized = "CONTINUE"
+            reason = "rollback_requires_sustained_collapse"
+        elif authorized != "CONTINUE" and int(epoch) - last_epoch < self.cooldown_epochs:
+            authorized = "CONTINUE"
+            reason = "cooldown_active"
+        elif authorized != "CONTINUE" and consecutive >= self.max_consecutive:
+            authorized = "CONTINUE"
+            reason = "intervention_budget_exhausted"
+
+        next_state = {
+            "last_intervention_epoch": last_epoch if authorized == "CONTINUE" else int(epoch),
+            "consecutive_interventions": consecutive,
+            "total_interventions": total,
+            "cooldown_epochs": self.cooldown_epochs,
+            "max_consecutive": self.max_consecutive,
+        }
+        if authorized != "CONTINUE":
+            next_state["consecutive_interventions"] = consecutive + 1
+            next_state["total_interventions"] = total + 1
+        elif trend in {"IMPROVING", "STABLE"}:
+            next_state["consecutive_interventions"] = 0
+
+        return {
+            "requested_action": recommendation,
+            "authorized_action": authorized,
+            "reason": reason,
+            "state": next_state,
+        }
+
+
 def _training_stability(training_metrics: Mapping[str, Any]) -> Optional[float]:
     watched = ("g_loss", "d_loss", "l1_loss", "edge_loss", "lr")
     present = [key for key in watched if key in training_metrics]
@@ -849,6 +905,7 @@ class QualityGuidanceController:
             "adversarial": 1.0,
         }
         self.intervention_count = 0
+        self.intervention_state: Dict[str, Any] = {}
         self.history = self.decision_history  # Backward-compatible public alias.
         if state:
             self.load_state(state)
@@ -975,6 +1032,7 @@ class QualityGuidanceController:
             "last_action": self.decision_history[-1].get("action") if self.decision_history else "CONTINUE",
             "last_problem": self.decision_history[-1].get("primary_problem") if self.decision_history else None,
             "intervention_count": self.intervention_count,
+            "intervention_state": dict(self.intervention_state),
             "loss_multipliers": dict(self.loss_multipliers),
             "sampling_weights": dict(self.sampling_weights),
             "sampling_plan": dict(self.sampling_plan),
@@ -1013,6 +1071,7 @@ class QualityGuidanceController:
                 if value is not None:
                     self.loss_multipliers[key] = min(1.25, max(0.75, float(value)))
         self.intervention_count = max(0, int(_finite_number(state.get("intervention_count")) or 0))
+        self.intervention_state = dict(state.get("intervention_state", {})) if isinstance(state.get("intervention_state"), Mapping) else {}
         self.history = self.decision_history
 
 
@@ -1023,6 +1082,7 @@ __all__ = [
     "GUIDANCE_ACTIONS",
     "FrameQualityTracker",
     "HardExampleMiningPolicy",
+    "GuidanceInterventionPolicy",
     "LossMultiplierController",
     "ENABLE_ADAPTIVE_LOSS",
     "ENABLE_QUALITY_CHECKPOINT",

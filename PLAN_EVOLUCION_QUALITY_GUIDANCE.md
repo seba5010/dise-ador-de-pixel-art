@@ -4,7 +4,7 @@
 
 Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
 
-Incremento actual: Incremento 3 — COMPLETADO; Incremento 4 pendiente
+Incremento actual: Incremento 4 — COMPLETADO; Incremento 5 pendiente
 
 Sprint actual: Ninguno (Increment Review aprobado)
 
@@ -34,7 +34,8 @@ Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado
   - Evidencia: seguimiento por frame, sampling 1.0–2.0, persistencia, A/B determinista y 63 tests PASS.
 - [x] INCREMENTO 3 — Adaptive Loss — COMPLETADO
   - Evidencia: multiplicadores 0.75–1.25, una loss por intervención, persistencia, neutralidad por flag y 68 tests PASS.
-- [ ] INCREMENTO 4 — Guidance + Recovery — PENDIENTE
+- [x] INCREMENTO 4 — Guidance + Recovery — COMPLETADO
+  - Evidencia: política jerárquica, cooldown 5, máximo 3, rollback delegado a Recovery, compatibilidad y 72 tests PASS.
 - [ ] INCREMENTO 5 — Anatomical Guidance — PENDIENTE
 - [ ] INCREMENTO 6 — Critical Detail Guidance — PENDIENTE
 
@@ -400,24 +401,25 @@ Objetivo: permitir acciones seguras respetando que TrainingRecovery conserva aut
 
 ### Sprint 1 — Política de intervención
 
-- [ ] Jerarquía CONTINUE/REINFORCE/ADJUST/RECOVERY/ROLLBACK/STOP
-- [ ] Cooldown y máximo consecutivo
-- [ ] Una intervención atribuible por vez
-- [ ] Tests de límites
+- [x] Jerarquía CONTINUE/REINFORCE/ADJUST/RECOVERY/ROLLBACK/STOP
+- [x] Cooldown y máximo consecutivo
+- [x] Una intervención atribuible por vez
+- [x] Tests de límites
 
 ### Sprint 2 — Recovery y rollback
 
-- [ ] Complementar detector existente sin reemplazarlo
-- [ ] Rollback por regresión sostenida confirmada
-- [ ] Restaurar parámetros base al empeorar
-- [ ] Mantener ERROR_NAN como autoridad existente
-- [ ] Tests de rollback
+- [x] Complementar detector existente sin reemplazarlo
+- [x] Rollback por regresión sostenida confirmada
+- [x] Restaurar parámetros base al empeorar
+- [x] Mantener ERROR_NAN como autoridad existente
+- [x] Tests de rollback
 
 ### Sprint 3 — Persistencia y revisión
 
-- [ ] Persistencia completa y checkpoints antiguos
-- [ ] Pruebas pausa/cierre/reanudación
-- [ ] Suite completa e Increment Review
+- [x] Persistencia completa y checkpoints antiguos
+- [x] Pruebas pausa/cierre/reanudación
+- [x] Suite completa e Increment Review
+  - Resultado: APROBADO; 72 tests PASS. Recovery conserva autoridad y Guidance no selecciona snapshots por cuenta propia.
 
 ## INCREMENTO 5 — ANATOMICAL GUIDANCE
 

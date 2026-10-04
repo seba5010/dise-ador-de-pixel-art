@@ -38,6 +38,7 @@ from pixel_ai_engine.quality_guidance import (
     ENABLE_QUALITY_GUIDANCE,
     ENABLE_SMART_SAMPLING,
     FrameQualityTracker,
+    GuidanceInterventionPolicy,
     HardExampleMiningPolicy,
     LossMultiplierController,
     QualityGuidanceController,
@@ -126,7 +127,7 @@ def _build_sampling_plan(
 ) -> SamplingPlan:
     recommendation = "CONTINUE"
     if isinstance(guidance, dict):
-        recommendation = str(guidance.get("recommended_action", "CONTINUE"))
+        recommendation = str(guidance.get("authorized_action", guidance.get("recommended_action", "CONTINUE")))
     return HardExampleMiningPolicy().build_plan(
         _dataset_sample_descriptors(dataset),
         frame_quality,
@@ -184,9 +185,12 @@ def _attach_sampling_plan(status_data: Dict[str, Any], plan: SamplingPlan) -> Di
 
 def _build_loss_plan(guidance_state: Optional[Dict[str, Any]], guidance: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     state = guidance_state if isinstance(guidance_state, dict) else {}
+    effective_guidance = dict(guidance) if isinstance(guidance, dict) else {}
+    if "authorized_action" in effective_guidance:
+        effective_guidance["recommended_action"] = effective_guidance["authorized_action"]
     return LossMultiplierController().propose(
         state.get("loss_multipliers", {}),
-        guidance,
+        effective_guidance,
         enabled=bool(ENABLE_QUALITY_GUIDANCE and ENABLE_ADAPTIVE_LOSS),
     )
 
@@ -217,6 +221,35 @@ def _attach_loss_plan(status_data: Dict[str, Any], plan: Dict[str, Any]) -> Dict
         if isinstance(decisions, list) and decisions:
             decisions[-1] = dict(decisions[-1])
             decisions[-1]["loss_change"] = payload
+    return data
+
+
+def _apply_intervention_policy(status_data: Dict[str, Any]) -> Dict[str, Any]:
+    data = dict(status_data)
+    guidance = data.get("guidance")
+    state = data.get("guidance_state", {})
+    if not isinstance(guidance, dict) or not isinstance(state, dict):
+        return data
+    policy_decision = GuidanceInterventionPolicy().decide(
+        int(data.get("epoch", 0)),
+        guidance,
+        state.get("intervention_state"),
+    )
+    guidance = dict(guidance)
+    guidance["authorized_action"] = policy_decision["authorized_action"]
+    guidance["intervention_policy"] = {
+        key: value for key, value in policy_decision.items() if key != "state"
+    }
+    state = dict(state)
+    state["intervention_state"] = policy_decision["state"]
+    state["intervention_count"] = policy_decision["state"]["total_interventions"]
+    data["guidance"] = guidance
+    data["quality_guidance"] = guidance
+    data["guidance_state"] = state
+    for entry in data.get("history", []):
+        if isinstance(entry, dict) and entry.get("epoch") == data.get("epoch"):
+            entry["guidance"] = guidance
+            entry["quality_guidance"] = guidance
     return data
 
 
@@ -1755,6 +1788,42 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 "loss_plan": dict(current_loss_plan),
             },
         )
+        published_status = _apply_intervention_policy(published_status)
+        authorized_action = published_status.get("guidance", {}).get("authorized_action")
+        if authorized_action == "ROLLBACK":
+            # The existing TrainingRecovery machinery remains the sole owner of
+            # snapshot selection, atomic copying, LR reduction and history repair.
+            write_status_file(STATUS_FILE, published_status)
+            guidance_recovery = _materialize_recovery_route(
+                status_data=published_status,
+                reason={
+                    "code": "guidance_sustained_quality_collapse",
+                    "message": "Guidance confirmó una degradación visual sostenida.",
+                    "failed_epoch": epoch,
+                    "g_loss": avg_g,
+                    "l1_loss": avg_l1,
+                    "quality": last_qc,
+                },
+                status_name="RECUPERACION_LISTA",
+                total_epochs=total_target_epochs,
+                rejected_metrics={
+                    "epoch": epoch,
+                    "g_loss": avg_g,
+                    "d_loss": avg_d,
+                    "l1_loss": avg_l1,
+                    "edge_loss": avg_edge,
+                    "quality": last_qc,
+                },
+            )
+            if guidance_recovery is not None:
+                print(
+                    f"\n[GUIDANCE + RECOVERY] Colapso sostenido rechazado; "
+                    f"rollback preparado desde época {guidance_recovery['source_epoch']}.",
+                    flush=True,
+                )
+                return
+            published_status["guidance"]["authorized_action"] = "CONTINUE"
+            published_status["guidance"]["intervention_policy"]["reason"] = "rollback_snapshot_unavailable"
         next_sampling_plan = _build_sampling_plan(
             dataset,
             frame_quality_tracker.export(),

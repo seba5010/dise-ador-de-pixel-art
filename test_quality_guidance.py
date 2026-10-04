@@ -4,6 +4,7 @@ import pytest
 
 from pixel_ai_engine.quality_guidance import (
     FrameQualityTracker,
+    GuidanceInterventionPolicy,
     HardExampleMiningPolicy,
     LossMultiplierController,
     QualityGuidanceConfig,
@@ -359,3 +360,35 @@ def test_loss_ab_report_preserves_baseline_and_makes_no_quality_claim():
     assert report["baseline_weights"]["alpha"] == 2.5
     assert report["experiment_weights"]["alpha"] == 2.75
     assert report["quality_improvement_claimed"] is False
+
+
+def test_intervention_policy_requires_sustained_collapse_for_rollback():
+    policy = GuidanceInterventionPolicy(cooldown_epochs=5, max_consecutive=3)
+    critical_only = policy.decide(
+        10,
+        {"recommended_action": "ROLLBACK", "trend": {"status": "REGRESSION"}},
+    )
+    sustained = policy.decide(
+        10,
+        {"recommended_action": "ROLLBACK", "trend": {"status": "COLLAPSE"}},
+    )
+
+    assert critical_only["authorized_action"] == "CONTINUE"
+    assert critical_only["reason"] == "rollback_requires_sustained_collapse"
+    assert sustained["authorized_action"] == "ROLLBACK"
+
+
+def test_intervention_policy_enforces_cooldown_and_maximum():
+    policy = GuidanceInterventionPolicy(cooldown_epochs=5, max_consecutive=3)
+    guidance = {"recommended_action": "REINFORCE", "trend": {"status": "REGRESSION"}}
+    first = policy.decide(10, guidance)
+    cooldown = policy.decide(12, guidance, first["state"])
+    second = policy.decide(15, guidance, first["state"])
+    third = policy.decide(20, guidance, second["state"])
+    exhausted = policy.decide(25, guidance, third["state"])
+
+    assert first["authorized_action"] == "ADJUST_SAMPLING"
+    assert cooldown["reason"] == "cooldown_active"
+    assert second["authorized_action"] == third["authorized_action"] == "ADJUST_SAMPLING"
+    assert exhausted["authorized_action"] == "CONTINUE"
+    assert exhausted["reason"] == "intervention_budget_exhausted"

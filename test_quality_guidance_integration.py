@@ -307,6 +307,46 @@ def test_adaptive_loss_feature_flag_restores_exact_base_weights(monkeypatch):
     }
 
 
+def test_intervention_policy_state_is_attached_for_resume():
+    status = train_supervised._apply_intervention_policy(
+        {
+            "epoch": 11,
+            "history": [{"epoch": 11}],
+            "guidance_state": {},
+            "guidance": {
+                "recommended_action": "ROLLBACK",
+                "trend": {"status": "COLLAPSE"},
+            },
+        }
+    )
+
+    assert status["guidance"]["authorized_action"] == "ROLLBACK"
+    assert status["guidance_state"]["intervention_count"] == 1
+    assert status["guidance_state"]["intervention_state"]["last_intervention_epoch"] == 11
+    assert status["history"][0]["guidance"]["authorized_action"] == "ROLLBACK"
+
+
+def test_policy_authorization_prevents_simultaneous_sampling_and_loss(monkeypatch):
+    monkeypatch.setattr(train_supervised, "ENABLE_SMART_SAMPLING", True)
+    monkeypatch.setattr(train_supervised, "ENABLE_ADAPTIVE_LOSS", True)
+
+    sampling_guidance = {
+        "recommended_action": "REINFORCE",
+        "authorized_action": "ADJUST_SAMPLING",
+        "primary_problem": "face",
+    }
+    loss_guidance = {
+        "recommended_action": "ADJUST_WEIGHTS",
+        "authorized_action": "ADJUST_WEIGHTS",
+        "primary_problem": "alpha",
+    }
+    loss_during_sampling = train_supervised._build_loss_plan({}, sampling_guidance)
+    loss_plan = train_supervised._build_loss_plan({}, loss_guidance)
+
+    assert loss_during_sampling["active"] is False
+    assert loss_plan["active"] is True
+
+
 def test_monitor_reads_new_guidance_contract():
     project_root = train_supervised.PROJECT_ROOT
     monitor = (project_root / "monitor.html").read_text(encoding="utf-8")
