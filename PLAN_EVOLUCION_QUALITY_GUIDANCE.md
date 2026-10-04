@@ -16,7 +16,7 @@ Bloqueos: Ninguno. El árbol de trabajo contiene cambios y datasets previos del 
 
 Último checkpoint compatible: verificado en smoke CPU; checkpoints nuevos persisten Guidance y checkpoints antiguos cargan sin el campo.
 
-Último commit validado: `5a063a2c0` (Incremento 5; el cierre del Incremento 6 se registra en el commit siguiente)
+Último commit validado: `471f6a848`
 
 Última actualización: 2026-10-04
 
@@ -618,7 +618,7 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 - [x] Documentación coincide con código actual.
   - Evidencia: `QUALITY_GUIDANCE_ARCHITECTURE.md` describe el contrato validado.
 - [x] Último commit registrado coincide con Git.
-  - Evidencia: Incrementos 2–5 en `0ca7bdede`, `d7670f8d0`, `08b24049a`, `5a063a2c0`; el cierre del 6 se registra inmediatamente después de esta auditoría.
+  - Evidencia: Incrementos 2–6 en `0ca7bdede`, `d7670f8d0`, `08b24049a`, `5a063a2c0`, `471f6a848`.
 - [x] Incremento activo coincide con desarrollo real.
   - Evidencia: los seis incrementos figuran completados y sus Increment Reviews aprobados.
 
