@@ -256,6 +256,60 @@ class PixelArtEnhancer:
 
         return enhanced
 
+    @staticmethod
+    def build_quality_guide(metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Reintroduce la guía anatómica de calidad como resumen funcional para el flujo actual.
+        Devuelve un score compacto y una señal dominante por zona (cuerpo, rostro, ropa, accesorios),
+        útil tanto para la UI del monitor como para la regresión del entrenamiento.
+        """
+        if not isinstance(metrics, dict) or not metrics:
+            return {
+                "guide_score": 0.0,
+                "body_score": 0.0,
+                "face_score": 0.0,
+                "clothes_score": 0.0,
+                "accessory_score": 0.0,
+                "dominant_signal": "body",
+                "alerts": ["Sin métricas de calidad disponibles."],
+            }
+
+        guide_score = float(metrics.get("score_total", 0.0) or 0.0)
+        body_score = float(metrics.get("cuerpo_precision", guide_score) or 0.0)
+        face_score = float(metrics.get("gestos_ojos", guide_score) or 0.0)
+        clothes_score = float(metrics.get("ropa_delantal", guide_score) or 0.0)
+        accessory_score = float(metrics.get("objetos_utensilios", guide_score) or 0.0)
+
+        priorities = {
+            "body": body_score,
+            "face": face_score,
+            "clothes": clothes_score,
+            "accessories": accessory_score,
+        }
+        dominant_signal = max(priorities, key=priorities.get)
+
+        alerts: List[str] = []
+        if body_score < 85.0:
+            alerts.append("Cuerpo con poca precisión anatómica; revisar silueta y proporciones.")
+        if face_score < 85.0:
+            alerts.append("Rasgos faciales poco definidos; revisar ojos, cejas y expresión.")
+        if clothes_score < 85.0:
+            alerts.append("Ropa o delantal con desajuste cromático o forma débil.")
+        if accessory_score < 85.0:
+            alerts.append("Accesorios poco definidos; revisar utensilios y detalles del personaje.")
+        if not alerts:
+            alerts.append("La guía anatómica reporta estabilidad y coherencia general del personaje.")
+
+        return {
+            "guide_score": round(guide_score, 1),
+            "body_score": round(body_score, 1),
+            "face_score": round(face_score, 1),
+            "clothes_score": round(clothes_score, 1),
+            "accessory_score": round(accessory_score, 1),
+            "dominant_signal": dominant_signal,
+            "alerts": alerts,
+        }
+
     @classmethod
     def analyze_quality(cls, frame_img: Image.Image,
                         identity_img: Optional[Image.Image] = None,
@@ -426,7 +480,7 @@ class PixelArtEnhancer:
         else:
             total = round(macro_total * 0.75 + micro_elem_avg * 0.25, 1)
 
-        return {
+        metrics = {
             "score_total": total,
             "cuerpo_precision": round(cuerpo_precision_pct, 1),
             "defectos_cuerpo": defectos_cuerpo,
@@ -445,5 +499,7 @@ class PixelArtEnhancer:
             "ropa_delantal": round(score_ropa, 1),
             "tatuajes_brazos": round(score_brazos, 1),
             "objetos_utensilios": round(score_objetos, 1),
-            "zapatos_pies": round(score_zapatos, 1)
+            "zapatos_pies": round(score_zapatos, 1),
         }
+        metrics["quality_guide"] = cls.build_quality_guide(metrics)
+        return metrics

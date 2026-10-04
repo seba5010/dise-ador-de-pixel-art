@@ -1,0 +1,659 @@
+{
+  "character": "carlos",
+  "variant": "rbchef",
+  "variant_name": "ropa_blanca_chef",
+  "source_sheet": "personajes\\carlos\\movimientos_rbchef.png",
+  "source_front": "personajes\\carlos\\carlos_rbchef.png",
+  "grid": {
+    "rows": 12,
+    "columns": 4
+  },
+  "column_edges": [],
+  "row_edges": [],
+  "slots": 48,
+  "frames_saved": 48,
+  "empty_slots": [],
+  "excluded_slots": [],
+  "source_border_contact_frames": 0,
+  "output_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "preview": "training_samples\\frame_extraction_previews\\carlos__rbchef.png",
+  "frames": [
+    {
+      "slot": 1,
+      "row": 1,
+      "column": 1,
+      "file": "frame_001_r01_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        228,
+        1,
+        309,
+        130
+      ]
+    },
+    {
+      "slot": 2,
+      "row": 1,
+      "column": 2,
+      "file": "frame_002_r01_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        391,
+        1,
+        470,
+        130
+      ]
+    },
+    {
+      "slot": 3,
+      "row": 1,
+      "column": 3,
+      "file": "frame_003_r01_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        552,
+        2,
+        631,
+        129
+      ]
+    },
+    {
+      "slot": 4,
+      "row": 1,
+      "column": 4,
+      "file": "frame_004_r01_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        713,
+        1,
+        793,
+        129
+      ]
+    },
+    {
+      "slot": 5,
+      "row": 2,
+      "column": 1,
+      "file": "frame_005_r02_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        229,
+        119,
+        311,
+        245
+      ]
+    },
+    {
+      "slot": 6,
+      "row": 2,
+      "column": 2,
+      "file": "frame_006_r02_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        390,
+        119,
+        472,
+        245
+      ]
+    },
+    {
+      "slot": 7,
+      "row": 2,
+      "column": 3,
+      "file": "frame_007_r02_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        551,
+        119,
+        631,
+        245
+      ]
+    },
+    {
+      "slot": 8,
+      "row": 2,
+      "column": 4,
+      "file": "frame_008_r02_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        712,
+        119,
+        792,
+        245
+      ]
+    },
+    {
+      "slot": 9,
+      "row": 3,
+      "column": 1,
+      "file": "frame_009_r03_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        228,
+        236,
+        312,
+        367
+      ]
+    },
+    {
+      "slot": 10,
+      "row": 3,
+      "column": 2,
+      "file": "frame_010_r03_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        391,
+        236,
+        473,
+        367
+      ]
+    },
+    {
+      "slot": 11,
+      "row": 3,
+      "column": 3,
+      "file": "frame_011_r03_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        553,
+        235,
+        634,
+        367
+      ]
+    },
+    {
+      "slot": 12,
+      "row": 3,
+      "column": 4,
+      "file": "frame_012_r03_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        713,
+        236,
+        795,
+        367
+      ]
+    },
+    {
+      "slot": 13,
+      "row": 4,
+      "column": 1,
+      "file": "frame_013_r04_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        226,
+        357,
+        309,
+        488
+      ]
+    },
+    {
+      "slot": 14,
+      "row": 4,
+      "column": 2,
+      "file": "frame_014_r04_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        387,
+        357,
+        470,
+        488
+      ]
+    },
+    {
+      "slot": 15,
+      "row": 4,
+      "column": 3,
+      "file": "frame_015_r04_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        548,
+        357,
+        632,
+        488
+      ]
+    },
+    {
+      "slot": 16,
+      "row": 4,
+      "column": 4,
+      "file": "frame_016_r04_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        710,
+        357,
+        794,
+        488
+      ]
+    },
+    {
+      "slot": 17,
+      "row": 5,
+      "column": 1,
+      "file": "frame_017_r05_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        228,
+        476,
+        316,
+        613
+      ]
+    },
+    {
+      "slot": 18,
+      "row": 5,
+      "column": 2,
+      "file": "frame_018_r05_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        389,
+        476,
+        477,
+        613
+      ]
+    },
+    {
+      "slot": 19,
+      "row": 5,
+      "column": 3,
+      "file": "frame_019_r05_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        551,
+        476,
+        635,
+        613
+      ]
+    },
+    {
+      "slot": 20,
+      "row": 5,
+      "column": 4,
+      "file": "frame_020_r05_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        714,
+        476,
+        798,
+        613
+      ]
+    },
+    {
+      "slot": 21,
+      "row": 6,
+      "column": 1,
+      "file": "frame_021_r06_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        231,
+        600,
+        315,
+        736
+      ]
+    },
+    {
+      "slot": 22,
+      "row": 6,
+      "column": 2,
+      "file": "frame_022_r06_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        390,
+        599,
+        475,
+        736
+      ]
+    },
+    {
+      "slot": 23,
+      "row": 6,
+      "column": 3,
+      "file": "frame_023_r06_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        547,
+        600,
+        633,
+        737
+      ]
+    },
+    {
+      "slot": 24,
+      "row": 6,
+      "column": 4,
+      "file": "frame_024_r06_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        711,
+        600,
+        795,
+        736
+      ]
+    },
+    {
+      "slot": 25,
+      "row": 7,
+      "column": 1,
+      "file": "frame_025_r07_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        227,
+        724,
+        312,
+        856
+      ]
+    },
+    {
+      "slot": 26,
+      "row": 7,
+      "column": 2,
+      "file": "frame_026_r07_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        388,
+        725,
+        472,
+        856
+      ]
+    },
+    {
+      "slot": 27,
+      "row": 7,
+      "column": 3,
+      "file": "frame_027_r07_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        548,
+        724,
+        633,
+        856
+      ]
+    },
+    {
+      "slot": 28,
+      "row": 7,
+      "column": 4,
+      "file": "frame_028_r07_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        710,
+        726,
+        794,
+        856
+      ]
+    },
+    {
+      "slot": 29,
+      "row": 8,
+      "column": 1,
+      "file": "frame_029_r08_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        227,
+        845,
+        311,
+        978
+      ]
+    },
+    {
+      "slot": 30,
+      "row": 8,
+      "column": 2,
+      "file": "frame_030_r08_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        393,
+        845,
+        476,
+        978
+      ]
+    },
+    {
+      "slot": 31,
+      "row": 8,
+      "column": 3,
+      "file": "frame_031_r08_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        549,
+        845,
+        633,
+        978
+      ]
+    },
+    {
+      "slot": 32,
+      "row": 8,
+      "column": 4,
+      "file": "frame_032_r08_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        713,
+        844,
+        798,
+        978
+      ]
+    },
+    {
+      "slot": 33,
+      "row": 9,
+      "column": 1,
+      "file": "frame_033_r09_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        226,
+        967,
+        310,
+        1099
+      ]
+    },
+    {
+      "slot": 34,
+      "row": 9,
+      "column": 2,
+      "file": "frame_034_r09_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        385,
+        972,
+        488,
+        1098
+      ]
+    },
+    {
+      "slot": 35,
+      "row": 9,
+      "column": 3,
+      "file": "frame_035_r09_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        541,
+        968,
+        634,
+        1098
+      ]
+    },
+    {
+      "slot": 36,
+      "row": 9,
+      "column": 4,
+      "file": "frame_036_r09_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        705,
+        967,
+        797,
+        1098
+      ]
+    },
+    {
+      "slot": 37,
+      "row": 10,
+      "column": 1,
+      "file": "frame_037_r10_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        220,
+        1088,
+        312,
+        1226
+      ]
+    },
+    {
+      "slot": 38,
+      "row": 10,
+      "column": 2,
+      "file": "frame_038_r10_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        390,
+        1087,
+        490,
+        1226
+      ]
+    },
+    {
+      "slot": 39,
+      "row": 10,
+      "column": 3,
+      "file": "frame_039_r10_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        549,
+        1088,
+        658,
+        1225
+      ]
+    },
+    {
+      "slot": 40,
+      "row": 10,
+      "column": 4,
+      "file": "frame_040_r10_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        702,
+        1087,
+        794,
+        1225
+      ]
+    },
+    {
+      "slot": 41,
+      "row": 11,
+      "column": 1,
+      "file": "frame_041_r11_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        219,
+        1213,
+        312,
+        1353
+      ]
+    },
+    {
+      "slot": 42,
+      "row": 11,
+      "column": 2,
+      "file": "frame_042_r11_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        389,
+        1214,
+        473,
+        1353
+      ]
+    },
+    {
+      "slot": 43,
+      "row": 11,
+      "column": 3,
+      "file": "frame_043_r11_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        550,
+        1214,
+        645,
+        1353
+      ]
+    },
+    {
+      "slot": 44,
+      "row": 11,
+      "column": 4,
+      "file": "frame_044_r11_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        700,
+        1214,
+        793,
+        1353
+      ]
+    },
+    {
+      "slot": 45,
+      "row": 12,
+      "column": 1,
+      "file": "frame_045_r12_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        202,
+        1344,
+        342,
+        1519
+      ]
+    },
+    {
+      "slot": 46,
+      "row": 12,
+      "column": 2,
+      "file": "frame_046_r12_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        365,
+        1345,
+        502,
+        1516
+      ]
+    },
+    {
+      "slot": 47,
+      "row": 12,
+      "column": 3,
+      "file": "frame_047_r12_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        521,
+        1344,
+        661,
+        1519
+      ]
+    },
+    {
+      "slot": 48,
+      "row": 12,
+      "column": 4,
+      "file": "frame_048_r12_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        678,
+        1347,
+        808,
+        1523
+      ]
+    }
+  ],
+  "source_extraction": {
+    "method": "high_alpha_connected_components",
+    "alpha_threshold": 240,
+    "minimum_component_area": 1000,
+    "minimum_attachment_area": 8,
+    "preserves_tiny_attachments_without_dilation": false,
+    "edge_radius": 6,
+    "reason": "Las figuras cruzan los límites rectangulares y se aíslan completas antes de centrar y ampliar."
+  }
+}

@@ -170,8 +170,32 @@ def test_alpha_certification():
     print(f"[PASS] 2.4: Frames vacíos/faltantes ({len(audit_d['empty_cells'])}) y tocando bordes ({len(audit_d['border_touching_cells'])}): RECHAZADOS.")
 
 
+def test_quality_guidance_summary():
+    print("\n--- TEST 3: Guía anatómica de calidad ---")
+    metrics = {
+        "score_total": 91.2,
+        "cuerpo_precision": 94.5,
+        "fidelidad_paleta": 96.0,
+        "gestos_ojos": 88.7,
+        "ropa_delantal": 92.1,
+        "objetos_utensilios": 79.4,
+        "pelo_gorro": 93.0,
+        "zapatos_pies": 90.8,
+        "pureza_alfa": 99.2,
+    }
+    summary = train_mod.PixelArtEnhancer.build_quality_guide(metrics)
+    assert summary["guide_score"] == 91.2
+    assert summary["body_score"] == 94.5
+    assert summary["face_score"] == 88.7
+    assert summary["clothes_score"] == 92.1
+    assert summary["accessory_score"] == 79.4
+    assert "body" in summary["dominant_signal"]
+    assert isinstance(summary["alerts"], list)
+    print("[PASS] 3.1: Guía anatómica reintroducida con puntuación por cuerpo, rasgos, ropa y accesorios.")
+
+
 def test_monitor_historical_metrics():
-    print("\n--- TEST 3: Métricas Históricas del Monitor ---")
+    print("\n--- TEST 4: Métricas Históricas del Monitor ---")
     tmp_dir = tempfile.mkdtemp()
     temp_status = Path(tmp_dir) / "training_status.json"
     orig_status_file = train_mod.STATUS_FILE

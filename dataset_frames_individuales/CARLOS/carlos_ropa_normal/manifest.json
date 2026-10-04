@@ -1,0 +1,815 @@
+{
+  "character": "carlos",
+  "variant": "rnormal",
+  "variant_name": "ropa_normal",
+  "source_sheet": "personajes\\carlos\\movimientos_rnormal.png",
+  "source_front": "personajes\\carlos\\carlos_rnormal.png",
+  "grid": {
+    "rows": 15,
+    "columns": 4
+  },
+  "column_edges": [],
+  "row_edges": [],
+  "slots": 60,
+  "frames_saved": 60,
+  "empty_slots": [],
+  "excluded_slots": [],
+  "source_border_contact_frames": 0,
+  "output_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "preview": "training_samples\\frame_extraction_previews\\carlos__rnormal.png",
+  "frames": [
+    {
+      "slot": 1,
+      "row": 1,
+      "column": 1,
+      "file": "frame_001_r01_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        153,
+        2,
+        221,
+        113
+      ]
+    },
+    {
+      "slot": 2,
+      "row": 1,
+      "column": 2,
+      "file": "frame_002_r01_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        324,
+        1,
+        393,
+        114
+      ]
+    },
+    {
+      "slot": 3,
+      "row": 1,
+      "column": 3,
+      "file": "frame_003_r01_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        494,
+        0,
+        563,
+        114
+      ]
+    },
+    {
+      "slot": 4,
+      "row": 1,
+      "column": 4,
+      "file": "frame_004_r01_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        665,
+        0,
+        733,
+        113
+      ]
+    },
+    {
+      "slot": 5,
+      "row": 2,
+      "column": 1,
+      "file": "frame_005_r02_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        152,
+        109,
+        220,
+        223
+      ]
+    },
+    {
+      "slot": 6,
+      "row": 2,
+      "column": 2,
+      "file": "frame_006_r02_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        324,
+        104,
+        393,
+        223
+      ]
+    },
+    {
+      "slot": 7,
+      "row": 2,
+      "column": 3,
+      "file": "frame_007_r02_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        104,
+        564,
+        223
+      ]
+    },
+    {
+      "slot": 8,
+      "row": 2,
+      "column": 4,
+      "file": "frame_008_r02_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        665,
+        104,
+        734,
+        223
+      ]
+    },
+    {
+      "slot": 9,
+      "row": 3,
+      "column": 1,
+      "file": "frame_009_r03_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        152,
+        216,
+        221,
+        330
+      ]
+    },
+    {
+      "slot": 10,
+      "row": 3,
+      "column": 2,
+      "file": "frame_010_r03_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        324,
+        216,
+        393,
+        331
+      ]
+    },
+    {
+      "slot": 11,
+      "row": 3,
+      "column": 3,
+      "file": "frame_011_r03_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        216,
+        563,
+        331
+      ]
+    },
+    {
+      "slot": 12,
+      "row": 3,
+      "column": 4,
+      "file": "frame_012_r03_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        666,
+        216,
+        734,
+        331
+      ]
+    },
+    {
+      "slot": 13,
+      "row": 4,
+      "column": 1,
+      "file": "frame_013_r04_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        150,
+        323,
+        223,
+        443
+      ]
+    },
+    {
+      "slot": 14,
+      "row": 4,
+      "column": 2,
+      "file": "frame_014_r04_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        323,
+        321,
+        393,
+        443
+      ]
+    },
+    {
+      "slot": 15,
+      "row": 4,
+      "column": 3,
+      "file": "frame_015_r04_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        321,
+        565,
+        443
+      ]
+    },
+    {
+      "slot": 16,
+      "row": 4,
+      "column": 4,
+      "file": "frame_016_r04_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        662,
+        322,
+        735,
+        443
+      ]
+    },
+    {
+      "slot": 17,
+      "row": 5,
+      "column": 1,
+      "file": "frame_017_r05_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        153,
+        434,
+        219,
+        548
+      ]
+    },
+    {
+      "slot": 18,
+      "row": 5,
+      "column": 2,
+      "file": "frame_018_r05_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        325,
+        435,
+        392,
+        548
+      ]
+    },
+    {
+      "slot": 19,
+      "row": 5,
+      "column": 3,
+      "file": "frame_019_r05_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        495,
+        434,
+        562,
+        548
+      ]
+    },
+    {
+      "slot": 20,
+      "row": 5,
+      "column": 4,
+      "file": "frame_020_r05_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        667,
+        434,
+        734,
+        548
+      ]
+    },
+    {
+      "slot": 21,
+      "row": 6,
+      "column": 1,
+      "file": "frame_021_r06_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        152,
+        540,
+        223,
+        663
+      ]
+    },
+    {
+      "slot": 22,
+      "row": 6,
+      "column": 2,
+      "file": "frame_022_r06_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        325,
+        541,
+        395,
+        663
+      ]
+    },
+    {
+      "slot": 23,
+      "row": 6,
+      "column": 3,
+      "file": "frame_023_r06_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        541,
+        566,
+        663
+      ]
+    },
+    {
+      "slot": 24,
+      "row": 6,
+      "column": 4,
+      "file": "frame_024_r06_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        667,
+        540,
+        735,
+        663
+      ]
+    },
+    {
+      "slot": 25,
+      "row": 7,
+      "column": 1,
+      "file": "frame_025_r07_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        153,
+        657,
+        221,
+        774
+      ]
+    },
+    {
+      "slot": 26,
+      "row": 7,
+      "column": 2,
+      "file": "frame_026_r07_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        326,
+        658,
+        394,
+        774
+      ]
+    },
+    {
+      "slot": 27,
+      "row": 7,
+      "column": 3,
+      "file": "frame_027_r07_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        494,
+        658,
+        563,
+        774
+      ]
+    },
+    {
+      "slot": 28,
+      "row": 7,
+      "column": 4,
+      "file": "frame_028_r07_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        668,
+        657,
+        734,
+        774
+      ]
+    },
+    {
+      "slot": 29,
+      "row": 8,
+      "column": 1,
+      "file": "frame_029_r08_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        150,
+        766,
+        222,
+        887
+      ]
+    },
+    {
+      "slot": 30,
+      "row": 8,
+      "column": 2,
+      "file": "frame_030_r08_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        322,
+        766,
+        394,
+        887
+      ]
+    },
+    {
+      "slot": 31,
+      "row": 8,
+      "column": 3,
+      "file": "frame_031_r08_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        767,
+        565,
+        887
+      ]
+    },
+    {
+      "slot": 32,
+      "row": 8,
+      "column": 4,
+      "file": "frame_032_r08_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        662,
+        766,
+        735,
+        887
+      ]
+    },
+    {
+      "slot": 33,
+      "row": 9,
+      "column": 1,
+      "file": "frame_033_r09_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        144,
+        878,
+        226,
+        994
+      ]
+    },
+    {
+      "slot": 34,
+      "row": 9,
+      "column": 2,
+      "file": "frame_034_r09_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        315,
+        879,
+        400,
+        994
+      ]
+    },
+    {
+      "slot": 35,
+      "row": 9,
+      "column": 3,
+      "file": "frame_035_r09_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        488,
+        878,
+        569,
+        994
+      ]
+    },
+    {
+      "slot": 36,
+      "row": 9,
+      "column": 4,
+      "file": "frame_036_r09_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        660,
+        878,
+        739,
+        995
+      ]
+    },
+    {
+      "slot": 37,
+      "row": 10,
+      "column": 1,
+      "file": "frame_037_r10_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        148,
+        985,
+        230,
+        1101
+      ]
+    },
+    {
+      "slot": 38,
+      "row": 10,
+      "column": 2,
+      "file": "frame_038_r10_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        319,
+        984,
+        399,
+        1101
+      ]
+    },
+    {
+      "slot": 39,
+      "row": 10,
+      "column": 3,
+      "file": "frame_039_r10_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        483,
+        984,
+        568,
+        1101
+      ]
+    },
+    {
+      "slot": 40,
+      "row": 10,
+      "column": 4,
+      "file": "frame_040_r10_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        659,
+        984,
+        736,
+        1101
+      ]
+    },
+    {
+      "slot": 41,
+      "row": 11,
+      "column": 1,
+      "file": "frame_041_r11_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        145,
+        1092,
+        220,
+        1212
+      ]
+    },
+    {
+      "slot": 42,
+      "row": 11,
+      "column": 2,
+      "file": "frame_042_r11_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        313,
+        1092,
+        389,
+        1212
+      ]
+    },
+    {
+      "slot": 43,
+      "row": 11,
+      "column": 3,
+      "file": "frame_043_r11_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        484,
+        1091,
+        560,
+        1212
+      ]
+    },
+    {
+      "slot": 44,
+      "row": 11,
+      "column": 4,
+      "file": "frame_044_r11_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        654,
+        1093,
+        729,
+        1212
+      ]
+    },
+    {
+      "slot": 45,
+      "row": 12,
+      "column": 1,
+      "file": "frame_045_r12_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        154,
+        1204,
+        226,
+        1331
+      ]
+    },
+    {
+      "slot": 46,
+      "row": 12,
+      "column": 2,
+      "file": "frame_046_r12_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        322,
+        1203,
+        396,
+        1331
+      ]
+    },
+    {
+      "slot": 47,
+      "row": 12,
+      "column": 3,
+      "file": "frame_047_r12_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        493,
+        1205,
+        565,
+        1331
+      ]
+    },
+    {
+      "slot": 48,
+      "row": 12,
+      "column": 4,
+      "file": "frame_048_r12_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        664,
+        1204,
+        737,
+        1331
+      ]
+    },
+    {
+      "slot": 49,
+      "row": 13,
+      "column": 1,
+      "file": "frame_049_r13_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        152,
+        1321,
+        221,
+        1457
+      ]
+    },
+    {
+      "slot": 50,
+      "row": 13,
+      "column": 2,
+      "file": "frame_050_r13_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        313,
+        1323,
+        391,
+        1457
+      ]
+    },
+    {
+      "slot": 51,
+      "row": 13,
+      "column": 3,
+      "file": "frame_051_r13_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        491,
+        1323,
+        564,
+        1457
+      ]
+    },
+    {
+      "slot": 52,
+      "row": 13,
+      "column": 4,
+      "file": "frame_052_r13_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        663,
+        1323,
+        736,
+        1457
+      ]
+    },
+    {
+      "slot": 53,
+      "row": 14,
+      "column": 1,
+      "file": "frame_053_r14_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        149,
+        1448,
+        224,
+        1584
+      ]
+    },
+    {
+      "slot": 54,
+      "row": 14,
+      "column": 2,
+      "file": "frame_054_r14_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        318,
+        1452,
+        411,
+        1584
+      ]
+    },
+    {
+      "slot": 55,
+      "row": 14,
+      "column": 3,
+      "file": "frame_055_r14_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        489,
+        1450,
+        592,
+        1585
+      ]
+    },
+    {
+      "slot": 56,
+      "row": 14,
+      "column": 4,
+      "file": "frame_056_r14_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        662,
+        1448,
+        735,
+        1584
+      ]
+    },
+    {
+      "slot": 57,
+      "row": 15,
+      "column": 1,
+      "file": "frame_057_r15_c01.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        148,
+        1582,
+        226,
+        1725
+      ]
+    },
+    {
+      "slot": 58,
+      "row": 15,
+      "column": 2,
+      "file": "frame_058_r15_c02.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        299,
+        1581,
+        413,
+        1729
+      ]
+    },
+    {
+      "slot": 59,
+      "row": 15,
+      "column": 3,
+      "file": "frame_059_r15_c03.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        477,
+        1582,
+        572,
+        1729
+      ]
+    },
+    {
+      "slot": 60,
+      "row": 15,
+      "column": 4,
+      "file": "frame_060_r15_c04.png",
+      "source_border_contacts": [],
+      "source_component_bbox": [
+        648,
+        1582,
+        750,
+        1725
+      ]
+    }
+  ],
+  "source_extraction": {
+    "method": "high_alpha_connected_components",
+    "alpha_threshold": 240,
+    "minimum_component_area": 1000,
+    "minimum_attachment_area": 8,
+    "preserves_tiny_attachments_without_dilation": false,
+    "edge_radius": 6,
+    "reason": "Las figuras cruzan los límites rectangulares y se aíslan completas antes de centrar y ampliar."
+  }
+}

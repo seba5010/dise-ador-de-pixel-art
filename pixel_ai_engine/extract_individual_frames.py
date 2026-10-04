@@ -76,9 +76,10 @@ GRID_OVERRIDES: Dict[str, Tuple[int, int]] = {
     "andres_arica/movimientos_rnormal.png": (10, 4),
     "bastian/movimientos_rbchef.png": (13, 4),
     "bastian/movimientos_rnchef.png": (13, 4),
+    "benja bacaba/movimientos_rbchef.png": (11, 8),
     "carlos/movimientos_rbchef.png": (12, 4),
-    "carlos/movimientos_rnchef.png": (12, 4),
-    "carlos/movimientos_rnormal.png": (12, 4),
+    "carlos/movimientos_rnchef.png": (14, 4),
+    "carlos/movimientos_rnormal.png": (15, 4),
     "diego serena/movimientos_rnormal.png": (9, 4),
     "diego_vallenar/movimientos_rnormal.png": (8, 4),
     "erin/movimientos_rbchef.png": (8, 4),
@@ -90,6 +91,31 @@ GRID_OVERRIDES: Dict[str, Tuple[int, int]] = {
     "zack/movimientos_rbchef.png": (9, 8),
     "zack/movimientos_rnchef.png": (9, 8),
     "zack/movimientos_rnormal.png": (9, 8),
+}
+
+# These sheets contain sprites that cross the apparent cell boundaries and a
+# faint semi-transparent backdrop.  A rectangular crop would either slice a
+# body or retain a dark band, so each pose is isolated from its opaque core.
+COMPONENT_GRID_SHEETS = {
+    "benja bacaba/movimientos_rbchef.png",
+    "benja bacaba/movimientos_rnchef.png",
+    "benja bacaba/movimientos_rnormal.png",
+    "carlos/movimientos_rbchef.png",
+    "carlos/movimientos_rnchef.png",
+    "carlos/movimientos_rnormal.png",
+}
+COMPONENT_ALPHA_THRESHOLD = 240
+COMPONENT_MIN_AREA = 1000
+COMPONENT_ATTACHMENT_MIN_AREA = 8
+COMPONENT_EDGE_RADIUS = 6
+BENJA_COMPONENT_EDGE_RADIUS = 10
+COMPONENT_ATTACHMENT_DISTANCE = 96.0
+
+# These sparkles belong to a neighboring animation pose in the uploaded sheet.
+# Remove them before normalization so the actual character remains centered and
+# uses the same safe margins as every other extracted frame.
+DETACHED_GOLD_EFFECT_SLOTS: Dict[str, set[int]] = {
+    "benja bacaba/movimientos_rnormal.png": {85, 86},
 }
 
 UNIFORM_GRID_SHEETS = {
@@ -328,6 +354,224 @@ def foreground_mask(image: Image.Image, alpha_threshold: int = ALPHA_THRESHOLD) 
     background = np.median(corners, axis=0)
     difference = np.sqrt(np.sum((rgb - background) ** 2, axis=-1))
     return difference > 26.0
+
+
+def extract_component_grid_frames(
+    sheet: Image.Image,
+    rows: int,
+    cols: int,
+    preserve_tiny_attachments: bool = False,
+    edge_radius: int = COMPONENT_EDGE_RADIUS,
+) -> Tuple[Dict[Tuple[int, int], Image.Image], Dict[Tuple[int, int], List[int]]]:
+    """Isolate overlapping grid poses without cutting them at cell boundaries."""
+    try:
+        cv2: Any = import_module("cv2")
+    except ImportError as error:
+        raise RuntimeError(
+            "OpenCV es necesario para separar las hojas superpuestas de Benja y Carlos."
+        ) from error
+
+    rgba = np.array(sheet.convert("RGBA"))
+    alpha = rgba[:, :, 3]
+    solid = (alpha > COMPONENT_ALPHA_THRESHOLD).astype(np.uint8)
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        solid,
+        connectivity=8,
+    )
+    main_labels = [
+        label
+        for label in range(1, count)
+        if int(stats[label, cv2.CC_STAT_AREA]) >= COMPONENT_MIN_AREA
+    ]
+    expected = rows * cols
+    if len(main_labels) != expected:
+        raise RuntimeError(
+            f"La hoja contiene {len(main_labels)} figuras principales, pero la cuadrícula "
+            f"{rows}x{cols} requiere {expected}."
+        )
+
+    # Each row has a very tight centroid band even when a tall pose overlaps
+    # the visual space of its neighbors.  Sorting and chunking keeps the source
+    # order deterministic, then the x sort restores left-to-right frame order.
+    main_labels.sort(key=lambda label: float(centroids[label][1]))
+    grid_labels: Dict[Tuple[int, int], int] = {}
+    for row in range(rows):
+        row_labels = main_labels[row * cols : (row + 1) * cols]
+        row_labels.sort(key=lambda label: float(centroids[label][0]))
+        for col, label in enumerate(row_labels):
+            grid_labels[(row, col)] = label
+
+    main_mask = np.isin(labels, np.asarray(main_labels, dtype=labels.dtype))
+    distance_input = np.where(main_mask, 0, 1).astype(np.uint8)
+    distances, nearest_components = cv2.distanceTransformWithLabels(
+        distance_input,
+        cv2.DIST_L2,
+        5,
+        labelType=cv2.DIST_LABEL_CCOMP,
+    )
+
+    nearest_id_by_main_label: Dict[int, int] = {}
+    for label in main_labels:
+        first_y, first_x = np.argwhere(labels == label)[0]
+        nearest_id_by_main_label[label] = int(nearest_components[first_y, first_x])
+
+    # Assign every detached opaque island as a whole.  Pixel-wise Voronoi
+    # assignment can split one sparkle between adjacent animation frames.
+    main_label_set = set(main_labels)
+    auxiliary_labels_by_nearest_id: Dict[int, List[int]] = {}
+    for source_label in range(1, count):
+        if source_label in main_label_set:
+            continue
+        source_coordinates = np.argwhere(labels == source_label)
+        if len(source_coordinates) == 0:
+            continue
+        source_y = source_coordinates[:, 0]
+        source_x = source_coordinates[:, 1]
+        source_distances = distances[source_y, source_x]
+        nearest_index = int(np.argmin(source_distances))
+        if float(source_distances[nearest_index]) > COMPONENT_ATTACHMENT_DISTANCE:
+            continue
+        owner_y = int(source_y[nearest_index])
+        owner_x = int(source_x[nearest_index])
+        owner_id = int(nearest_components[owner_y, owner_x])
+        auxiliary_labels_by_nearest_id.setdefault(owner_id, []).append(source_label)
+
+    kernel_size = edge_radius * 2 + 1
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    frames: Dict[Tuple[int, int], Image.Image] = {}
+    source_boxes: Dict[Tuple[int, int], List[int]] = {}
+    height, width = alpha.shape
+
+    for grid_position, main_label in grid_labels.items():
+        nearest_id = nearest_id_by_main_label[main_label]
+        assigned_source_labels = [main_label]
+        assigned_source_labels.extend(
+            auxiliary_labels_by_nearest_id.get(nearest_id, [])
+        )
+        owned_core = np.isin(
+            labels,
+            np.asarray(assigned_source_labels, dtype=labels.dtype),
+        )
+        owned_count, owned_labels, owned_stats, _ = cv2.connectedComponentsWithStats(
+            owned_core.astype(np.uint8),
+            connectivity=8,
+        )
+        main_y, main_x = np.argwhere(labels == main_label)[0]
+        owned_main_label = int(owned_labels[main_y, main_x])
+        expanded_owned_labels = [owned_main_label]
+        expanded_owned_labels.extend(
+            owned_label
+            for owned_label in range(1, owned_count)
+            if owned_label != owned_main_label
+            and int(owned_stats[owned_label, cv2.CC_STAT_AREA])
+            >= COMPONENT_ATTACHMENT_MIN_AREA
+        )
+        expanded_core = np.isin(
+            owned_labels,
+            np.asarray(expanded_owned_labels, dtype=owned_labels.dtype),
+        )
+        tiny_core = np.zeros_like(expanded_core)
+        if preserve_tiny_attachments:
+            tiny_owned_labels = [
+                owned_label
+                for owned_label in range(1, owned_count)
+                if owned_label not in expanded_owned_labels
+            ]
+            if tiny_owned_labels:
+                tiny_core = np.isin(
+                    owned_labels,
+                    np.asarray(tiny_owned_labels, dtype=owned_labels.dtype),
+                )
+        owned_core = expanded_core | tiny_core
+        coordinates = np.argwhere(owned_core)
+        if len(coordinates) == 0:
+            raise RuntimeError(f"No se pudo aislar el frame {grid_position}.")
+
+        y0, x0 = coordinates.min(axis=0)
+        y1, x1 = coordinates.max(axis=0) + 1
+        margin = edge_radius + 2
+        x0 = max(0, int(x0) - margin)
+        y0 = max(0, int(y0) - margin)
+        x1 = min(width, int(x1) + margin)
+        y1 = min(height, int(y1) + margin)
+
+        local_expanded_core = expanded_core[y0:y1, x0:x1].astype(np.uint8)
+        local_tiny_core = tiny_core[y0:y1, x0:x1]
+        local_core = local_expanded_core | local_tiny_core
+        expanded = cv2.dilate(local_expanded_core, kernel, iterations=1) > 0
+        local_owner = nearest_components[y0:y1, x0:x1] == nearest_id
+        support = (
+            expanded
+            & local_owner
+            & (alpha[y0:y1, x0:x1] > ALPHA_THRESHOLD)
+        )
+        local_source_labels = labels[y0:y1, x0:x1]
+        foreign_opaque_core = (
+            (local_source_labels > 0)
+            & ~np.isin(
+                local_source_labels,
+                np.asarray(assigned_source_labels, dtype=labels.dtype),
+            )
+        )
+        support &= ~foreign_opaque_core
+        support |= local_expanded_core > 0
+        support |= local_tiny_core
+        support_count, support_labels, _, _ = cv2.connectedComponentsWithStats(
+            support.astype(np.uint8),
+            connectivity=8,
+        )
+        seeded_support_labels = np.unique(support_labels[local_core > 0])
+        seeded_support_labels = seeded_support_labels[seeded_support_labels > 0]
+        if support_count > 1 and len(seeded_support_labels):
+            support = np.isin(support_labels, seeded_support_labels)
+        isolated = rgba[y0:y1, x0:x1].copy()
+        isolated[~support, 3] = 0
+        frames[grid_position] = Image.fromarray(isolated, mode="RGBA")
+        source_boxes[grid_position] = [x0, y0, x1, y1]
+
+    return frames, source_boxes
+
+
+def remove_detached_gold_effects(image: Image.Image) -> Tuple[Image.Image, int]:
+    """Remove detached yellow floor effects while preserving the main sprite."""
+    try:
+        cv2: Any = import_module("cv2")
+    except ImportError as error:
+        raise RuntimeError(
+            "OpenCV es necesario para limpiar los efectos separados de Benja."
+        ) from error
+
+    rgba = np.array(image.convert("RGBA"))
+    visible = (rgba[:, :, 3] > ALPHA_THRESHOLD).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        visible,
+        connectivity=8,
+    )
+    if count <= 2:
+        return image.convert("RGBA"), 0
+
+    main_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    red = rgba[:, :, 0].astype(np.int16)
+    green = rgba[:, :, 1].astype(np.int16)
+    blue = rgba[:, :, 2].astype(np.int16)
+    gold = (
+        (red > 160)
+        & (green > 90)
+        & (blue < 110)
+        & ((red - blue) > 80)
+    )
+
+    removed = 0
+    for label in range(1, count):
+        if label == main_label:
+            continue
+        component = labels == label
+        if not np.any(component & gold):
+            continue
+        rgba[component] = 0
+        removed += 1
+
+    return Image.fromarray(rgba, mode="RGBA"), removed
 
 
 def normalize_frame(
@@ -1060,7 +1304,25 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
     width, height = sheet.size
     sheet_key = relative_sheet_key(spec.sheet_path)
     is_duvan_white = sheet_key == DUVAN_WHITE_SHEET
-    if is_duvan_white:
+    uses_component_grid = sheet_key in COMPONENT_GRID_SHEETS
+    component_frames: Dict[Tuple[int, int], Image.Image] = {}
+    component_boxes: Dict[Tuple[int, int], List[int]] = {}
+    if uses_component_grid:
+        component_frames, component_boxes = extract_component_grid_frames(
+            sheet,
+            spec.rows,
+            spec.cols,
+            preserve_tiny_attachments=sheet_key.startswith("benja bacaba/"),
+            edge_radius=(
+                BENJA_COMPONENT_EDGE_RADIUS
+                if sheet_key.startswith("benja bacaba/")
+                else COMPONENT_EDGE_RADIUS
+            ),
+        )
+        column_edges = []
+        row_edges = []
+        overlap_frames = {}
+    elif is_duvan_white:
         column_edges = list(DUVAN_WHITE_COLUMN_EDGES)
         row_edges = list(DUVAN_WHITE_ROW_EDGES)
         overlap_frames = extract_duvan_white_overlaps(sheet, column_edges)
@@ -1078,6 +1340,8 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
     frame_records: List[Dict[str, object]] = []
     empty_slots: List[int] = []
     excluded_slots = sorted(EXCLUDED_FRAME_SLOTS.get(relative_sheet_key(spec.sheet_path), set()))
+    detached_gold_effect_slots = DETACHED_GOLD_EFFECT_SLOTS.get(sheet_key, set())
+    removed_gold_effects: Dict[int, int] = {}
     if is_duvan_white:
         excluded_slots = sorted(set(excluded_slots) | {61, 62, 63, 64})
     excluded_slot_set = set(excluded_slots)
@@ -1088,7 +1352,9 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
             slot = row * spec.cols + col
             if slot + 1 in excluded_slot_set:
                 continue
-            if is_duvan_white and row >= 12:
+            if uses_component_grid:
+                cell = component_frames[(row, col)]
+            elif is_duvan_white and row >= 12:
                 cell = overlap_frames.get((row, col))
                 if cell is None:
                     raise RuntimeError(
@@ -1100,6 +1366,10 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
                 y0 = row_edges[row]
                 y1 = row_edges[row + 1]
                 cell = sheet.crop((x0, y0, x1, y1))
+            if slot + 1 in detached_gold_effect_slots:
+                cell, removed_count = remove_detached_gold_effects(cell)
+                if removed_count:
+                    removed_gold_effects[slot + 1] = removed_count
             normalized, bounds = normalize_frame(
                 cell,
                 allow_upscale=True,
@@ -1112,7 +1382,7 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
 
             sides = (
                 []
-                if is_duvan_white and row >= 12
+                if uses_component_grid or (is_duvan_white and row >= 12)
                 else source_border_sides(bounds, cell.width, cell.height)
             )
             if sides:
@@ -1120,15 +1390,20 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
             filename = f"frame_{slot + 1:03d}_r{row + 1:02d}_c{col + 1:02d}.png"
             normalized.save(destination / filename)
             frames[slot] = normalized
-            frame_records.append(
-                {
-                    "slot": slot + 1,
-                    "row": row + 1,
-                    "column": col + 1,
-                    "file": filename,
-                    "source_border_contacts": sides,
-                }
-            )
+            frame_record: Dict[str, object] = {
+                "slot": slot + 1,
+                "row": row + 1,
+                "column": col + 1,
+                "file": filename,
+                "source_border_contacts": sides,
+            }
+            if uses_component_grid:
+                frame_record["source_component_bbox"] = component_boxes[(row, col)]
+            if slot + 1 in removed_gold_effects:
+                frame_record["removed_detached_gold_components"] = removed_gold_effects[
+                    slot + 1
+                ]
+            frame_records.append(frame_record)
 
     if spec.front_path:
         with Image.open(spec.front_path) as source_front:
@@ -1169,6 +1444,29 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
             "excluded_source_slots": [61, 62, 63, 64],
             "reason": "La hoja fuente termina antes de mostrar una fila 16 completa.",
         }
+    elif uses_component_grid:
+        manifest["source_extraction"] = {
+            "method": "high_alpha_connected_components",
+            "alpha_threshold": COMPONENT_ALPHA_THRESHOLD,
+            "minimum_component_area": COMPONENT_MIN_AREA,
+            "minimum_attachment_area": COMPONENT_ATTACHMENT_MIN_AREA,
+            "preserves_tiny_attachments_without_dilation": sheet_key.startswith(
+                "benja bacaba/"
+            ),
+            "edge_radius": (
+                BENJA_COMPONENT_EDGE_RADIUS
+                if sheet_key.startswith("benja bacaba/")
+                else COMPONENT_EDGE_RADIUS
+            ),
+            "reason": (
+                "Las figuras cruzan los límites rectangulares y se aíslan completas "
+                "antes de centrar y ampliar."
+            ),
+        }
+        if removed_gold_effects:
+            manifest["source_extraction"]["removed_detached_gold_effects"] = {
+                str(slot): count for slot, count in sorted(removed_gold_effects.items())
+            }
     (destination / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )

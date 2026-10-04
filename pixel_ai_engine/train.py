@@ -361,6 +361,7 @@ def generate_sample_preview(generator: nn.Module,
     if first_enhanced_pil is not None:
         qc_enh = PixelArtEnhancer.analyze_quality(first_enhanced_pil, palette=canonical_pal, target_img=target_gt_img)
         qc["enhanced_total"] = qc_enh["score_total"]
+    qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(qc)
     generator.train()
     return qc
 
@@ -588,6 +589,12 @@ def train(epochs: int = EPOCHS,
             
             # Escribir estado en JSON para el monitor web en tiempo real
             elapsed_total = time.time() - training_start_time
+            if isinstance(last_qc, dict) and "quality_guide" not in last_qc:
+                try:
+                    last_qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(last_qc)
+                except Exception:
+                    pass
+
             status = {
                 "epoch": epoch,
                 "total_epochs": "\u221e" if infinite_mode else total_epochs,

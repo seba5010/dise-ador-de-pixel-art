@@ -1,12 +1,14 @@
 {
-  "characters": 24,
+  "characters": 26,
   "character_names": [
     "alex",
     "amaro",
     "andrea",
     "andres_arica",
     "bastian",
+    "benja bacaba",
     "belial",
+    "carlos",
     "conny",
     "dafne",
     "dana",
@@ -26,8 +28,8 @@
     "tori",
     "zack"
   ],
-  "variants": 50,
-  "frames_saved": 3143,
+  "variants": 56,
+  "frames_saved": 3587,
   "empty_slots": 68,
   "output_size": [
     256,
@@ -126,6 +128,24 @@
       "slots": 64
     },
     {
+      "character": "benja bacaba",
+      "variant": "rbchef",
+      "frames_saved": 88,
+      "slots": 88
+    },
+    {
+      "character": "benja bacaba",
+      "variant": "rnchef",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
+      "character": "benja bacaba",
+      "variant": "rnormal",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
       "character": "belial",
       "variant": "rnormal",
       "frames_saved": 64,
@@ -142,6 +162,24 @@
       "variant": "rnchef",
       "frames_saved": 52,
       "slots": 64
+    },
+    {
+      "character": "carlos",
+      "variant": "rbchef",
+      "frames_saved": 48,
+      "slots": 48
+    },
+    {
+      "character": "carlos",
+      "variant": "rnchef",
+      "frames_saved": 56,
+      "slots": 56
+    },
+    {
+      "character": "carlos",
+      "variant": "rnormal",
+      "frames_saved": 60,
+      "slots": 60
     },
     {
       "character": "conny",
