@@ -168,3 +168,109 @@ def test_monitor_reads_new_guidance_contract():
     assert "d.guidance || d.quality_guidance" in monitor
     assert "OBSERVACIONAL" in monitor
     assert "info.guidance || info.quality_guidance" in studio
+
+
+def test_cpu_smoke_training_completes_and_resumes_with_guidance(monkeypatch, tmp_path):
+    class TinyDataset(torch.utils.data.Dataset):
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, _index):
+            return (
+                torch.zeros(3, 8, 8),
+                0,
+                torch.zeros(4, 8, 8),
+                "tiny",
+            )
+
+    class TinyGenerator(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = torch.nn.Conv2d(6, 4, kernel_size=1)
+
+        def forward(self, value):
+            return torch.tanh(self.layer(value))
+
+    class TinyDiscriminator(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = torch.nn.Conv2d(10, 1, kernel_size=1)
+
+        def forward(self, condition, target):
+            return self.layer(torch.cat([condition, target], dim=1))
+
+    class TinyTemplateManager:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_frame_tensor(self, _frame_index):
+            return torch.zeros(3, 8, 8)
+
+    import pixel_ai_engine.dataset as dataset_module
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    snapshots_dir = checkpoint_dir / "snapshots"
+    checkpoint_dir.mkdir()
+    snapshots_dir.mkdir()
+    monkeypatch.setattr(train_supervised, "CHECKPOINT_DIR", checkpoint_dir)
+    monkeypatch.setattr(train_supervised, "SNAPSHOTS_DIR", snapshots_dir)
+    monkeypatch.setattr(train_supervised, "STATUS_FILE", tmp_path / "training_status.json")
+    monkeypatch.setattr(train_supervised, "STOP_FLAG_FILE", tmp_path / "stop.flag")
+    monkeypatch.setattr(train_supervised, "PAUSE_FLAG_FILE", tmp_path / "pause.flag")
+    monkeypatch.setattr(train_supervised, "CACHE_PATH", tmp_path / "cache.pt")
+    monkeypatch.setattr(train_supervised, "DEVICE", torch.device("cpu"))
+    monkeypatch.setattr(train_supervised, "USE_AMP", False)
+    monkeypatch.setattr(train_supervised, "HAS_KORNIA", False)
+    monkeypatch.setattr(train_supervised, "SupervisedTensorDataset", TinyDataset)
+    monkeypatch.setattr(train_supervised, "PixelArtUNetGenerator", TinyGenerator)
+    monkeypatch.setattr(train_supervised, "PixelArtPatchDiscriminator", TinyDiscriminator)
+    monkeypatch.setattr(dataset_module, "TemplateManager", TinyTemplateManager)
+    monkeypatch.setattr(train_supervised, "get_hardware_telemetry", _telemetry)
+    monkeypatch.setattr(train_supervised, "get_available_snapshots", lambda: [])
+    monkeypatch.setattr(train_supervised, "generate_preview", lambda *_args, **_kwargs: _quality(65))
+    monkeypatch.setattr(train_supervised, "manage_adaptive_thermal_throttle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_supervised, "detect_training_instability", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_supervised, "repair_current_training_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_supervised, "ENABLE_QUALITY_GUIDANCE", True)
+
+    train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="start")
+    first = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
+    assert first["status"] == "COMPLETADO"
+    assert first["epoch"] == 1
+    assert first["guidance"]["action"] == "CONTINUE"
+    assert (checkpoint_dir / "latest_checkpoint.pt").is_file()
+
+    train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="resume")
+    resumed = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
+    assert resumed["status"] == "COMPLETADO"
+    assert resumed["epoch"] == 2
+    assert [entry["epoch"] for entry in resumed["history"]] == [1, 2]
+    assert len(resumed["guidance_state"]["quality_history"]) == 2
+
+    class PauseDuringBatch:
+        def __init__(self):
+            self.checks = 0
+
+        def exists(self):
+            self.checks += 1
+            return self.checks == 3
+
+        def unlink(self):
+            pass
+
+    monkeypatch.setattr(train_supervised, "PAUSE_FLAG_FILE", PauseDuringBatch())
+    train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="resume")
+    paused = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
+    assert paused["status"] == "PAUSADO"
+    assert paused["epoch"] == 3
+    assert paused["guidance_state"]["quality_history"][-1]["epoch"] == 3
+
+    monkeypatch.setattr(train_supervised, "PAUSE_FLAG_FILE", tmp_path / "pause-after-resume.flag")
+    train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="resume")
+    after_pause = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
+    assert after_pause["status"] == "COMPLETADO"
+    assert after_pause["epoch"] == 4
+    assert [entry["epoch"] for entry in after_pause["history"]] == [1, 2, 3, 4]
