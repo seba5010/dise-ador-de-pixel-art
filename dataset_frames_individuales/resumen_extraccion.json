@@ -1,0 +1,339 @@
+{
+  "characters": 24,
+  "character_names": [
+    "alex",
+    "amaro",
+    "andrea",
+    "andres_arica",
+    "bastian",
+    "belial",
+    "conny",
+    "dafne",
+    "dana",
+    "diego serena",
+    "diego_vallenar",
+    "duvan",
+    "erin",
+    "jorge",
+    "juan",
+    "mario",
+    "maty hermano",
+    "nico",
+    "nikol",
+    "rafa",
+    "seba",
+    "sebas",
+    "tori",
+    "zack"
+  ],
+  "variants": 50,
+  "frames_saved": 3143,
+  "empty_slots": 68,
+  "output_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "manifests": [
+    {
+      "character": "alex",
+      "variant": "rbchef",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
+      "character": "alex",
+      "variant": "rnchef",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
+      "character": "alex",
+      "variant": "rnormal",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
+      "character": "amaro",
+      "variant": "rbchef",
+      "frames_saved": 96,
+      "slots": 96
+    },
+    {
+      "character": "amaro",
+      "variant": "rnchef",
+      "frames_saved": 88,
+      "slots": 96
+    },
+    {
+      "character": "amaro",
+      "variant": "rnormal",
+      "frames_saved": 80,
+      "slots": 96
+    },
+    {
+      "character": "andrea",
+      "variant": "rbchef",
+      "frames_saved": 48,
+      "slots": 48
+    },
+    {
+      "character": "andrea",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "andrea",
+      "variant": "rnormal",
+      "frames_saved": 88,
+      "slots": 88
+    },
+    {
+      "character": "andres_arica",
+      "variant": "rbchef",
+      "frames_saved": 44,
+      "slots": 44
+    },
+    {
+      "character": "andres_arica",
+      "variant": "rnchef",
+      "frames_saved": 52,
+      "slots": 52
+    },
+    {
+      "character": "andres_arica",
+      "variant": "rnormal",
+      "frames_saved": 40,
+      "slots": 40
+    },
+    {
+      "character": "bastian",
+      "variant": "rbchef",
+      "frames_saved": 52,
+      "slots": 52
+    },
+    {
+      "character": "bastian",
+      "variant": "rnchef",
+      "frames_saved": 52,
+      "slots": 52
+    },
+    {
+      "character": "bastian",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "belial",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "belial",
+      "variant": "rbchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "belial",
+      "variant": "rnchef",
+      "frames_saved": 52,
+      "slots": 64
+    },
+    {
+      "character": "conny",
+      "variant": "rbchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "conny",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "conny",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "dafne",
+      "variant": "rbchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "dafne",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "dafne",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "dana",
+      "variant": "rbchef",
+      "frames_saved": 48,
+      "slots": 64
+    },
+    {
+      "character": "dana",
+      "variant": "rnchef",
+      "frames_saved": 48,
+      "slots": 64
+    },
+    {
+      "character": "dana",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "diego serena",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "diego serena",
+      "variant": "rnormal",
+      "frames_saved": 36,
+      "slots": 36
+    },
+    {
+      "character": "diego_vallenar",
+      "variant": "rbchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "diego_vallenar",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "diego_vallenar",
+      "variant": "rnormal",
+      "frames_saved": 32,
+      "slots": 32
+    },
+    {
+      "character": "duvan",
+      "variant": "rbchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "duvan",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "erin",
+      "variant": "rbchef",
+      "frames_saved": 32,
+      "slots": 32
+    },
+    {
+      "character": "erin",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "jorge",
+      "variant": "rnchef",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "jorge",
+      "variant": "rnormal",
+      "frames_saved": 63,
+      "slots": 64
+    },
+    {
+      "character": "juan",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "mario",
+      "variant": "rnormal",
+      "frames_saved": 32,
+      "slots": 32
+    },
+    {
+      "character": "maty hermano",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "nico",
+      "variant": "rnormal",
+      "frames_saved": 60,
+      "slots": 60
+    },
+    {
+      "character": "nikol",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "rafa",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "seba",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "sebas",
+      "variant": "rnormal",
+      "frames_saved": 64,
+      "slots": 64
+    },
+    {
+      "character": "tori",
+      "variant": "rnormal",
+      "frames_saved": 60,
+      "slots": 60
+    },
+    {
+      "character": "zack",
+      "variant": "rbchef",
+      "frames_saved": 72,
+      "slots": 72
+    },
+    {
+      "character": "zack",
+      "variant": "rnchef",
+      "frames_saved": 72,
+      "slots": 72
+    },
+    {
+      "character": "zack",
+      "variant": "rnormal",
+      "frames_saved": 72,
+      "slots": 72
+    }
+  ]
+}

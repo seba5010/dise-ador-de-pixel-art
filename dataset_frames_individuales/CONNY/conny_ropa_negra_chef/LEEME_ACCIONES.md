@@ -1,5 +1,7 @@
-# Guía de Acciones (Plantilla 16x4 - 64 Frames)
-- Filas 01 a 04 (Frames 01 a 16): Caminata Frontal / Vista Sur (Idle y pasos)
-- Filas 05 a 08 (Frames 17 a 32): Caminata Espalda / Vista Norte (Idle y pasos)
-- Filas 09 a 12 (Frames 33 a 48): Caminata Lateral Derecha / Vista Este
-- Filas 13 a 16 (Frames 49 a 64): Caminata Lateral Izquierda / Vista Oeste
+# Frames de conny
+
+- Variante: ropa_negra_chef
+- Hoja original: `personajes\conny\movimientos_rnchef.png`
+- Cuadrícula real: 16 filas × 4 columnas
+- Cada PNG conserva el cuerpo visible completo de su celda original.
+- Los frames vacíos de la hoja no se guardan.

@@ -1,0 +1,403 @@
+{
+  "character": "dana",
+  "variant": "rnchef",
+  "variant_name": "ropa_negra_chef",
+  "source_sheet": "personajes\\dana\\movimientos_rnchef.png",
+  "source_front": "personajes\\dana\\dana_rnchef.png",
+  "grid": {
+    "rows": 16,
+    "columns": 4
+  },
+  "column_edges": [
+    0,
+    170,
+    340,
+    511,
+    682
+  ],
+  "row_edges": [
+    0,
+    128,
+    256,
+    384,
+    512,
+    640,
+    768,
+    896,
+    1024,
+    1152,
+    1280,
+    1408,
+    1536,
+    1664,
+    1792,
+    1920,
+    2048
+  ],
+  "slots": 64,
+  "frames_saved": 48,
+  "empty_slots": [
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64
+  ],
+  "excluded_slots": [],
+  "source_border_contact_frames": 0,
+  "output_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "preview": "training_samples\\frame_extraction_previews\\dana__rnchef.png",
+  "frames": [
+    {
+      "slot": 1,
+      "row": 1,
+      "column": 1,
+      "file": "frame_001_r01_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 2,
+      "row": 1,
+      "column": 2,
+      "file": "frame_002_r01_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 3,
+      "row": 1,
+      "column": 3,
+      "file": "frame_003_r01_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 4,
+      "row": 1,
+      "column": 4,
+      "file": "frame_004_r01_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 5,
+      "row": 2,
+      "column": 1,
+      "file": "frame_005_r02_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 6,
+      "row": 2,
+      "column": 2,
+      "file": "frame_006_r02_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 7,
+      "row": 2,
+      "column": 3,
+      "file": "frame_007_r02_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 8,
+      "row": 2,
+      "column": 4,
+      "file": "frame_008_r02_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 9,
+      "row": 3,
+      "column": 1,
+      "file": "frame_009_r03_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 10,
+      "row": 3,
+      "column": 2,
+      "file": "frame_010_r03_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 11,
+      "row": 3,
+      "column": 3,
+      "file": "frame_011_r03_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 12,
+      "row": 3,
+      "column": 4,
+      "file": "frame_012_r03_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 13,
+      "row": 4,
+      "column": 1,
+      "file": "frame_013_r04_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 14,
+      "row": 4,
+      "column": 2,
+      "file": "frame_014_r04_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 15,
+      "row": 4,
+      "column": 3,
+      "file": "frame_015_r04_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 16,
+      "row": 4,
+      "column": 4,
+      "file": "frame_016_r04_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 17,
+      "row": 5,
+      "column": 1,
+      "file": "frame_017_r05_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 18,
+      "row": 5,
+      "column": 2,
+      "file": "frame_018_r05_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 19,
+      "row": 5,
+      "column": 3,
+      "file": "frame_019_r05_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 20,
+      "row": 5,
+      "column": 4,
+      "file": "frame_020_r05_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 21,
+      "row": 6,
+      "column": 1,
+      "file": "frame_021_r06_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 22,
+      "row": 6,
+      "column": 2,
+      "file": "frame_022_r06_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 23,
+      "row": 6,
+      "column": 3,
+      "file": "frame_023_r06_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 24,
+      "row": 6,
+      "column": 4,
+      "file": "frame_024_r06_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 25,
+      "row": 7,
+      "column": 1,
+      "file": "frame_025_r07_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 26,
+      "row": 7,
+      "column": 2,
+      "file": "frame_026_r07_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 27,
+      "row": 7,
+      "column": 3,
+      "file": "frame_027_r07_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 28,
+      "row": 7,
+      "column": 4,
+      "file": "frame_028_r07_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 29,
+      "row": 8,
+      "column": 1,
+      "file": "frame_029_r08_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 30,
+      "row": 8,
+      "column": 2,
+      "file": "frame_030_r08_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 31,
+      "row": 8,
+      "column": 3,
+      "file": "frame_031_r08_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 32,
+      "row": 8,
+      "column": 4,
+      "file": "frame_032_r08_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 33,
+      "row": 9,
+      "column": 1,
+      "file": "frame_033_r09_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 34,
+      "row": 9,
+      "column": 2,
+      "file": "frame_034_r09_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 35,
+      "row": 9,
+      "column": 3,
+      "file": "frame_035_r09_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 36,
+      "row": 9,
+      "column": 4,
+      "file": "frame_036_r09_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 37,
+      "row": 10,
+      "column": 1,
+      "file": "frame_037_r10_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 38,
+      "row": 10,
+      "column": 2,
+      "file": "frame_038_r10_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 39,
+      "row": 10,
+      "column": 3,
+      "file": "frame_039_r10_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 40,
+      "row": 10,
+      "column": 4,
+      "file": "frame_040_r10_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 41,
+      "row": 11,
+      "column": 1,
+      "file": "frame_041_r11_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 42,
+      "row": 11,
+      "column": 2,
+      "file": "frame_042_r11_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 43,
+      "row": 11,
+      "column": 3,
+      "file": "frame_043_r11_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 44,
+      "row": 11,
+      "column": 4,
+      "file": "frame_044_r11_c04.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 45,
+      "row": 12,
+      "column": 1,
+      "file": "frame_045_r12_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 46,
+      "row": 12,
+      "column": 2,
+      "file": "frame_046_r12_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 47,
+      "row": 12,
+      "column": 3,
+      "file": "frame_047_r12_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 48,
+      "row": 12,
+      "column": 4,
+      "file": "frame_048_r12_c04.png",
+      "source_border_contacts": []
+    }
+  ]
+}

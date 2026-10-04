@@ -16,39 +16,54 @@ if not "%1"=="" (
 cls
 echo ======================================================================
 echo          PIXEL ART AI ENGINE - PANEL DE ENTRENAMIENTO
+echo          Dataset: TODOS LOS PERSONAJES (dataset_frames_individuales)
 echo ======================================================================
-echo  [1] FASE 1: Entrenar Base Chica (16x4 / 64 frames - Conny y Dana)
-echo  [2] FASE 2: Transfer Learning a Plantilla 8x12 (96 frames - Alex y Amaro)
-echo  [3] Abrir Monitor Web en Vivo (http://localhost:8787/monitor.html)
-echo  [4] Salir
+echo  [1] PREPARAR DATASET - Generar cache desde dataset_frames_individuales
+echo  [2] ENTRENAR desde cero (--mode start) - Todos los personajes
+echo  [3] REANUDAR entrenamiento existente (--mode resume)
+echo  [4] Abrir Monitor Web en Vivo (http://localhost:8787/monitor.html)
+echo  [5] Salir
 echo ======================================================================
-set /p opt="Elige una opcion (1-4): "
+set /p opt="Elige una opcion (1-5): "
 
-if "%opt%"=="1" goto fase1
-if "%opt%"=="2" goto fase2
-if "%opt%"=="3" goto monitor
-if "%opt%"=="4" goto end
+if "%opt%"=="1" goto preparar
+if "%opt%"=="2" goto entrenar_nuevo
+if "%opt%"=="3" goto reanudar
+if "%opt%"=="4" goto monitor
+if "%opt%"=="5" goto end
 goto menu
 
-:fase1
+:preparar
 cls
 echo ======================================================================
-echo   INICIANDO FASE 1: BASE CON PLANTILLA CHICA (16x4 / 64 FRAMES)
-echo   Entrenando con Conny y Dana (Modo Infinito - Ctrl+C para detener)
-echo   Pesos se guardaran en: checkpoints\base_generator_16x4.pt
+echo   PREPARANDO DATASET COMPLETO
+echo   Fuente: dataset_frames_individuales/ (todos los personajes)
+echo   Destino: dataset_supervisado/
 echo ======================================================================
-"%PYTHON_EXE%" train.py --phase 1 --infinite
+"%PYTHON_EXE%" -m pixel_ai_engine.prepare_supervised_dataset
+echo.
+echo [OK] Dataset listo. Ya puedes iniciar el entrenamiento.
 pause
 goto menu
 
-:fase2
+:entrenar_nuevo
 cls
 echo ======================================================================
-echo   INICIANDO FASE 2: TRANSFER LEARNING A PLANTILLA 8x12 (96 FRAMES)
-echo   Cargando pesos de Fase 1 hacia Alex y Amaro
-echo   Pesos se guardaran en: checkpoints\best_generator.pt
+echo   INICIANDO ENTRENAMIENTO NUEVO DESDE CERO
+echo   Dataset: TODOS los personajes de dataset_frames_individuales
+echo   Checkpoints: checkpoints\latest_checkpoint.pt
 echo ======================================================================
-"%PYTHON_EXE%" train.py --phase 2 --infinite
+"%PYTHON_EXE%" train.py --mode start --epochs 200
+pause
+goto menu
+
+:reanudar
+cls
+echo ======================================================================
+echo   REANUDANDO ENTRENAMIENTO EXISTENTE
+echo   Continuando desde ultimo checkpoint guardado
+echo ======================================================================
+"%PYTHON_EXE%" train.py --mode resume --epochs 200
 pause
 goto menu
 

@@ -1,0 +1,668 @@
+{
+  "character": "erin",
+  "variant": "rnormal",
+  "variant_name": "ropa_normal",
+  "source_sheet": "personajes\\erin\\movimientos_rnormal.png",
+  "source_front": "personajes\\erin\\erin_rnormal.png",
+  "grid": {
+    "rows": 16,
+    "columns": 4
+  },
+  "column_edges": [
+    0,
+    181,
+    362,
+    543,
+    724
+  ],
+  "row_edges": [
+    0,
+    136,
+    272,
+    407,
+    543,
+    679,
+    814,
+    950,
+    1086,
+    1222,
+    1358,
+    1493,
+    1629,
+    1765,
+    1900,
+    2036,
+    2172
+  ],
+  "slots": 64,
+  "frames_saved": 64,
+  "empty_slots": [],
+  "excluded_slots": [],
+  "source_border_contact_frames": 61,
+  "output_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "preview": "training_samples\\frame_extraction_previews\\erin__rnormal.png",
+  "frames": [
+    {
+      "slot": 1,
+      "row": 1,
+      "column": 1,
+      "file": "frame_001_r01_c01.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 2,
+      "row": 1,
+      "column": 2,
+      "file": "frame_002_r01_c02.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 3,
+      "row": 1,
+      "column": 3,
+      "file": "frame_003_r01_c03.png",
+      "source_border_contacts": []
+    },
+    {
+      "slot": 4,
+      "row": 1,
+      "column": 4,
+      "file": "frame_004_r01_c04.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 5,
+      "row": 2,
+      "column": 1,
+      "file": "frame_005_r02_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 6,
+      "row": 2,
+      "column": 2,
+      "file": "frame_006_r02_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 7,
+      "row": 2,
+      "column": 3,
+      "file": "frame_007_r02_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 8,
+      "row": 2,
+      "column": 4,
+      "file": "frame_008_r02_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 9,
+      "row": 3,
+      "column": 1,
+      "file": "frame_009_r03_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 10,
+      "row": 3,
+      "column": 2,
+      "file": "frame_010_r03_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 11,
+      "row": 3,
+      "column": 3,
+      "file": "frame_011_r03_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 12,
+      "row": 3,
+      "column": 4,
+      "file": "frame_012_r03_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 13,
+      "row": 4,
+      "column": 1,
+      "file": "frame_013_r04_c01.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 14,
+      "row": 4,
+      "column": 2,
+      "file": "frame_014_r04_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 15,
+      "row": 4,
+      "column": 3,
+      "file": "frame_015_r04_c03.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 16,
+      "row": 4,
+      "column": 4,
+      "file": "frame_016_r04_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 17,
+      "row": 5,
+      "column": 1,
+      "file": "frame_017_r05_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 18,
+      "row": 5,
+      "column": 2,
+      "file": "frame_018_r05_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 19,
+      "row": 5,
+      "column": 3,
+      "file": "frame_019_r05_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 20,
+      "row": 5,
+      "column": 4,
+      "file": "frame_020_r05_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 21,
+      "row": 6,
+      "column": 1,
+      "file": "frame_021_r06_c01.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 22,
+      "row": 6,
+      "column": 2,
+      "file": "frame_022_r06_c02.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 23,
+      "row": 6,
+      "column": 3,
+      "file": "frame_023_r06_c03.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 24,
+      "row": 6,
+      "column": 4,
+      "file": "frame_024_r06_c04.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 25,
+      "row": 7,
+      "column": 1,
+      "file": "frame_025_r07_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 26,
+      "row": 7,
+      "column": 2,
+      "file": "frame_026_r07_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 27,
+      "row": 7,
+      "column": 3,
+      "file": "frame_027_r07_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 28,
+      "row": 7,
+      "column": 4,
+      "file": "frame_028_r07_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 29,
+      "row": 8,
+      "column": 1,
+      "file": "frame_029_r08_c01.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 30,
+      "row": 8,
+      "column": 2,
+      "file": "frame_030_r08_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 31,
+      "row": 8,
+      "column": 3,
+      "file": "frame_031_r08_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 32,
+      "row": 8,
+      "column": 4,
+      "file": "frame_032_r08_c04.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 33,
+      "row": 9,
+      "column": 1,
+      "file": "frame_033_r09_c01.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 34,
+      "row": 9,
+      "column": 2,
+      "file": "frame_034_r09_c02.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 35,
+      "row": 9,
+      "column": 3,
+      "file": "frame_035_r09_c03.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 36,
+      "row": 9,
+      "column": 4,
+      "file": "frame_036_r09_c04.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 37,
+      "row": 10,
+      "column": 1,
+      "file": "frame_037_r10_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 38,
+      "row": 10,
+      "column": 2,
+      "file": "frame_038_r10_c02.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 39,
+      "row": 10,
+      "column": 3,
+      "file": "frame_039_r10_c03.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 40,
+      "row": 10,
+      "column": 4,
+      "file": "frame_040_r10_c04.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 41,
+      "row": 11,
+      "column": 1,
+      "file": "frame_041_r11_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 42,
+      "row": 11,
+      "column": 2,
+      "file": "frame_042_r11_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 43,
+      "row": 11,
+      "column": 3,
+      "file": "frame_043_r11_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 44,
+      "row": 11,
+      "column": 4,
+      "file": "frame_044_r11_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 45,
+      "row": 12,
+      "column": 1,
+      "file": "frame_045_r12_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 46,
+      "row": 12,
+      "column": 2,
+      "file": "frame_046_r12_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 47,
+      "row": 12,
+      "column": 3,
+      "file": "frame_047_r12_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 48,
+      "row": 12,
+      "column": 4,
+      "file": "frame_048_r12_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 49,
+      "row": 13,
+      "column": 1,
+      "file": "frame_049_r13_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 50,
+      "row": 13,
+      "column": 2,
+      "file": "frame_050_r13_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 51,
+      "row": 13,
+      "column": 3,
+      "file": "frame_051_r13_c03.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 52,
+      "row": 13,
+      "column": 4,
+      "file": "frame_052_r13_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 53,
+      "row": 14,
+      "column": 1,
+      "file": "frame_053_r14_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 54,
+      "row": 14,
+      "column": 2,
+      "file": "frame_054_r14_c02.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 55,
+      "row": 14,
+      "column": 3,
+      "file": "frame_055_r14_c03.png",
+      "source_border_contacts": [
+        "bottom"
+      ]
+    },
+    {
+      "slot": 56,
+      "row": 14,
+      "column": 4,
+      "file": "frame_056_r14_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 57,
+      "row": 15,
+      "column": 1,
+      "file": "frame_057_r15_c01.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 58,
+      "row": 15,
+      "column": 2,
+      "file": "frame_058_r15_c02.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 59,
+      "row": 15,
+      "column": 3,
+      "file": "frame_059_r15_c03.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 60,
+      "row": 15,
+      "column": 4,
+      "file": "frame_060_r15_c04.png",
+      "source_border_contacts": [
+        "top",
+        "bottom"
+      ]
+    },
+    {
+      "slot": 61,
+      "row": 16,
+      "column": 1,
+      "file": "frame_061_r16_c01.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 62,
+      "row": 16,
+      "column": 2,
+      "file": "frame_062_r16_c02.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 63,
+      "row": 16,
+      "column": 3,
+      "file": "frame_063_r16_c03.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    },
+    {
+      "slot": 64,
+      "row": 16,
+      "column": 4,
+      "file": "frame_064_r16_c04.png",
+      "source_border_contacts": [
+        "top"
+      ]
+    }
+  ],
+  "repaired_bottom_intrusion_frames": [
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ]
+}

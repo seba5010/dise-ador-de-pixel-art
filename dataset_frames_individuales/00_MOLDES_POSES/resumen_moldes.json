@@ -1,0 +1,32 @@
+{
+  "templates": 2,
+  "frames": 160,
+  "target_size": [
+    256,
+    256
+  ],
+  "target_visible_size": 220,
+  "backup": "reparacion\\backup_moldes_antes_ampliacion_20261003",
+  "results": [
+    {
+      "sheet": "plantilla_16x4.png",
+      "grid": [
+        16,
+        4
+      ],
+      "frames": 64,
+      "folder": "dataset_frames_individuales\\00_MOLDES_POSES\\molde_16x4_64_poses",
+      "preview": "training_samples\\mold_extraction_previews\\molde_16x4_64_poses.png"
+    },
+    {
+      "sheet": "plantilla de los spritesheets.png",
+      "grid": [
+        12,
+        8
+      ],
+      "frames": 96,
+      "folder": "dataset_frames_individuales\\00_MOLDES_POSES\\molde_8x12_96_poses",
+      "preview": "training_samples\\mold_extraction_previews\\molde_8x12_96_poses.png"
+    }
+  ]
+}
