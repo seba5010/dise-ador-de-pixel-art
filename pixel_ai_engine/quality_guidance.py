@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 import math
+import os
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 QUALITY_DIMENSIONS: Tuple[str, ...] = (
@@ -29,6 +30,19 @@ QUALITY_DIMENSIONS: Tuple[str, ...] = (
     "outline",
     "training_stability",
 )
+
+
+def _environment_flag(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+ENABLE_QUALITY_GUIDANCE = _environment_flag("PIXEL_AI_ENABLE_QUALITY_GUIDANCE", True)
+ENABLE_SMART_SAMPLING = False
+ENABLE_ADAPTIVE_LOSS = False
+ENABLE_QUALITY_CHECKPOINT = False
 
 
 def _finite_number(value: Any) -> Optional[float]:
@@ -267,7 +281,7 @@ GUIDANCE_ACTIONS: Tuple[str, ...] = (
 
 @dataclass
 class QualityGuidanceConfig:
-    enabled: bool = True
+    enabled: bool = ENABLE_QUALITY_GUIDANCE
     mode: str = "observational"
     targets: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_TARGETS))
     critical_floors: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_CRITICAL_FLOORS))
@@ -640,6 +654,13 @@ class QualityGuidanceController:
     def load_state(self, state: Optional[Mapping[str, Any]]) -> None:
         if not isinstance(state, Mapping):
             return
+        if isinstance(state.get("config"), Mapping):
+            try:
+                self.config = QualityGuidanceConfig.from_dict(state["config"])
+                self.target_assimilation = self.config.targets["global"]
+            except (TypeError, ValueError):
+                # Corrupt/legacy configuration must not prevent checkpoint resume.
+                pass
         quality_history = state.get("quality_history", [])
         decision_history = state.get("decision_history", [])
         self.quality_history = [dict(item) for item in quality_history if isinstance(item, Mapping)][-self.config.max_history :]
@@ -651,6 +672,10 @@ __all__ = [
     "DEFAULT_CRITICAL_FLOORS",
     "DEFAULT_TARGETS",
     "GUIDANCE_ACTIONS",
+    "ENABLE_ADAPTIVE_LOSS",
+    "ENABLE_QUALITY_CHECKPOINT",
+    "ENABLE_QUALITY_GUIDANCE",
+    "ENABLE_SMART_SAMPLING",
     "QUALITY_DIMENSIONS",
     "QualityGuidanceConfig",
     "QualityGuidanceController",

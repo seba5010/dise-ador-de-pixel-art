@@ -197,13 +197,14 @@ def test_observational_controller_recommends_but_never_modifies_training():
 
 
 def test_controller_state_round_trip_is_backward_compatible():
-    controller = QualityGuidanceController()
+    controller = QualityGuidanceController(config=QualityGuidanceConfig(targets={"face": 74}))
     controller.evaluate({"score_total": 80, "gestos_ojos": 65}, epoch=10)
     serialized = json.loads(json.dumps(controller.export_state(), allow_nan=False))
 
     restored = QualityGuidanceController(state=serialized)
     assert restored.export_state()["quality_history"] == serialized["quality_history"]
     assert restored.export_state()["decision_history"] == serialized["decision_history"]
+    assert restored.config.targets["face"] == 74.0
 
     empty = QualityGuidanceController(state={"legacy_checkpoint": True})
     assert empty.export_state()["last_action"] == "CONTINUE"

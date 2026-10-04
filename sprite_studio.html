@@ -3468,7 +3468,9 @@
 
       const monQcEl = document.getElementById('monQcSummary');
       if (monQcEl && info.quality && info.quality.cuerpo_precision !== undefined) {
-        monQcEl.innerHTML = `Cuerpo: <strong style="color:#38bdf8">${info.quality.cuerpo_precision}%</strong> (<span style="color:#f87171">${info.quality.defectos_cuerpo || 0} def</span>)`;
+        const guide = info.guidance || info.quality_guidance || null;
+        const guideText = guide ? ` · Guía ${String(guide.severity || 'low').toUpperCase()}: ${guide.primary_problem || 'estable'} → ${guide.recommended_action || 'CONTINUE'} (${guide.mode || 'observational'})` : '';
+        monQcEl.innerHTML = `Cuerpo: <strong style="color:#38bdf8">${info.quality.cuerpo_precision}%</strong> (<span style="color:#f87171">${info.quality.defectos_cuerpo || 0} def</span>)${guideText}`;
       }
 
       // 4. VRAM & GPU Real

@@ -323,10 +323,11 @@
         <div class="mcard-sub">Tiempo total: <span id="m-elapsed">—</span></div>
       </div>
       <div class="mcard good" style="border-color: rgba(72,187,120,.4); background: rgba(72,187,120,.05)">
-        <div class="mcard-label" style="color:var(--accent2)">Control Calidad Puro</div>
+        <div class="mcard-label" style="color:var(--accent2)">Quality Guidance</div>
         <div class="mcard-value" id="m-qc-score" style="color:var(--accent2)">—</div>
         <div class="mcard-sub">Cuerpo: <strong id="m-qc-body" style="color:#38bdf8">—</strong> · Defectos: <strong id="m-qc-defects" style="color:#f87171">—</strong></div>
         <div class="mcard-sub" style="font-size:10px; color:var(--dim)">Paleta: <span id="m-qc-pal">—</span> · Alfa: <span id="m-qc-alpha">—</span></div>
+        <div class="mcard-sub" style="font-size:10px; color:#34d399">Guía: <span id="m-qc-guide">—</span></div>
       </div>
     </div>
 
@@ -477,6 +478,7 @@
               <div style="display:flex; justify-content:space-between"><span>Nitidez de Outlines:</span><strong id="qc-m-edge" style="color:#fff">—</strong></div>
               <div style="display:flex; justify-content:space-between"><span>Fidelidad Paleta Frontal:</span><strong id="qc-m-pal" style="color:#fff">—</strong></div>
               <div style="display:flex; justify-content:space-between"><span>Ausencia de Ruido Huérfano:</span><strong id="qc-m-noise" style="color:#fff">—</strong></div>
+              <div style="display:flex; justify-content:space-between"><span>Quality Guidance:</span><strong id="qc-guide-summary" style="color:#34d399">—</strong></div>
               <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:6px 0" />
               <div style="display:flex; justify-content:space-between"><span>Pelo y Gorro de Chef:</span><strong id="qc-m-pelo" style="color:#a78bfa">—</strong></div>
               <div style="display:flex; justify-content:space-between"><span>Gestos, Ojos y Rostro:</span><strong id="qc-m-ojos" style="color:#38bdf8">—</strong></div>
@@ -719,12 +721,23 @@
       setText('m-epsec',  (d.epoch_sec !== undefined && d.epoch_sec !== null) ? d.epoch_sec + 's' : '--');
       setText('m-elapsed', fmtTime(d.elapsed_sec));
 
+      const guidance = d.guidance || d.quality_guidance || null;
+      if (guidance) {
+        const problem = guidance.primary_problem || guidance.problem || 'sin cuello de botella';
+        const severity = String(guidance.severity || 'low').toUpperCase();
+        const recommendation = guidance.recommended_action || 'CONTINUE';
+        const mode = guidance.enabled === false ? 'DESACTIVADO' : 'OBSERVACIONAL';
+        setText('m-qc-guide', `${mode} · ${problem} · ${severity} · ${recommendation}`);
+      } else {
+        setText('m-qc-guide', 'Sin datos');
+      }
+
       // Métricas Quirúrgicas de Control de Calidad
       if (d.quality) {
         setText('m-qc-score', (d.quality.score_total || 0).toFixed(1) + '%');
         setText('m-qc-alpha', (d.quality.pureza_alfa || 0).toFixed(0) + '%');
         setText('m-qc-pal', (d.quality.fidelidad_paleta || 0).toFixed(0) + '%');
-        
+
         const bodyPrec = (d.quality.cuerpo_precision !== undefined) ? d.quality.cuerpo_precision.toFixed(1) + '%' : '—';
         const defCount = (d.quality.defectos_cuerpo !== undefined) ? `${d.quality.defectos_cuerpo} px` : '—';
         const colorsStr = (d.quality.colores_ia !== undefined && d.quality.colores_original !== undefined) ? `${d.quality.colores_ia} / ${d.quality.colores_original}` : '—';
@@ -748,6 +761,19 @@
         setText('qc-m-tats', (d.quality.tatuajes_brazos || d.quality.preservacion_tatuajes || 98).toFixed(1) + '%');
         setText('qc-m-objs', (d.quality.objetos_utensilios || 98).toFixed(1) + '%');
         setText('qc-m-zaps', (d.quality.zapatos_pies || 98).toFixed(1) + '%');
+
+        const guideSummaryEl = document.getElementById('qc-guide-summary');
+        if (guideSummaryEl) {
+          if (guidance) {
+            const vector = guidance.quality_vector || {};
+            const problem = guidance.primary_problem || guidance.problem || 'ninguno';
+            guideSummaryEl.textContent = `${problem} · ${String(guidance.severity || 'low').toUpperCase()} · ${guidance.recommended_action || 'CONTINUE'}`;
+            guideSummaryEl.title = `Modo ${guidance.mode || 'observational'}; global ${vector.global ?? 'N/D'}%; acción aplicada ${guidance.action || 'CONTINUE'}; entrenamiento modificado: ${guidance.training_modified === true ? 'sí' : 'no'}.`;
+          } else {
+            guideSummaryEl.textContent = 'Sin guía';
+            guideSummaryEl.title = 'No hay Quality Guidance disponible.';
+          }
+        }
       }
 
       // Progreso & Config

@@ -31,6 +31,11 @@ from pixel_ai_engine.config import (
 )
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
 from pixel_ai_engine.dataset import place_in_cell
+from pixel_ai_engine.enhancer import PixelArtEnhancer
+from pixel_ai_engine.quality_guidance import (
+    ENABLE_QUALITY_GUIDANCE,
+    QualityGuidanceController,
+)
 from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette, clean_orphan_pixels
 from pixel_ai_engine.training_recovery import (
     activate_recovery_status,
@@ -57,6 +62,105 @@ PAUSE_FLAG_FILE = PROJECT_ROOT / "pause_training.flag"
 RECOVERY_CHECKPOINT_FILE = CHECKPOINT_DIR / "recovery_checkpoint.pt"
 
 CACHE_PATH = PROJECT_ROOT / "dataset_supervisado" / "supervised_cache_8x12.pt"
+
+
+def _disabled_guidance() -> Dict[str, Any]:
+    return {
+        "enabled": False,
+        "mode": "observational",
+        "action": "CONTINUE",
+        "recommended_action": "CONTINUE",
+        "problem": None,
+        "primary_problem": None,
+        "secondary_problems": [],
+        "severity": "low",
+        "quality_vector": {},
+        "trend": {"status": "DISABLED"},
+        "training_modified": False,
+    }
+
+
+def _evaluate_observational_guidance(
+    quality: Dict[str, Any],
+    *,
+    epoch: int,
+    training_metrics: Dict[str, Any],
+    previous_state: Optional[Dict[str, Any]] = None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    controller = QualityGuidanceController(state=previous_state)
+    decision = controller.evaluate(
+        quality,
+        training_metrics=training_metrics,
+        epoch=epoch,
+    )
+    return decision, controller.export_state()
+
+
+def _guidance_state_from_checkpoint(
+    status_data: Optional[Dict[str, Any]], checkpoint: Any, *, prefer_checkpoint: bool = False
+) -> Optional[Dict[str, Any]]:
+    status_state = (status_data or {}).get("guidance_state")
+    checkpoint_state = checkpoint.get("guidance_state") if isinstance(checkpoint, dict) else None
+    candidates = (checkpoint_state, status_state) if prefer_checkpoint else (status_state, checkpoint_state)
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _quality_summary_from_history(history: Any) -> Dict[str, Optional[float]]:
+    summary_keys = ("global", "anatomy", "face", "palette", "silhouette", "micro_detail", "alpha")
+    summary: Dict[str, Optional[float]] = {f"best_{key}": None for key in summary_keys}
+    if not isinstance(history, list):
+        return summary
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        guidance = entry.get("guidance", entry.get("quality_guidance"))
+        vector = guidance.get("quality_vector") if isinstance(guidance, dict) else None
+        if not isinstance(vector, dict):
+            continue
+        for key in summary_keys:
+            value = vector.get(key)
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                summary_key = f"best_{key}"
+                previous = summary[summary_key]
+                summary[summary_key] = round(max(float(value), previous if previous is not None else float("-inf")), 4)
+    return summary
+
+
+def _print_quality_guidance(guidance: Any) -> None:
+    if not isinstance(guidance, dict) or not guidance.get("enabled"):
+        return
+    vector = guidance.get("quality_vector") if isinstance(guidance.get("quality_vector"), dict) else {}
+
+    def metric(name: str) -> str:
+        value = vector.get(name)
+        return f"{float(value):.1f}%" if isinstance(value, (int, float)) else "N/D"
+
+    primary = guidance.get("primary_problem") or "ninguno"
+    secondary = ", ".join(guidance.get("secondary_problems") or []) or "ninguno"
+    print("\nQUALITY GUIDANCE", flush=True)
+    print(
+        f"  Global: {metric('global')} | Anatomía: {metric('anatomy')} | "
+        f"Silueta: {metric('silhouette')} | Rostro: {metric('face')}",
+        flush=True,
+    )
+    print(
+        f"  Ropa: {metric('clothing')} | Paleta: {metric('palette')} | "
+        f"Alfa: {metric('alpha')} | Microdetalle: {metric('micro_detail')}",
+        flush=True,
+    )
+    print(
+        f"  Problema principal: {primary} | Secundarios: {secondary} | "
+        f"Severidad: {str(guidance.get('severity', 'low')).upper()}",
+        flush=True,
+    )
+    print(
+        f"  Acción recomendada: {guidance.get('recommended_action', 'CONTINUE')} | "
+        "MODO ACTUAL: OBSERVATIONAL_ONLY — no se modificó el entrenamiento.",
+        flush=True,
+    )
 
 
 def _active_recovery_checkpoint(status_data: Dict[str, Any]) -> Optional[Path]:
@@ -446,6 +550,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     initial_loss = None
     last_error = None
     prev_quality = None
+    prev_guidance = None
+    guidance_state: Dict[str, Any] = {}
     recovery = None
     recovery_events = []
     dataset_layout = {}
@@ -461,6 +567,9 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                 raw_init = prev.get("initial_loss")
                 last_error = prev.get("error_details")
                 prev_quality = prev.get("quality")
+                prev_guidance = prev.get("guidance", prev.get("quality_guidance"))
+                if isinstance(prev.get("guidance_state"), dict):
+                    guidance_state = prev["guidance_state"]
                 recovery = prev.get("recovery")
                 recovery_events = prev.get("recovery_events", [])
                 dataset_layout = prev.get("dataset_layout", {})
@@ -473,6 +582,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         except Exception:
             history = []
             past_eras = []
+            guidance_state = {}
 
     # Recuperar de historial valido si aun no estan inicializados o eran 0.0 heredados
     valid_losses = [h["loss"] for h in history if isinstance(h.get("loss"), (int, float)) and math.isfinite(h["loss"]) and h["loss"] > 0.0]
@@ -558,6 +668,49 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     eta_sec = round(sec_per_epoch * rem_epochs)
     fps = round(1008.0 / max(0.1, sec_per_epoch), 2) if sec_per_epoch > 0 else 0.0
 
+    resolved_quality = quality if isinstance(quality, dict) and quality else prev_quality
+    quality_guidance = prev_guidance if isinstance(prev_guidance, dict) else None
+    if not ENABLE_QUALITY_GUIDANCE:
+        quality_guidance = _disabled_guidance()
+    elif isinstance(quality, dict) and quality:
+        try:
+            quality_guidance, guidance_state = _evaluate_observational_guidance(
+                quality,
+                epoch=int(epoch),
+                training_metrics={
+                    "g_loss": f_loss,
+                    "d_loss": f_d,
+                    "l1_loss": f_l1,
+                    "edge_loss": f_edge,
+                    "lr": f_lr,
+                    "epoch": int(epoch),
+                    "skipped_amp_steps": int(skipped_amp),
+                },
+                previous_state=guidance_state,
+            )
+        except Exception as guidance_error:
+            # Guidance is observational: an audit error must never interrupt training.
+            quality_guidance = dict(quality_guidance or _disabled_guidance())
+            quality_guidance.update({
+                "enabled": True,
+                "mode": "observational",
+                "error": str(guidance_error),
+                "training_modified": False,
+            })
+
+    if quality_guidance is None:
+        quality_guidance = _disabled_guidance()
+
+    # Couple the audit and its decision to the epoch record for trend/resume support.
+    if f_loss is not None and f_loss > 0.0:
+        for history_entry in history:
+            if history_entry.get("epoch") == int(epoch):
+                if isinstance(resolved_quality, dict):
+                    history_entry["quality"] = resolved_quality
+                history_entry["guidance"] = quality_guidance
+                history_entry["quality_guidance"] = quality_guidance
+                break
+
     status_data = {
         "epoch": int(epoch),
         "total_epochs": int(total_epochs),
@@ -589,21 +742,29 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "snapshots": get_available_snapshots(),
         "past_eras": past_eras,
         "history": history,
-        "quality": quality if quality is not None else prev_quality,
+        "quality": resolved_quality,
+        "guidance": quality_guidance,
+        "quality_guidance": quality_guidance,
+        "guidance_state": guidance_state,
         "recovery": recovery,
         "recovery_events": recovery_events,
         "dataset_layout": dataset_layout,
     }
     write_status_file(STATUS_FILE, status_data)
+    return status_data
 
 def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
                     generator: nn.Module, discriminator: nn.Module,
                     opt_g: Any = None, opt_d: Any = None, scaler_g: Any = None, scaler_d: Any = None,
-                    sched_g: Any = None, sched_d: Any = None, is_best_model: bool = False):
+                    sched_g: Any = None, sched_d: Any = None, is_best_model: bool = False,
+                    guidance_state: Optional[Dict[str, Any]] = None):
     """Guarda un checkpoint completo con formato unificado y preservacion estricta de metricas y estados."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else None
     f_best = float(best_loss) if (best_loss is not None and math.isfinite(float(best_loss))) else 999.0
+    if guidance_state is None:
+        stored_state = load_status_file(STATUS_FILE).get("guidance_state")
+        guidance_state = stored_state if isinstance(stored_state, dict) else {}
     if is_best_model or file_path.name == "best_generator.pt":
         # Modelo ligero de inferencia (< 65MB, compatible con limites de GitHub y warm-start)
         state = {
@@ -611,6 +772,7 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
             "generator": generator.state_dict(),
             "loss": f_loss,
             "best_loss": f_best,
+            "guidance_state": guidance_state,
         }
         torch.save(state, file_path)
         return
@@ -628,6 +790,7 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "scheduler_d": sched_d.state_dict() if (sched_d is not None and hasattr(sched_d, "state_dict")) else None,
         "rng_state": torch.get_rng_state().cpu(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "guidance_state": guidance_state,
     }
     torch.save(state, file_path)
 
@@ -859,8 +1022,9 @@ def generate_preview(generator, dataset, epoch_label=None):
             try:
                 from pixel_ai_engine.enhancer import PixelArtEnhancer
                 qc = PixelArtEnhancer.analyze_quality(first_raw, palette=first_pal, target_img=first_tgt)
+                qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(qc)
                 qc_metrics = qc
-            except Exception as e:
+            except Exception:
                 pass
 
         return qc_metrics
@@ -957,6 +1121,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 past_eras = sdata.get("past_eras", [])
                 if old_hist and len(old_hist) > 0:
                     era_idx = len(past_eras) + 1
+                    era_quality_summary = _quality_summary_from_history(old_hist)
                     past_eras.append({
                         "era": era_idx,
                         "name": f"Era {era_idx}",
@@ -964,7 +1129,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                         "epochs": sdata.get("epoch", len(old_hist)),
                         "initial_loss": sdata.get("initial_loss"),
                         "best_loss": sdata.get("best_loss"),
-                        "history": old_hist
+                        "history": old_hist,
+                        "quality_summary": era_quality_summary,
+                        **era_quality_summary,
                     })
                     print(f"[HISTORIAL] Era {era_idx} archivada con {len(old_hist)} épocas para comparativa en la línea del tiempo.")
                 sdata["past_eras"] = past_eras
@@ -972,6 +1139,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 sdata["initial_loss"] = None
                 sdata["best_loss"] = None
                 sdata["loss_reduction_pct"] = 0.0
+                sdata["guidance_state"] = {}
+                sdata["guidance"] = _disabled_guidance()
+                sdata["quality_guidance"] = sdata["guidance"]
                 sdata["epoch"] = 0
                 sdata["status"] = "INICIANDO"
                 with open(STATUS_FILE, "w", encoding="utf-8") as f:
@@ -995,6 +1165,21 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 print(f"[!] Aviso: No se pudo cargar warm start: {e}. Iniciando desde inicializacion normal.")
         best_loss = 999.0
         print("[NUEVA ERA] La métrica best_loss se reinicia; los pesos previos se usan sólo como base visual.")
+
+    # Old checkpoints remain valid. If a modern checkpoint carries observational
+    # history and the status file does not, restore only that metadata.
+    if mode == "resume" and isinstance(loaded_ckpt, dict):
+        restored_guidance_state = _guidance_state_from_checkpoint(
+            status_at_start,
+            loaded_ckpt,
+            prefer_checkpoint=respawn_epoch is not None,
+        )
+        if restored_guidance_state is not None and status_at_start.get("guidance_state") != restored_guidance_state:
+            status_at_start = dict(status_at_start)
+            status_at_start["guidance_state"] = restored_guidance_state
+            persisted_status = load_status_file(STATUS_FILE)
+            persisted_status["guidance_state"] = restored_guidance_state
+            write_status_file(STATUS_FILE, persisted_status)
 
     # Recuperar best_loss de best_generator.pt para archivos antiguos compatibles
     if mode != "start" and (best_loss is None or (isinstance(best_loss, (int, float)) and best_loss >= 990.0)):
@@ -1341,7 +1526,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             return
 
         # La epoca es sana: actualizar estado y avanzar schedulers antes de serializarlos.
-        update_status(epoch, total_target_epochs, "ENTRENANDO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration, quality=last_qc)
+        published_status = update_status(epoch, total_target_epochs, "ENTRENANDO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration, quality=last_qc)
+        _print_quality_guidance(published_status.get("guidance"))
         scheduler_g.step()
         scheduler_d.step()
 
