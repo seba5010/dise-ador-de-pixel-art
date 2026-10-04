@@ -16,7 +16,7 @@ Bloqueos: Ninguno. El árbol de trabajo contiene cambios y datasets previos del 
 
 Último checkpoint compatible: verificado en smoke CPU; checkpoints nuevos persisten Guidance y checkpoints antiguos cargan sin el campo.
 
-Último commit validado: `471f6a848`
+Último commit funcional validado: `13742d0db`
 
 Última actualización: 2026-10-04
 
@@ -599,7 +599,7 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 | 2026-10-04 | 1 | 2 | `test_audit_suite.py test_training_recovery.py` | PASS (11) | Sin regresiones tras controlador/tendencias. |
 | 2026-10-04 | 1 | 3 | `test_quality_guidance_integration.py` | PASS (7) | Estado, historial, flag, checkpoint, eras, UI y lifecycle CPU. |
 | 2026-10-04 | 1 | 3 | suite raíz `test_*.py` | PASS (53) | 0 FAIL; 5 warnings AMP deprecados preexistentes. |
-| 2026-10-04 | 2–6 | Cierre | suite propia explícita | PASS (81) | Sampling, adaptive loss, recovery, anatomía, detalle crítico y lifecycle CPU; 5 warnings AMP preexistentes. |
+| 2026-10-04 | 2–6 | Cierre | `python -m pytest -q` | PASS (81) | Colección acotada por `pytest.ini`; sampling, adaptive loss, recovery, anatomía, detalle crítico y lifecycle CPU; 5 warnings AMP preexistentes. |
 
 ---
 
@@ -618,7 +618,7 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 - [x] Documentación coincide con código actual.
   - Evidencia: `QUALITY_GUIDANCE_ARCHITECTURE.md` describe el contrato validado.
 - [x] Último commit registrado coincide con Git.
-  - Evidencia: Incrementos 2–6 en `0ca7bdede`, `d7670f8d0`, `08b24049a`, `5a063a2c0`, `471f6a848`.
+  - Evidencia: Incrementos 2–6 en `0ca7bdede`, `d7670f8d0`, `08b24049a`, `5a063a2c0`, `471f6a848`; suite raíz reproducible en `13742d0db`.
 - [x] Incremento activo coincide con desarrollo real.
   - Evidencia: los seis incrementos figuran completados y sus Increment Reviews aprobados.
 
