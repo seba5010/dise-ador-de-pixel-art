@@ -272,6 +272,41 @@ def test_guidance_runtime_frame_state_reaches_checkpoint(monkeypatch, tmp_path):
     assert restored["last_epoch"] == 5
 
 
+def test_adaptive_loss_plan_is_persisted_and_attributable(monkeypatch):
+    monkeypatch.setattr(train_supervised, "ENABLE_QUALITY_GUIDANCE", True)
+    monkeypatch.setattr(train_supervised, "ENABLE_ADAPTIVE_LOSS", True)
+    plan = train_supervised._build_loss_plan(
+        {"loss_multipliers": {"alpha": 1.0}},
+        {"recommended_action": "ADJUST_WEIGHTS", "primary_problem": "alpha"},
+    )
+    status = train_supervised._attach_loss_plan(
+        {"epoch": 2, "history": [], "guidance_state": {}, "guidance": {"action": "CONTINUE"}},
+        plan,
+    )
+
+    assert plan["changed_count"] == 1
+    assert status["guidance"]["action"] == "ADJUST_WEIGHTS"
+    assert status["guidance"]["training_modified"] is True
+    assert status["guidance_state"]["loss_multipliers"]["alpha"] == 1.1
+    assert status["adaptive_loss"]["ab"]["quality_improvement_claimed"] is False
+
+
+def test_adaptive_loss_feature_flag_restores_exact_base_weights(monkeypatch):
+    monkeypatch.setattr(train_supervised, "ENABLE_ADAPTIVE_LOSS", False)
+    plan = train_supervised._build_loss_plan(
+        {"loss_multipliers": {"color": 1.25, "edge": 1.25}},
+        {"recommended_action": "ADJUST_WEIGHTS", "primary_problem": "palette"},
+    )
+
+    assert plan["active"] is False
+    assert plan["effective_weights"] == {
+        "color": 5.0,
+        "alpha": 2.5,
+        "edge": 1.5,
+        "adversarial": 0.05,
+    }
+
+
 def test_monitor_reads_new_guidance_contract():
     project_root = train_supervised.PROJECT_ROOT
     monitor = (project_root / "monitor.html").read_text(encoding="utf-8")

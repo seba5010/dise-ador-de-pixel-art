@@ -33,13 +33,17 @@ from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscrimin
 from pixel_ai_engine.dataset import place_in_cell
 from pixel_ai_engine.enhancer import PixelArtEnhancer
 from pixel_ai_engine.quality_guidance import (
+    BASE_LOSS_WEIGHTS,
+    ENABLE_ADAPTIVE_LOSS,
     ENABLE_QUALITY_GUIDANCE,
     ENABLE_SMART_SAMPLING,
     FrameQualityTracker,
     HardExampleMiningPolicy,
+    LossMultiplierController,
     QualityGuidanceController,
     SamplingPlan,
     compare_sampling_ab,
+    compare_loss_ab,
 )
 from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette, clean_orphan_pixels
 from pixel_ai_engine.training_recovery import (
@@ -175,6 +179,44 @@ def _attach_sampling_plan(status_data: Dict[str, Any], plan: SamplingPlan) -> Di
         if isinstance(decisions, list) and decisions:
             decisions[-1] = dict(decisions[-1])
             decisions[-1]["sampling_change"] = summary
+    return data
+
+
+def _build_loss_plan(guidance_state: Optional[Dict[str, Any]], guidance: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    state = guidance_state if isinstance(guidance_state, dict) else {}
+    return LossMultiplierController().propose(
+        state.get("loss_multipliers", {}),
+        guidance,
+        enabled=bool(ENABLE_QUALITY_GUIDANCE and ENABLE_ADAPTIVE_LOSS),
+    )
+
+
+def _attach_loss_plan(status_data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+    data = dict(status_data)
+    payload = dict(plan)
+    payload["ab"] = compare_loss_ab(payload)
+    guidance_state = dict(data.get("guidance_state", {}))
+    guidance_state["loss_multipliers"] = dict(payload.get("multipliers", {}))
+    guidance_state["loss_plan"] = payload
+    data["guidance_state"] = guidance_state
+    data["adaptive_loss"] = payload
+    guidance = data.get("guidance")
+    if isinstance(guidance, dict):
+        guidance = dict(guidance)
+        guidance["loss_change"] = payload
+        if payload.get("active"):
+            guidance["action"] = "ADJUST_WEIGHTS"
+            guidance["training_modified"] = True
+        data["guidance"] = guidance
+        data["quality_guidance"] = guidance
+        for entry in data.get("history", []):
+            if isinstance(entry, dict) and entry.get("epoch") == data.get("epoch"):
+                entry["guidance"] = guidance
+                entry["quality_guidance"] = guidance
+        decisions = guidance_state.get("decision_history")
+        if isinstance(decisions, list) and decisions:
+            decisions[-1] = dict(decisions[-1])
+            decisions[-1]["loss_change"] = payload
     return data
 
 
@@ -1192,6 +1234,10 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         frame_quality_tracker.export(),
         status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
     )
+    current_loss_plan = _build_loss_plan(
+        starting_guidance_state,
+        status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
+    )
 
     from pixel_ai_engine.dataset import TemplateManager
     tmpl_path = PROJECT_ROOT / "dataset_moldes" / "plantilla de los spritesheets.png"
@@ -1331,6 +1377,10 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     current_sampling_plan = _build_sampling_plan(
         dataset,
         frame_quality_tracker.export(),
+        status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
+    )
+    current_loss_plan = _build_loss_plan(
+        restored_runtime_state,
         status_at_start.get("guidance") if isinstance(status_at_start.get("guidance"), dict) else None,
     )
 
@@ -1495,6 +1545,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         epoch_d_loss = 0.0
         epoch_l1 = 0.0
         epoch_edge = 0.0
+        loss_multipliers = current_loss_plan.get("multipliers", LossMultiplierController.neutral())
 
         for batch_i, (fronts, f_indices, targets, char_ids) in enumerate(dataloader):
             # Pequeño desahogo cooperativo para que el sistema operativo, VS Code y el navegador no se congelen
@@ -1524,13 +1575,13 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             opt_g.zero_grad()
             with autocast(enabled=USE_AMP):
                 preds = generator(cond)
-                l1_color = criterion_l1(preds[:, :3], targets[:, :3]) * 5.0
-                l1_alpha = criterion_l1(preds[:, 3:], targets[:, 3:]) * 2.5
-                edge_loss = criterion_edge(preds[:, :3], targets[:, :3]) * 1.5
+                l1_color = criterion_l1(preds[:, :3], targets[:, :3]) * BASE_LOSS_WEIGHTS["color"] * loss_multipliers["color"]
+                l1_alpha = criterion_l1(preds[:, 3:], targets[:, 3:]) * BASE_LOSS_WEIGHTS["alpha"] * loss_multipliers["alpha"]
+                edge_loss = criterion_edge(preds[:, :3], targets[:, :3]) * BASE_LOSS_WEIGHTS["edge"] * loss_multipliers["edge"]
 
                 # Discriminador: orden canonico (condition, target)
                 d_fake = discriminator(cond, preds)
-                adv_loss = criterion_bce(d_fake.float().clamp(-30.0, 30.0), torch.ones_like(d_fake).float()) * 0.05
+                adv_loss = criterion_bce(d_fake.float().clamp(-30.0, 30.0), torch.ones_like(d_fake).float()) * BASE_LOSS_WEIGHTS["adversarial"] * loss_multipliers["adversarial"]
                 total_g = l1_color + l1_alpha + edge_loss + adv_loss
 
             # 1. Comprobacion estricta de finitud de componentes ANTES de backward y acumulacion
@@ -1698,7 +1749,11 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             skipped_amp=skipped_amp_g + skipped_amp_d,
             epoch_duration=epoch_duration,
             quality=last_qc,
-            guidance_runtime={"frame_quality": frame_quality_tracker.export()},
+            guidance_runtime={
+                "frame_quality": frame_quality_tracker.export(),
+                "loss_multipliers": dict(loss_multipliers),
+                "loss_plan": dict(current_loss_plan),
+            },
         )
         next_sampling_plan = _build_sampling_plan(
             dataset,
@@ -1706,8 +1761,14 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             published_status.get("guidance"),
         )
         published_status = _attach_sampling_plan(published_status, next_sampling_plan)
+        next_loss_plan = _build_loss_plan(
+            published_status.get("guidance_state"),
+            published_status.get("guidance"),
+        )
+        published_status = _attach_loss_plan(published_status, next_loss_plan)
         write_status_file(STATUS_FILE, published_status)
         current_sampling_plan = next_sampling_plan
+        current_loss_plan = next_loss_plan
         _print_quality_guidance(published_status.get("guidance"))
         scheduler_g.step()
         scheduler_d.step()

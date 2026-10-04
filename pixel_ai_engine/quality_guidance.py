@@ -41,7 +41,7 @@ def _environment_flag(name: str, default: bool) -> bool:
 
 ENABLE_QUALITY_GUIDANCE = _environment_flag("PIXEL_AI_ENABLE_QUALITY_GUIDANCE", True)
 ENABLE_SMART_SAMPLING = _environment_flag("PIXEL_AI_ENABLE_SMART_SAMPLING", True)
-ENABLE_ADAPTIVE_LOSS = False
+ENABLE_ADAPTIVE_LOSS = _environment_flag("PIXEL_AI_ENABLE_ADAPTIVE_LOSS", True)
 ENABLE_QUALITY_CHECKPOINT = False
 
 
@@ -382,6 +382,77 @@ def compare_sampling_ab(plan: SamplingPlan) -> Dict[str, Any]:
         "effective_sample_size": plan.effective_sample_size,
         "hard_frames": plan.hard_frames,
         "weight_ratio": round(plan.max_weight / max(plan.min_weight, 1e-8), 4),
+        "quality_improvement_claimed": False,
+    }
+
+
+BASE_LOSS_WEIGHTS: Dict[str, float] = {
+    "color": 5.0,
+    "alpha": 2.5,
+    "edge": 1.5,
+    "adversarial": 0.05,
+}
+
+
+class LossMultiplierController:
+    """Select one bounded, attributable loss correction for the next epoch."""
+
+    PROBLEM_TO_LOSS = {
+        "palette": "color",
+        "alpha": "alpha",
+        "micro_detail": "edge",
+        "outline": "edge",
+    }
+
+    def __init__(self, *, step: float = 0.1, minimum: float = 0.75, maximum: float = 1.25):
+        self.step = min(0.25, max(0.01, float(step)))
+        self.minimum = min(1.0, max(0.5, float(minimum)))
+        self.maximum = max(1.0, min(1.5, float(maximum)))
+
+    @staticmethod
+    def neutral() -> Dict[str, float]:
+        return {key: 1.0 for key in BASE_LOSS_WEIGHTS}
+
+    def propose(
+        self,
+        current: Optional[Mapping[str, Any]],
+        guidance: Optional[Mapping[str, Any]],
+        *,
+        enabled: bool,
+    ) -> Dict[str, Any]:
+        multipliers = self.neutral()
+        recommendation = str((guidance or {}).get("recommended_action", "CONTINUE"))
+        problem = str((guidance or {}).get("primary_problem", ""))
+        target = self.PROBLEM_TO_LOSS.get(problem)
+        active = bool(enabled and recommendation == "ADJUST_WEIGHTS" and target)
+        if active and target is not None:
+            previous = _finite_number((current or {}).get(target)) or 1.0
+            multipliers[target] = round(min(self.maximum, max(self.minimum, previous + self.step)), 4)
+        reason = "adaptive_loss_active" if active else (
+            "feature_disabled" if not enabled else "guidance_did_not_request_loss_adjustment"
+        )
+        return {
+            "active": active,
+            "reason": reason,
+            "target": target if active else None,
+            "multipliers": multipliers,
+            "effective_weights": {
+                key: round(BASE_LOSS_WEIGHTS[key] * multipliers[key], 6)
+                for key in BASE_LOSS_WEIGHTS
+            },
+            "changed_count": sum(value != 1.0 for value in multipliers.values()),
+        }
+
+
+def compare_loss_ab(plan: Mapping[str, Any]) -> Dict[str, Any]:
+    """Describe baseline/effective loss weights without claiming model improvement."""
+    effective = plan.get("effective_weights", {}) if isinstance(plan, Mapping) else {}
+    return {
+        "baseline_weights": dict(BASE_LOSS_WEIGHTS),
+        "experiment_weights": {
+            key: float(effective.get(key, value)) for key, value in BASE_LOSS_WEIGHTS.items()
+        },
+        "changed_count": int(plan.get("changed_count", 0)) if isinstance(plan, Mapping) else 0,
         "quality_improvement_claimed": False,
     }
 
@@ -940,17 +1011,19 @@ class QualityGuidanceController:
             for key in self.loss_multipliers:
                 value = _finite_number(loss_multipliers.get(key))
                 if value is not None:
-                    self.loss_multipliers[key] = float(value)
+                    self.loss_multipliers[key] = min(1.25, max(0.75, float(value)))
         self.intervention_count = max(0, int(_finite_number(state.get("intervention_count")) or 0))
         self.history = self.decision_history
 
 
 __all__ = [
+    "BASE_LOSS_WEIGHTS",
     "DEFAULT_CRITICAL_FLOORS",
     "DEFAULT_TARGETS",
     "GUIDANCE_ACTIONS",
     "FrameQualityTracker",
     "HardExampleMiningPolicy",
+    "LossMultiplierController",
     "ENABLE_ADAPTIVE_LOSS",
     "ENABLE_QUALITY_CHECKPOINT",
     "ENABLE_QUALITY_GUIDANCE",
@@ -964,6 +1037,7 @@ __all__ = [
     "build_quality_vector",
     "diagnose_quality_bottleneck",
     "compare_sampling_ab",
+    "compare_loss_ab",
     "frame_quality_key",
     "normalize_quality_score",
 ]

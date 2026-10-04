@@ -5,11 +5,13 @@ import pytest
 from pixel_ai_engine.quality_guidance import (
     FrameQualityTracker,
     HardExampleMiningPolicy,
+    LossMultiplierController,
     QualityGuidanceConfig,
     QualityGuidanceController,
     QualityTrendAnalyzer,
     QualityVector,
     compare_sampling_ab,
+    compare_loss_ab,
     build_quality_vector,
     diagnose_quality_bottleneck,
     normalize_quality_score,
@@ -309,3 +311,51 @@ def test_frame_quality_persists_inside_backward_compatible_guidance_state():
     legacy = QualityGuidanceController(state={}).export_state()
     assert legacy["frame_quality"] == {}
     assert legacy["sampling_weights"] == {}
+
+
+def test_adaptive_loss_changes_exactly_one_bounded_multiplier():
+    controller = LossMultiplierController(step=0.1)
+    plan = controller.propose(
+        {"color": 1.2, "alpha": 1.0, "edge": 1.0, "adversarial": 1.0},
+        {"recommended_action": "ADJUST_WEIGHTS", "primary_problem": "palette"},
+        enabled=True,
+    )
+
+    assert plan["active"] is True
+    assert plan["target"] == "color"
+    assert plan["multipliers"]["color"] == 1.25
+    assert plan["changed_count"] == 1
+    assert 0.75 <= min(plan["multipliers"].values())
+    assert max(plan["multipliers"].values()) <= 1.25
+
+
+def test_adaptive_loss_is_exactly_neutral_when_disabled_or_not_requested():
+    controller = LossMultiplierController()
+    disabled = controller.propose(
+        {"edge": 1.25},
+        {"recommended_action": "ADJUST_WEIGHTS", "primary_problem": "outline"},
+        enabled=False,
+    )
+    unrelated = controller.propose(
+        {"edge": 1.25},
+        {"recommended_action": "REINFORCE", "primary_problem": "face"},
+        enabled=True,
+    )
+
+    assert set(disabled["multipliers"].values()) == {1.0}
+    assert set(unrelated["multipliers"].values()) == {1.0}
+    assert disabled["changed_count"] == unrelated["changed_count"] == 0
+
+
+def test_loss_ab_report_preserves_baseline_and_makes_no_quality_claim():
+    plan = LossMultiplierController().propose(
+        {},
+        {"recommended_action": "ADJUST_WEIGHTS", "primary_problem": "alpha"},
+        enabled=True,
+    )
+    report = compare_loss_ab(plan)
+
+    assert report["changed_count"] == 1
+    assert report["baseline_weights"]["alpha"] == 2.5
+    assert report["experiment_weights"]["alpha"] == 2.75
+    assert report["quality_improvement_claimed"] is False

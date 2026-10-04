@@ -4,7 +4,7 @@
 
 Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
 
-Incremento actual: Incremento 2 — COMPLETADO; Incremento 3 pendiente
+Incremento actual: Incremento 3 — COMPLETADO; Incremento 4 pendiente
 
 Sprint actual: Ninguno (Increment Review aprobado)
 
@@ -32,7 +32,8 @@ Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado
   - Evidencia: Increment Review aprobado; 53 tests PASS; commits `24369376f`, `2357b5e88`, `9c93ab6fa`, `f7d1a72b3`, `83b758e41`.
 - [x] INCREMENTO 2 — Smart Reinforcement — COMPLETADO
   - Evidencia: seguimiento por frame, sampling 1.0–2.0, persistencia, A/B determinista y 63 tests PASS.
-- [ ] INCREMENTO 3 — Adaptive Loss — PENDIENTE
+- [x] INCREMENTO 3 — Adaptive Loss — COMPLETADO
+  - Evidencia: multiplicadores 0.75–1.25, una loss por intervención, persistencia, neutralidad por flag y 68 tests PASS.
 - [ ] INCREMENTO 4 — Guidance + Recovery — PENDIENTE
 - [ ] INCREMENTO 5 — Anatomical Guidance — PENDIENTE
 - [ ] INCREMENTO 6 — Critical Detail Guidance — PENDIENTE
@@ -373,24 +374,25 @@ Objetivo: aplicar una sola corrección diferenciable atribuible y acotada por in
 
 ### Sprint 1 — Capa de multiplicadores
 
-- [ ] Crear `LossMultiplierController`
-- [ ] Definir límites y paso gradual
-- [ ] Mantener valores base intactos
-- [ ] Añadir tests unitarios
+- [x] Crear `LossMultiplierController`
+- [x] Definir límites y paso gradual
+- [x] Mantener valores base intactos
+- [x] Añadir tests unitarios
 
 ### Sprint 2 — Integración y persistencia
 
-- [ ] Aplicar multiplicadores efectivos en `total_g`
-- [ ] Registrar valores efectivos por época
-- [ ] Persistir/restaurar en checkpoint
-- [ ] Feature flag y restauración neutral
-- [ ] Tests de integración
+- [x] Aplicar multiplicadores efectivos en `total_g`
+- [x] Registrar valores efectivos por época
+- [x] Persistir/restaurar en checkpoint
+- [x] Feature flag y restauración neutral
+- [x] Tests de integración
 
 ### Sprint 3 — A/B y revisión
 
-- [ ] Comparar baseline vs multiplicadores
-- [ ] Verificar finitud/NaN/AMP
-- [ ] Ejecutar suite completa e Increment Review
+- [x] Comparar baseline vs multiplicadores
+- [x] Verificar finitud/NaN/AMP
+- [x] Ejecutar suite completa e Increment Review
+  - Resultado: APROBADO; 68 tests PASS. A/B registra pesos efectivos y no afirma mejora visual sin experimento controlado.
 
 ## INCREMENTO 4 — GUIDANCE + RECOVERY
 
