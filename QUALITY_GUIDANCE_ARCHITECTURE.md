@@ -2,14 +2,16 @@
 
 ## Alcance actual
 
-Este documento describe el **Incremento 1 — Quality Guidance Observacional**. El sistema observa, normaliza, diagnostica y recomienda. No cambia sampling, learning rate, losses, optimizadores, scheduler, recovery ni selección de checkpoints.
+Este documento describe la arquitectura final tras los **Incrementos 1–6**. El sistema observa y diagnostica siempre; bajo flags puede ajustar sampling o una loss acotada, y puede solicitar Recovery ante colapso visual sostenido.
 
-La garantía central del incremento es:
+Las garantías centrales son:
 
 ```text
-recommended_action puede ser REINFORCE/ADJUST/ROLLBACK
-action siempre es CONTINUE
-training_modified siempre es false
+una sola intervención atribuible por vez
+sampling entre 1.0 y 2.0
+multiplicadores de loss entre 0.75 y 1.25
+Recovery conserva autoridad sobre NaN, snapshots y rollback
+ground truth nunca pasa por elevate_frame
 ```
 
 ## Responsabilidades
@@ -32,13 +34,13 @@ Responde: **«¿qué parece fallar y qué convendría hacer después?»**
 4. analiza varias auditorías mediante `QualityTrendAnalyzer`;
 5. localiza el cuello de botella con `diagnose_quality_bottleneck`;
 6. separa recomendación de acción aplicada;
-7. exporta/restaura estado observacional.
+7. exporta/restaura estado, métricas por frame y política de intervención.
 
 ### TrainingRecovery
 
 Responde: **«¿qué hacer si el entrenamiento se vuelve inseguro?»**
 
-`pixel_ai_engine/training_recovery.py` sigue siendo la autoridad para NaN, spikes, colapso extremo, snapshot sano y recuperación. Quality Guidance no reemplaza, llama ni modifica sus decisiones en este incremento.
+`pixel_ai_engine/training_recovery.py` sigue siendo la autoridad para NaN, spikes, colapso extremo, snapshot sano y recuperación. Guidance sólo puede solicitar una ruta tras confirmar tendencia `COLLAPSE`; Recovery selecciona y materializa el snapshot.
 
 ## Flujo implementado
 
@@ -50,7 +52,11 @@ train_supervised
   ├─ QualityVector
   ├─ QualityTrendAnalyzer
   ├─ diagnose_quality_bottleneck
-  ├─ QualityGuidanceController (observational)
+  ├─ QualityGuidanceController
+  ├─ GuidanceInterventionPolicy (cooldown/máximo)
+  ├─ sampling o adaptive loss (excluyentes)
+  ├─ TrainingRecovery si corresponde
+  ├─ best_quality_generator.pt si mejora el criterio compuesto
   └─ training_status.json
        ├─ quality (métricas originales)
        ├─ guidance (contrato actual)
@@ -83,7 +89,7 @@ Categorías actuales:
 
 Las puntuaciones se limitan a 0–100. NaN, infinito, booleanos y valores no numéricos se consideran no disponibles. El valor `0.0` se conserva como medición real; nunca se confunde con ausencia.
 
-El adaptador acepta, entre otros, los aliases `score_gestos_ojos`/`gestos_ojos`, `score_ropa_delantal`/`ropa_delantal`, `alineacion_molde`/`silueta_iou_real` y métricas de `Phase3CriticalReviewer` cuando estén presentes. Incorporar formalmente las métricas críticas al pipeline queda reservado al Incremento 6.
+El adaptador acepta, entre otros, los aliases `score_gestos_ojos`/`gestos_ojos`, `score_ropa_delantal`/`ropa_delantal`, `alineacion_molde`/`silueta_iou_real` y las métricas puras de `Phase3CriticalReviewer`, ya integradas al preview sin `elevate_frame`.
 
 ## Tendencias
 
@@ -127,7 +133,7 @@ El vocabulario estable admite:
 - `ROLLBACK`
 - `STOP`
 
-En este incremento solo se ejecuta `CONTINUE`. El campo `recommended_action` expresa qué evaluaría un incremento futuro. Esto permite validar el diagnóstico antes de otorgarle autoridad sobre el entrenamiento.
+`recommended_action` expresa el diagnóstico y `authorized_action` la decisión de la política. Cooldown, presupuesto y disponibilidad de snapshot pueden convertir una recomendación en `CONTINUE`. Sampling, loss y rollback nunca se aplican simultáneamente.
 
 ## Señales diferenciables y no diferenciables
 
@@ -139,7 +145,7 @@ No se realiza ninguna operación equivalente a:
 total_g += quality_gate_score
 ```
 
-Las losses L1, alpha, edge y adversarial existentes permanecen intactas. Los multiplicadores adaptativos pertenecen al Incremento 3 y requerirán límites, feature flag y pruebas A/B.
+Las métricas discretas no entran al grafo. Los multiplicadores adaptativos sólo escalan una loss existente y la loss de silueta tensorial permanece desactivada por defecto.
 
 ## Feature flags
 
@@ -147,12 +153,13 @@ En `pixel_ai_engine/quality_guidance.py`:
 
 ```python
 ENABLE_QUALITY_GUIDANCE = True
-ENABLE_SMART_SAMPLING = False
-ENABLE_ADAPTIVE_LOSS = False
-ENABLE_QUALITY_CHECKPOINT = False
+ENABLE_SMART_SAMPLING = True
+ENABLE_ADAPTIVE_LOSS = True
+ENABLE_QUALITY_CHECKPOINT = True
+ENABLE_SILHOUETTE_LOSS = False
 ```
 
-`ENABLE_QUALITY_GUIDANCE` puede apagarse con `PIXEL_AI_ENABLE_QUALITY_GUIDANCE=0`. Al desactivarlo se sigue publicando un contrato mínimo con `enabled=false`, `action=CONTINUE` y `training_modified=false`.
+Cada capacidad tiene variable `PIXEL_AI_ENABLE_*`. Al desactivar Guidance o una capacidad, sampling vuelve a uniforme y las losses a sus pesos base exactos.
 
 ## Recuperado del sistema histórico
 
@@ -169,12 +176,12 @@ ENABLE_QUALITY_CHECKPOINT = False
 - entrenador antiguo de dos fases como pipeline principal;
 - transformaciones Phase3 sobre ground truth;
 - cambios simultáneos de sampling y loss;
-- acciones reales de rollback, LR o refuerzo desde Quality Guidance;
+- cambios directos de LR desde Guidance (Recovery conserva esa responsabilidad);
 - score global como única fuente de verdad.
 
 ## Persistencia y compatibilidad
 
-`guidance_state` contiene versión, configuración, última decisión, historiales y placeholders neutrales para sampling/loss. Los placeholders permanecen en 1.0/vacíos y no afectan entrenamiento.
+`guidance_state` contiene versión, configuración, historiales, calidad por frame, sampling, multiplicadores y estado de cooldown/intervenciones. Checkpoints antiguos sin esos campos continúan iniciando con valores neutrales.
 
 Al reanudar:
 
@@ -183,12 +190,12 @@ Al reanudar:
 3. si ambos faltan, se inicia vacío;
 4. en respawn explícito se puede preferir el estado del snapshot seleccionado.
 
-Al abrir una nueva era, el historial anterior se archiva con sus mejores scores observados (`global`, anatomía, rostro, paleta, silueta, microdetalle y alfa).
+Al abrir una nueva era, el historial anterior se archiva con los mejores scores de todas las dimensiones disponibles. `best_quality_generator.pt` usa un compuesto ponderado con pisos críticos y nunca reemplaza `best_generator.pt`.
 
 ## Observabilidad
 
-`monitor.html` y `sprite_studio.html` leen primero `guidance` y aceptan `quality_guidance` como alias. Muestran modo, problema, severidad y acción recomendada. La consola declara explícitamente `OBSERVATIONAL_ONLY` y que el entrenamiento no fue modificado.
+`monitor.html` y `sprite_studio.html` leen primero `guidance` y aceptan `quality_guidance` como alias. El monitor muestra anatomía, silueta, pose, rostro, borde, microdetalle, acción aplicada y mejor quality checkpoint.
 
-## Próximo incremento permitido
+## Estado de validación
 
-Solo después de aprobar formalmente el Incremento 1 podrá comenzar el **Incremento 2 — Smart Reinforcement**, primero con métricas por frame y después sampling adaptativo acotado. Adaptive Loss seguirá desactivado durante ese incremento.
+Los seis incrementos están aprobados. La suite propia final contiene 81 pruebas, incluido START→RESUME→PAUSE→RESUME en CPU y compatibilidad con checkpoints antiguos. Persisten cinco warnings de deprecación AMP sin impacto funcional.

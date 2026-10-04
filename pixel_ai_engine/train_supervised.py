@@ -32,6 +32,7 @@ from pixel_ai_engine.config import (
 from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
 from pixel_ai_engine.dataset import place_in_cell
 from pixel_ai_engine.enhancer import PixelArtEnhancer
+from pixel_ai_engine.phase3_critical_enhancer import Phase3CriticalReviewer
 from pixel_ai_engine.anatomical_guidance import (
     ENABLE_SILHOUETTE_LOSS,
     compute_anatomical_metrics,
@@ -40,6 +41,7 @@ from pixel_ai_engine.anatomical_guidance import (
 from pixel_ai_engine.quality_guidance import (
     BASE_LOSS_WEIGHTS,
     ENABLE_ADAPTIVE_LOSS,
+    ENABLE_QUALITY_CHECKPOINT,
     ENABLE_QUALITY_GUIDANCE,
     ENABLE_SMART_SAMPLING,
     FrameQualityTracker,
@@ -48,6 +50,7 @@ from pixel_ai_engine.quality_guidance import (
     LossMultiplierController,
     QualityGuidanceController,
     SamplingPlan,
+    assess_quality_checkpoint,
     compare_sampling_ab,
     compare_loss_ab,
 )
@@ -271,7 +274,10 @@ def _guidance_state_from_checkpoint(
 
 
 def _quality_summary_from_history(history: Any) -> Dict[str, Optional[float]]:
-    summary_keys = ("global", "anatomy", "face", "palette", "silhouette", "micro_detail", "alpha")
+    summary_keys = (
+        "global", "anatomy", "silhouette", "pose", "face", "hair", "clothing",
+        "arms_hands", "feet", "props", "palette", "alpha", "micro_detail", "outline",
+    )
     summary: Dict[str, Optional[float]] = {f"best_{key}": None for key in summary_keys}
     if not isinstance(history, list):
         return summary
@@ -766,6 +772,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     recovery_events = []
     dataset_layout = {}
     previous_total_frames = 1008
+    best_quality_score = None
+    quality_checkpoint = None
 
     if STATUS_FILE.exists():
         try:
@@ -784,6 +792,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                 recovery_events = prev.get("recovery_events", [])
                 dataset_layout = prev.get("dataset_layout", {})
                 previous_total_frames = prev.get("total_frames", previous_total_frames)
+                best_quality_score = prev.get("best_quality_score")
+                quality_checkpoint = prev.get("quality_checkpoint")
                 # Solo aceptar numeros finitos estrictamente positivos (evita 0.0 heredado)
                 if raw_best is not None and isinstance(raw_best, (int, float)) and math.isfinite(float(raw_best)) and float(raw_best) > 0.0:
                     best_loss = float(raw_best)
@@ -961,6 +971,8 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "recovery": recovery,
         "recovery_events": recovery_events,
         "dataset_layout": dataset_layout,
+        "best_quality_score": best_quality_score,
+        "quality_checkpoint": quality_checkpoint,
     }
     write_status_file(STATUS_FILE, status_data)
     return status_data
@@ -1005,6 +1017,48 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "guidance_state": guidance_state,
     }
     torch.save(state, file_path)
+
+
+def _maybe_save_quality_checkpoint(
+    status_data: Dict[str, Any],
+    *,
+    epoch: int,
+    loss: float,
+    best_loss: float,
+    generator: nn.Module,
+) -> Dict[str, Any]:
+    data = dict(status_data)
+    vector = (data.get("guidance") or {}).get("quality_vector", {})
+    assessment = assess_quality_checkpoint(vector)
+    previous = data.get("best_quality_score")
+    previous_score = float(previous) if isinstance(previous, (int, float)) and math.isfinite(float(previous)) else None
+    improved = bool(
+        ENABLE_QUALITY_CHECKPOINT
+        and assessment["eligible"]
+        and (previous_score is None or assessment["score"] > previous_score)
+    )
+    checkpoint_info = {**assessment, "enabled": bool(ENABLE_QUALITY_CHECKPOINT), "improved": improved}
+    if improved:
+        destination = CHECKPOINT_DIR / "best_quality_generator.pt"
+        state = {
+            "epoch": int(epoch),
+            "generator": generator.state_dict(),
+            "loss": float(loss),
+            "best_loss": float(best_loss),
+            "quality_score": assessment["score"],
+            "quality_vector": dict(vector),
+            "guidance_state": data.get("guidance_state", {}),
+        }
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        torch.save(state, temporary)
+        os.replace(temporary, destination)
+        data["best_quality_score"] = assessment["score"]
+        checkpoint_info.update({"file": destination.name, "epoch": int(epoch)})
+    elif isinstance(data.get("quality_checkpoint"), dict):
+        prior_checkpoint = data["quality_checkpoint"]
+        checkpoint_info.update({key: prior_checkpoint[key] for key in ("file", "epoch") if key in prior_checkpoint})
+    data["quality_checkpoint"] = checkpoint_info
+    return data
 
 def _tensor_to_preview_image(tensor, has_alpha=False):
     channels = 4 if has_alpha else 3
@@ -1235,6 +1289,9 @@ def generate_preview(generator, dataset, epoch_label=None):
                 from pixel_ai_engine.enhancer import PixelArtEnhancer
                 qc = PixelArtEnhancer.analyze_quality(first_raw, palette=first_pal, target_img=first_tgt)
                 qc.update(compute_anatomical_metrics(first_raw, first_tgt))
+                # Audit only: never call Phase3CriticalReviewer.elevate_frame on
+                # predictions or ground truth in the training evaluation path.
+                qc.update(Phase3CriticalReviewer.audit_frame(first_raw))
                 qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(qc)
                 qc_metrics = qc
             except Exception:
@@ -1847,6 +1904,13 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             published_status.get("guidance"),
         )
         published_status = _attach_loss_plan(published_status, next_loss_plan)
+        published_status = _maybe_save_quality_checkpoint(
+            published_status,
+            epoch=epoch,
+            loss=avg_g,
+            best_loss=best_loss,
+            generator=generator,
+        )
         write_status_file(STATUS_FILE, published_status)
         current_sampling_plan = next_sampling_plan
         current_loss_plan = next_loss_plan

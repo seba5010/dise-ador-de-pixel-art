@@ -2,27 +2,27 @@
 
 # RESUMEN DEL ESTADO
 
-Progreso general: 65,6% (84 de 128 checkboxes del plan acumulativo completados y verificados; Incremento 1: 100%)
+Progreso del roadmap: 100% (6 de 6 incrementos completados y verificados; las casillas de rechazo/corrección permanecen sin marcar por diseño)
 
-Incremento actual: Incremento 5 — COMPLETADO; Incremento 6 pendiente
+Incremento actual: Incremento 6 — COMPLETADO
 
 Sprint actual: Ninguno (Increment Review aprobado)
 
-Última fase validada: Incremento 1 — Quality Guidance Observacional
+Última fase validada: Incremento 6 — Critical Detail Guidance
 
 Bloqueos: Ninguno. El árbol de trabajo contiene cambios y datasets previos del usuario; se preservarán y los commits del incremento se limitarán a archivos propios.
 
-Último test completo: PASS — suite raíz completa, 53 pruebas
+Último test completo: PASS — suite propia completa, 81 pruebas
 
 Último checkpoint compatible: verificado en smoke CPU; checkpoints nuevos persisten Guidance y checkpoints antiguos cargan sin el campo.
 
-Último commit validado: `e6e88afa6`
+Último commit validado: `5a063a2c0` (Incremento 5; el cierre del Incremento 6 se registra en el commit siguiente)
 
 Última actualización: 2026-10-04
 
 Branch: `main`
 
-Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado por el usuario
+Estado general: PLAN COMPLETADO — Increment Reviews 1–6 aprobados
 
 ---
 
@@ -38,7 +38,8 @@ Estado general: EN PROGRESO — Incremento 1 revalidado; Incremento 2 autorizado
   - Evidencia: política jerárquica, cooldown 5, máximo 3, rollback delegado a Recovery, compatibilidad y 72 tests PASS.
 - [x] INCREMENTO 5 — Anatomical Guidance — COMPLETADO
   - Evidencia: siete señales geométricas, integración observacional, loss de silueta experimental apagada y 76 tests PASS.
-- [ ] INCREMENTO 6 — Critical Detail Guidance — PENDIENTE
+- [x] INCREMENTO 6 — Critical Detail Guidance — COMPLETADO
+  - Evidencia: auditoría crítica pura, quality checkpoint independiente, eras ampliadas, monitor y 81 tests PASS.
 
 ---
 
@@ -454,25 +455,26 @@ Objetivo: integrar métricas críticas no destructivas y cerrar comparación ent
 
 ### Sprint 1 — Métricas críticas
 
-- [ ] Extraer auditoría pura sin `elevate_frame`
-- [ ] Integrar borde, tinta, sombra, paleta y rostro
-- [ ] Verificar que ground truth no se transforma
-- [ ] Tests unitarios
+- [x] Extraer auditoría pura sin `elevate_frame`
+- [x] Integrar borde, tinta, sombra, paleta y rostro
+- [x] Verificar que ground truth no se transforma
+- [x] Tests unitarios
 
 ### Sprint 2 — Eras y quality checkpoint
 
-- [ ] Completar resumen de calidad entre eras
-- [ ] Crear `best_quality_generator.pt` sin reemplazar `best_generator.pt`
-- [ ] Feature flag y criterio compuesto con mínimos críticos
-- [ ] Persistencia y compatibilidad
+- [x] Completar resumen de calidad entre eras
+- [x] Crear `best_quality_generator.pt` sin reemplazar `best_generator.pt`
+- [x] Feature flag y criterio compuesto con mínimos críticos
+- [x] Persistencia y compatibilidad
 
 ### Sprint 3 — Observabilidad y cierre
 
-- [ ] Mostrar detalle crítico y comparación de eras
-- [ ] Ejecutar pruebas A/B deterministas disponibles
-- [ ] Suite completa
-- [ ] Auditoría final de checklist
-- [ ] Increment Review final
+- [x] Mostrar detalle crítico y comparación de eras
+- [x] Ejecutar pruebas A/B deterministas disponibles
+- [x] Suite completa
+- [x] Auditoría final de checklist
+- [x] Increment Review final
+  - Resultado: APROBADO; 81 tests PASS. No se transforma ground truth y el checkpoint de calidad no reemplaza al checkpoint por loss.
 
 ---
 
@@ -542,8 +544,8 @@ Estado actual: existe y calcula macro métricas y detalle anatómico, pero está
   - Evidencia: `pixel_ai_engine/quality_gate.py`, método `evaluate_model_critical` auditado el 2026-10-04.
 - [x] Conservar catálogo de métricas
   - Evidencia: mapeo registrado en Sprint 1 y matriz QG-001.
-- [ ] Integrar métricas mediante QualityVector
-- [ ] Validar
+- [x] Integrar métricas mediante QualityVector
+- [x] Validar
 
 Resultado: ADAPTAR/FUSIONAR, no invocar como bucle antiguo.
 
@@ -560,8 +562,8 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 
 - [x] Investigar
   - Evidencia: `_archivo_pruebas_y_obsoletos/audit_quality_8x12.py` y `audit_frames_8x12.py` revisados.
-- [ ] Extraer métricas por frame (Incremento 2)
-- [ ] Validar confiabilidad
+- [x] Extraer métricas por frame (Incremento 2)
+- [x] Validar confiabilidad
 
 Resultado: POSPONER PARA HARD EXAMPLE MINING.
 
@@ -569,9 +571,9 @@ Resultado: POSPONER PARA HARD EXAMPLE MINING.
 
 - [x] Investigar
   - Evidencia: `audit_frame` separa métricas de `elevate_frame` en `pixel_ai_engine/phase3_critical_enhancer.py`.
-- [ ] Extraer métricas reutilizables (Incremento 6)
-- [ ] Integrar métricas
-- [ ] Validar
+- [x] Extraer métricas reutilizables (Incremento 6)
+- [x] Integrar métricas
+- [x] Validar
 
 Resultado: ADAPTAR PARCIALMENTE; no reutilizar transformaciones destructivas.
 
@@ -597,6 +599,7 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 | 2026-10-04 | 1 | 2 | `test_audit_suite.py test_training_recovery.py` | PASS (11) | Sin regresiones tras controlador/tendencias. |
 | 2026-10-04 | 1 | 3 | `test_quality_guidance_integration.py` | PASS (7) | Estado, historial, flag, checkpoint, eras, UI y lifecycle CPU. |
 | 2026-10-04 | 1 | 3 | suite raíz `test_*.py` | PASS (53) | 0 FAIL; 5 warnings AMP deprecados preexistentes. |
+| 2026-10-04 | 2–6 | Cierre | suite propia explícita | PASS (81) | Sampling, adaptive loss, recovery, anatomía, detalle crítico y lifecycle CPU; 5 warnings AMP preexistentes. |
 
 ---
 
@@ -607,7 +610,7 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 - [x] Cada funcionalidad marcada completa existe.
   - Evidencia: matriz QG-001–QG-008 y suite completa.
 - [x] Tests continúan pasando.
-  - Evidencia: 53 PASS el 2026-10-04.
+  - Evidencia: 81 PASS el 2026-10-04.
 - [x] No hay archivos eliminados accidentalmente.
   - Evidencia: revisión inicial de `git status`; no se ejecutaron eliminaciones.
 - [x] No hay funcionalidades antiguas marcadas como recuperadas si no están conectadas.
@@ -615,9 +618,9 @@ Resultado: NO REIMPLEMENTAR COMPLETO.
 - [x] Documentación coincide con código actual.
   - Evidencia: `QUALITY_GUIDANCE_ARCHITECTURE.md` describe el contrato validado.
 - [x] Último commit registrado coincide con Git.
-  - Evidencia: se registra `HEAD`; último commit validado antes del cierre del plan: `83b758e41`.
+  - Evidencia: Incrementos 2–5 en `0ca7bdede`, `d7670f8d0`, `08b24049a`, `5a063a2c0`; el cierre del 6 se registra inmediatamente después de esta auditoría.
 - [x] Incremento activo coincide con desarrollo real.
-  - Evidencia: solo Incremento 1 figura en desarrollo; Incrementos 2–6 siguen pendientes.
+  - Evidencia: los seis incrementos figuran completados y sus Increment Reviews aprobados.
 
 ---
 

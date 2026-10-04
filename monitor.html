@@ -750,13 +750,13 @@
 
         setText('qc-m-score', (d.quality.score_total || 0).toFixed(1) + '%');
         setText('qc-m-alpha', (d.quality.pureza_alfa || 0).toFixed(1) + '%');
-        setText('qc-m-edge', (d.quality.nitidez_bordes || 0).toFixed(1) + '%');
+        setText('qc-m-edge', (d.quality.nitidez_bordes ?? d.quality.pureza_bordes ?? 0).toFixed(1) + '%');
         setText('qc-m-pal', (d.quality.fidelidad_paleta || 0).toFixed(1) + '%');
         setText('qc-m-noise', (d.quality.ruido_huerfano || 0).toFixed(1) + '%');
-        setText('qc-m-detail', (d.quality.micro_detalles || 0).toFixed(1) + '%');
+        setText('qc-m-detail', (d.quality.micro_detalles ?? d.quality.profundidad_sombra ?? 0).toFixed(1) + '%');
         setText('qc-m-tattoo', (d.quality.preservacion_tatuajes || 0).toFixed(1) + '%');
         setText('qc-m-pelo', (d.quality.pelo_gorro || 98).toFixed(1) + '%');
-        setText('qc-m-ojos', (d.quality.gestos_ojos || 98).toFixed(1) + '%');
+        setText('qc-m-ojos', (d.quality.gestos_ojos ?? d.quality.detalle_facial ?? 98).toFixed(1) + '%');
         setText('qc-m-ropa', (d.quality.ropa_delantal || 98).toFixed(1) + '%');
         setText('qc-m-tats', (d.quality.tatuajes_brazos || d.quality.preservacion_tatuajes || 98).toFixed(1) + '%');
         setText('qc-m-objs', (d.quality.objetos_utensilios || 98).toFixed(1) + '%');
@@ -768,7 +768,7 @@
             const vector = guidance.quality_vector || {};
             const problem = guidance.primary_problem || guidance.problem || 'ninguno';
             guideSummaryEl.textContent = `${problem} · ${String(guidance.severity || 'low').toUpperCase()} · ${guidance.recommended_action || 'CONTINUE'}`;
-            guideSummaryEl.title = `Modo ${guidance.mode || 'observational'}; global ${vector.global ?? 'N/D'}%; anatomía ${vector.anatomy ?? 'N/D'}%; silueta ${vector.silhouette ?? 'N/D'}%; pose ${vector.pose ?? 'N/D'}%; acción aplicada ${guidance.action || 'CONTINUE'}; entrenamiento modificado: ${guidance.training_modified === true ? 'sí' : 'no'}.`;
+            guideSummaryEl.title = `Modo ${guidance.training_modified === true ? 'activo' : (guidance.mode || 'observational')}; global ${vector.global ?? 'N/D'}%; anatomía ${vector.anatomy ?? 'N/D'}%; silueta ${vector.silhouette ?? 'N/D'}%; pose ${vector.pose ?? 'N/D'}%; rostro ${vector.face ?? 'N/D'}%; borde ${vector.outline ?? 'N/D'}%; microdetalle ${vector.micro_detail ?? 'N/D'}%; acción aplicada ${guidance.action || 'CONTINUE'}; mejor quality checkpoint ${d.best_quality_score ?? 'N/D'}%.`;
           } else {
             guideSummaryEl.textContent = 'Sin guía';
             guideSummaryEl.title = 'No hay Quality Guidance disponible.';

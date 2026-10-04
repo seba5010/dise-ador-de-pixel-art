@@ -151,14 +151,16 @@ def test_checkpoint_persists_guidance_state_and_old_checkpoint_is_compatible(mon
 
 def test_past_era_quality_summary_tracks_best_observed_categories():
     history = [
-        {"guidance": {"quality_vector": {"global": 70, "face": 55, "alpha": 99}}},
-        {"guidance": {"quality_vector": {"global": 75, "face": 62, "alpha": 98}}},
+        {"guidance": {"quality_vector": {"global": 70, "face": 55, "alpha": 99, "pose": 73, "outline": 68}}},
+        {"guidance": {"quality_vector": {"global": 75, "face": 62, "alpha": 98, "pose": 78, "outline": 72}}},
     ]
     summary = train_supervised._quality_summary_from_history(history)
 
     assert summary["best_global"] == 75.0
     assert summary["best_face"] == 62.0
     assert summary["best_alpha"] == 99.0
+    assert summary["best_pose"] == 78.0
+    assert summary["best_outline"] == 72.0
     assert summary["best_palette"] is None
 
 

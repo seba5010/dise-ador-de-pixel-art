@@ -42,7 +42,7 @@ def _environment_flag(name: str, default: bool) -> bool:
 ENABLE_QUALITY_GUIDANCE = _environment_flag("PIXEL_AI_ENABLE_QUALITY_GUIDANCE", True)
 ENABLE_SMART_SAMPLING = _environment_flag("PIXEL_AI_ENABLE_SMART_SAMPLING", True)
 ENABLE_ADAPTIVE_LOSS = _environment_flag("PIXEL_AI_ENABLE_ADAPTIVE_LOSS", True)
-ENABLE_QUALITY_CHECKPOINT = False
+ENABLE_QUALITY_CHECKPOINT = _environment_flag("PIXEL_AI_ENABLE_QUALITY_CHECKPOINT", True)
 
 
 def _finite_number(value: Any) -> Optional[float]:
@@ -615,6 +615,41 @@ def build_quality_vector(
     )
 
 
+def assess_quality_checkpoint(quality: Any) -> Dict[str, Any]:
+    """Return a conservative composite score and critical-floor eligibility."""
+    vector = _coerce_quality_vector(quality) or QualityVector()
+    payload = vector.to_dict()
+    weighted_dimensions = {
+        "global": 0.22,
+        "anatomy": 0.16,
+        "silhouette": 0.14,
+        "face": 0.10,
+        "palette": 0.12,
+        "alpha": 0.10,
+        "micro_detail": 0.08,
+        "outline": 0.08,
+    }
+    observed = {
+        key: float(payload[key])
+        for key in weighted_dimensions
+        if _finite_number(payload.get(key)) is not None
+    }
+    weight_sum = sum(weighted_dimensions[key] for key in observed)
+    score = sum(observed[key] * weighted_dimensions[key] for key in observed) / weight_sum if weight_sum else 0.0
+    breaches = [
+        key for key, floor in DEFAULT_CRITICAL_FLOORS.items()
+        if key in observed and observed[key] < floor
+    ]
+    eligible = len(observed) >= 4 and not breaches
+    return {
+        "eligible": eligible,
+        "score": round(score, 4),
+        "observed_dimensions": len(observed),
+        "critical_breaches": breaches,
+        "criterion": "weighted_quality_with_critical_floors",
+    }
+
+
 DEFAULT_TARGETS: Dict[str, float] = {
     "global": 80.0,
     "anatomy": 75.0,
@@ -1095,6 +1130,7 @@ __all__ = [
     "QualityVector",
     "SamplingPlan",
     "build_quality_vector",
+    "assess_quality_checkpoint",
     "diagnose_quality_bottleneck",
     "compare_sampling_ab",
     "compare_loss_ab",
