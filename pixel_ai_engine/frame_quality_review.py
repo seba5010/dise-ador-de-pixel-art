@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -100,8 +101,9 @@ class FrameQualityReviewManager:
         metadata = dict(metadata or {})
         run_id = str(metadata.get("run_id") or f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}")
         now = _now_iso()
+        review_id = str(metadata.get("review_id") or f"frame_review_{uuid.uuid4().hex}")
         record = {
-            "review_id": str(metadata.get("review_id") or f"frame_review_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}") ,
+            "review_id": review_id,
             "run_id": run_id,
             "character_id": str(character_id),
             "variant": str(variant),
@@ -363,11 +365,17 @@ class FrameQualityReviewManager:
         record["history"].append({"timestamp": record["updated_at"], "action": "rejected", "user": user, "reason": reason})
         return self._persist_record(record)
 
+    def get_record(self, review_id: str) -> Optional[Dict[str, Any]]:
+        return self._read_record_by_id(review_id)
+
     def get_queue(self, *, status: Optional[str] = None) -> List[Dict[str, Any]]:
         rows = self._load_queue()
         if status is None:
             return rows
         return [row for row in rows if row.get("status") == status]
+
+    def list_queue(self, *, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self.get_queue(status=status)
 
 
 class QualityGate:

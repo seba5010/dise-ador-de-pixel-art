@@ -58,6 +58,7 @@ from pixel_ai_engine.frame_map import (
     get_frame_semantic_info,
     get_all_frame_mappings
 )
+from pixel_ai_engine.frame_quality_review import FrameQualityReviewManager, VALID_REVIEW_STATUSES
 
 PORT = 8080
 ACTIVE_JOB = {
@@ -71,6 +72,7 @@ ACTIVE_JOB = {
     "run_dir": None,
     "error": None
 }
+FRAME_REVIEW_MANAGER = FrameQualityReviewManager(base_dir=PROJECT_ROOT)
 JOB_LOCK = threading.Lock()
 GLOBAL_TRAINING_PROC = None
 LAST_START_TIME = 0.0
@@ -1149,6 +1151,29 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             self.send_json(snaps)
             return
 
+        elif path == "/api/frame_review/queue":
+            status = query.get("status", [None])[0]
+            rows = FRAME_REVIEW_MANAGER.get_queue(status=status or None)
+            self.send_json({
+                "queue": rows,
+                "count": len(rows),
+                "status": status,
+                "valid_statuses": list(VALID_REVIEW_STATUSES),
+            })
+            return
+
+        elif path == "/api/frame_review/record":
+            review_id = query.get("review_id", [None])[0]
+            if not review_id:
+                self.send_json({"error": "review_id es obligatorio"}, status=400)
+                return
+            record = FRAME_REVIEW_MANAGER.get_record(review_id)
+            if record is None:
+                self.send_json({"error": "Review no encontrado"}, status=404)
+                return
+            self.send_json(record)
+            return
+
         elif path == "/api/runs":
             runs = []
             if OUTPUT_DIR.exists():
@@ -1289,6 +1314,10 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             "/api/train/stop": "DETENER ENTRENAMIENTO",
             "/api/train/respawn": "RESPAWN ENTRENAMIENTO",
             "/api/regenerate_frame": "REGENERAR FRAME",
+            "/api/frame_review/register": "REGISTRAR REVIEW DE FRAME",
+            "/api/frame_review/reevaluate": "REEVALUAR REVIEW DE FRAME",
+            "/api/frame_review/approve": "APROBAR REVIEW DE FRAME",
+            "/api/frame_review/reject": "RECHAZAR REVIEW DE FRAME",
         }
         action_name = action_names.get(parsed.path, "SOLICITUD")
         details = ""
@@ -1301,6 +1330,93 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/regenerate_frame":
             details = f"frame={body.get('frame_idx', '?')}"
         self.audit_access("ACCION", action_name, details)
+
+        if parsed.path == "/api/frame_review/register":
+            character_id = str(body.get("character_id") or body.get("character") or "unknown")
+            variant = str(body.get("variant") or "default")
+            frame_idx = body.get("frame_idx")
+            if frame_idx is None:
+                self.send_json({"error": "frame_idx es obligatorio"}, status=400)
+                return
+            generated_path = body.get("generated_frame_path")
+            if not generated_path:
+                self.send_json({"error": "generated_frame_path es obligatorio"}, status=400)
+                return
+            generated_abs = Path(generated_path)
+            if not generated_abs.is_absolute():
+                generated_abs = PROJECT_ROOT / generated_abs
+            target_raw = body.get("target_frame_path")
+            target_abs = None
+            if target_raw:
+                target_abs = Path(target_raw)
+                if not target_abs.is_absolute():
+                    target_abs = PROJECT_ROOT / target_abs
+            try:
+                review = FRAME_REVIEW_MANAGER.register_frame(
+                    character_id=character_id,
+                    variant=variant,
+                    frame_idx=int(frame_idx),
+                    generated_frame_path=str(generated_abs),
+                    target_frame_path=str(target_abs) if target_abs is not None else None,
+                    metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
+                )
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            self.send_json({"status": "registered", "review": review})
+            return
+
+        elif parsed.path == "/api/frame_review/reevaluate":
+            review_id = body.get("review_id")
+            if not review_id:
+                self.send_json({"error": "review_id es obligatorio"}, status=400)
+                return
+            try:
+                review = FRAME_REVIEW_MANAGER.reevaluate_frame(
+                    str(review_id),
+                    quality=body.get("quality") if isinstance(body.get("quality"), dict) else None,
+                    issues=list(body.get("issues", [])) if isinstance(body.get("issues"), list) else None,
+                    metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+                )
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+                return
+            self.send_json({"status": "reevaluated", "review": review})
+            return
+
+        elif parsed.path == "/api/frame_review/approve":
+            review_id = body.get("review_id")
+            if not review_id:
+                self.send_json({"error": "review_id es obligatorio"}, status=400)
+                return
+            try:
+                review = FRAME_REVIEW_MANAGER.approve_frame(
+                    str(review_id),
+                    user=str(body.get("user") or "studio_user"),
+                    comment=body.get("comment"),
+                )
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+                return
+            self.send_json({"status": "approved", "review": review})
+            return
+
+        elif parsed.path == "/api/frame_review/reject":
+            review_id = body.get("review_id")
+            if not review_id:
+                self.send_json({"error": "review_id es obligatorio"}, status=400)
+                return
+            try:
+                review = FRAME_REVIEW_MANAGER.reject_frame(
+                    str(review_id),
+                    user=str(body.get("user") or "studio_user"),
+                    reason=body.get("reason"),
+                )
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+                return
+            self.send_json({"status": "rejected", "review": review})
+            return
 
         if parsed.path == "/api/generate":
             with JOB_LOCK:

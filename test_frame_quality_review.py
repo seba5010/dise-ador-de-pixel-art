@@ -117,3 +117,17 @@ def test_manager_resolves_safe_paths_and_keeps_history(tmp_path):
 
     escape_path = tmp_path / ".." / "outside.png"
     assert manager._ensure_safe_path(str(escape_path)) is None
+
+
+def test_frame_quality_review_manager_exposes_record_lookup_and_queue_listing(tmp_path):
+    manager = FrameQualityReviewManager(base_dir=tmp_path)
+    review = manager.register_frame(
+        character_id="ALEX",
+        variant="chef_white",
+        frame_idx=7,
+        generated_frame_path=str(tmp_path / "gen.png"),
+        target_frame_path=str(tmp_path / "target.png"),
+    )
+
+    assert manager.get_record(review["review_id"])["review_id"] == review["review_id"]
+    assert [item["review_id"] for item in manager.list_queue(status="NEEDS_REVIEW")] == [review["review_id"]]
