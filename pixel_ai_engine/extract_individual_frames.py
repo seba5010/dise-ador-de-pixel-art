@@ -7,9 +7,10 @@ import json
 import re
 import shutil
 import sys
+from importlib import import_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -95,6 +96,14 @@ UNIFORM_GRID_SHEETS = {
 EXCLUDED_FRAME_SLOTS: Dict[str, set[int]] = {
     "jorge/movimientos_rnormal.png": {64},
 }
+
+DUVAN_WHITE_SHEET = "duvan/movimientos_rbchef.png"
+DUVAN_WHITE_COLUMN_EDGES = (0, 201, 363, 533, 724)
+DUVAN_WHITE_ROW_EDGES = (
+    0, 172, 319, 477, 626, 769, 918, 1073, 1226,
+    1376, 1532, 1679, 1828, 1942, 2059, 2172, 2172,
+)
+DUVAN_WHITE_OVERLAP_START = 1820
 
 
 @dataclass(frozen=True)
@@ -527,6 +536,84 @@ def source_border_sides(
     if y1 >= cell_height - 2:
         sides.append("bottom")
     return sides
+
+
+def extract_duvan_white_overlaps(
+    sheet: Image.Image,
+    column_edges: Sequence[int],
+) -> Dict[Tuple[int, int], Image.Image]:
+    """Separate Duvan's three overlapping final poses in each source column."""
+    try:
+        ndimage: Any = import_module("scipy.ndimage")
+    except ImportError as error:
+        raise RuntimeError(
+            "La extraccion corregida de Duvan requiere scipy en este entorno."
+        ) from error
+
+    rgba = np.array(sheet.convert("RGBA"))
+    alpha = rgba[:, :, 3]
+    frames: Dict[Tuple[int, int], Image.Image] = {}
+    structure = np.ones((3, 3), dtype=bool)
+
+    for column in range(4):
+        x0, x1 = column_edges[column : column + 2]
+        alpha_region = alpha[DUVAN_WHITE_OVERLAP_START:, x0:x1]
+        eroded: Any = ndimage.binary_erosion(
+            alpha_region > 128,
+            structure=np.ones((15, 15), dtype=bool),
+        )
+        label_result: Any = ndimage.label(eroded, structure=structure)
+        seed_labels: Any = label_result[0]
+        seeds: List[Tuple[int, int]] = []
+        objects: Any = ndimage.find_objects(seed_labels)
+        for seed_id, bounds in enumerate(objects, start=1):
+            if bounds is None:
+                continue
+            area = int((seed_labels[bounds] == seed_id).sum())
+            if area >= 500:
+                seeds.append((seed_id, DUVAN_WHITE_OVERLAP_START + bounds[0].start))
+        seeds.sort(key=lambda item: item[1])
+        if len(seeds) != 3:
+            raise RuntimeError(
+                f"Se esperaban 3 poses solapadas en columna {column + 1}; "
+                f"se detectaron {len(seeds)}. No se regeneraron los frames."
+            )
+
+        seed_ids = [seed_id for seed_id, _ in seeds]
+        distance_result: Any = ndimage.distance_transform_edt(
+            ~np.isin(seed_labels, seed_ids),
+            return_indices=True,
+        )
+        nearest: Any = distance_result[1]
+        owners: Any = seed_labels[tuple(nearest)]
+        source_region = rgba[
+            DUVAN_WHITE_OVERLAP_START:, x0:x1
+        ].copy()
+        for row_offset, (seed_id, _) in enumerate(seeds):
+            mask = (alpha_region > ALPHA_THRESHOLD) & (owners == seed_id)
+            components_result: Any = ndimage.label(mask, structure=structure)
+            components: Any = components_result[0]
+            component_count = int(components_result[1])
+            component_sizes = np.bincount(components.ravel())
+            largest_size = int(component_sizes[1:].max()) if component_count else 0
+            keep_threshold = max(40, int(largest_size * 0.05))
+            keep_components = np.flatnonzero(component_sizes >= keep_threshold)
+            keep_components = keep_components[keep_components != 0]
+            mask = np.isin(components, keep_components)
+            ys, xs = np.where(mask)
+            if len(ys) < 40:
+                raise RuntimeError(
+                    f"La pose {row_offset + 13}, columna {column + 1} quedo vacia."
+                )
+
+            frame_array = source_region.copy()
+            frame_array[~mask] = 0
+            frame = Image.fromarray(frame_array, mode="RGBA").crop(
+                (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+            )
+            frames[(row_offset + 12, column)] = frame
+
+    return frames
 
 
 def safe_output_directory(spec: SheetSpec, output_base: Path) -> Path:
@@ -965,21 +1052,31 @@ def repair_sebas_frames(
 
 def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict[str, object]:
     destination = safe_output_directory(spec, output_base)
-    clear_generated_variant(destination)
-
     with Image.open(spec.sheet_path) as source:
         sheet = source.convert("RGBA")
     width, height = sheet.size
-    if relative_sheet_key(spec.sheet_path) in UNIFORM_GRID_SHEETS:
+    sheet_key = relative_sheet_key(spec.sheet_path)
+    is_duvan_white = sheet_key == DUVAN_WHITE_SHEET
+    if is_duvan_white:
+        column_edges = list(DUVAN_WHITE_COLUMN_EDGES)
+        row_edges = list(DUVAN_WHITE_ROW_EDGES)
+        overlap_frames = extract_duvan_white_overlaps(sheet, column_edges)
+    elif sheet_key in UNIFORM_GRID_SHEETS:
         column_edges = [int(round(column * width / spec.cols)) for column in range(spec.cols + 1)]
         row_edges = [int(round(row * height / spec.rows)) for row in range(spec.rows + 1)]
+        overlap_frames = {}
     else:
         column_edges = detect_column_edges(sheet, spec.rows, spec.cols)
         row_edges = detect_row_edges(sheet, spec.rows, column_edges)
+        overlap_frames = {}
+
+    clear_generated_variant(destination)
     frames: Dict[int, Image.Image] = {}
     frame_records: List[Dict[str, object]] = []
     empty_slots: List[int] = []
     excluded_slots = sorted(EXCLUDED_FRAME_SLOTS.get(relative_sheet_key(spec.sheet_path), set()))
+    if is_duvan_white:
+        excluded_slots = sorted(set(excluded_slots) | {61, 62, 63, 64})
     excluded_slot_set = set(excluded_slots)
     border_contacts = 0
 
@@ -988,11 +1085,18 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
             slot = row * spec.cols + col
             if slot + 1 in excluded_slot_set:
                 continue
-            x0 = column_edges[col]
-            x1 = column_edges[col + 1]
-            y0 = row_edges[row]
-            y1 = row_edges[row + 1]
-            cell = sheet.crop((x0, y0, x1, y1))
+            if is_duvan_white and row >= 12:
+                cell = overlap_frames.get((row, col))
+                if cell is None:
+                    raise RuntimeError(
+                        f"No se pudo reconstruir el slot {slot + 1} de Duvan."
+                    )
+            else:
+                x0 = column_edges[col]
+                x1 = column_edges[col + 1]
+                y0 = row_edges[row]
+                y1 = row_edges[row + 1]
+                cell = sheet.crop((x0, y0, x1, y1))
             normalized, bounds = normalize_frame(
                 cell,
                 allow_upscale=True,
@@ -1003,7 +1107,11 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
                 empty_slots.append(slot + 1)
                 continue
 
-            sides = source_border_sides(bounds, cell.width, cell.height)
+            sides = (
+                []
+                if is_duvan_white and row >= 12
+                else source_border_sides(bounds, cell.width, cell.height)
+            )
             if sides:
                 border_contacts += 1
             filename = f"frame_{slot + 1:03d}_r{row + 1:02d}_c{col + 1:02d}.png"
@@ -1051,6 +1159,13 @@ def extract_sheet(spec: SheetSpec, output_base: Path, preview_dir: Path) -> Dict
         "preview": str(preview_path.relative_to(PROJECT_ROOT)),
         "frames": frame_records,
     }
+    if is_duvan_white:
+        manifest["source_reconstruction"] = {
+            "method": "alpha_seed_watershed",
+            "overlapping_rows_rebuilt": [13, 14, 15],
+            "excluded_source_slots": [61, 62, 63, 64],
+            "reason": "La hoja fuente termina antes de mostrar una fila 16 completa.",
+        }
     (destination / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )

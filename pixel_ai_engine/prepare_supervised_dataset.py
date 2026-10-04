@@ -27,6 +27,7 @@ import os
 import sys
 import json
 import time
+from typing import Optional
 from pathlib import Path
 from PIL import Image
 import numpy as np
@@ -142,17 +143,42 @@ def remove_stale_empty_sample(png_filename: str, txt_filename: str) -> None:
             pass
 
 
-def discover_variants() -> list:
+def get_canonical_frame_index(grid: dict, frame: dict) -> int:
+    """Map a manifest frame coordinate to the canonical 8x12 frame index."""
+    try:
+        rows = int(grid["rows"])
+        columns = int(grid["columns"])
+        row = int(frame["row"])
+        column = int(frame["column"])
+        slot = int(frame["slot"])
+    except (KeyError, TypeError, ValueError):
+        return -1
+
+    if rows <= 0 or columns <= 0 or not (1 <= row <= rows and 1 <= column <= columns):
+        return -1
+    if slot != (row - 1) * columns + column:
+        return -1
+
+    if columns == 8:
+        frame_idx = (row - 1) * 8 + column - 1
+        return frame_idx if frame_idx < 96 else -1
+    if columns == 4:
+        return get_8x12_index_from_16x4(row - 1, column - 1)
+    return -1
+
+
+def discover_variants(frames_root: Optional[Path] = None) -> list:
     """
     Recorre dataset_frames_individuales/ y devuelve lista de dicts con info
     de cada variante encontrada via manifest.json (auto-descubrimiento completo).
     """
     variants = []
-    if not FRAMES_ROOT.exists():
-        print(f"[ERROR] No existe: {FRAMES_ROOT}")
+    root = frames_root or FRAMES_ROOT
+    if not root.exists():
+        print(f"[ERROR] No existe: {root}")
         return variants
 
-    for char_dir in sorted(FRAMES_ROOT.iterdir()):
+    for char_dir in sorted(root.iterdir()):
         if not char_dir.is_dir():
             continue
         if char_dir.name.startswith("00_"):
@@ -164,7 +190,7 @@ def discover_variants() -> list:
 
             manifest_path = variant_dir / "manifest.json"
             if not manifest_path.exists():
-                print(f"  [!] Sin manifest.json: {variant_dir.relative_to(PROJECT_ROOT)}")
+                print(f"  [!] Sin manifest.json: {variant_dir.relative_to(root)}")
                 continue
 
             try:
@@ -173,9 +199,88 @@ def discover_variants() -> list:
                 print(f"  [!] Error manifest {manifest_path.name}: {e}")
                 continue
 
+            if not isinstance(manifest, dict):
+                print(f"  [!] Manifiesto no valido: {manifest_path.relative_to(root)}")
+                continue
+
             char_name    = manifest.get("character", char_dir.name.lower())
             variant_key  = manifest.get("variant", variant_dir.name)
             variant_name = manifest.get("variant_name", "")
+            if not isinstance(variant_name, str):
+                variant_name = ""
+            grid = manifest.get("grid")
+            frame_records = manifest.get("frames")
+            if not isinstance(char_name, str) or not isinstance(variant_key, str):
+                print(f"  [!] Identidad invalida: {manifest_path.relative_to(root)}")
+                continue
+            if not isinstance(grid, dict) or not isinstance(frame_records, list):
+                print(f"  [!] Faltan grid/frames: {manifest_path.relative_to(root)}")
+                continue
+
+            normalized_char = char_dir.name.casefold().replace(" ", "_").replace("-", "_")
+            manifest_char = char_name.casefold().replace(" ", "_").replace("-", "_")
+            if normalized_char != manifest_char:
+                print(f"  [!] Personaje no coincide con carpeta: {manifest_path.relative_to(root)}")
+                continue
+            try:
+                grid_slots = int(grid["rows"]) * int(grid["columns"])
+            except (KeyError, TypeError, ValueError):
+                print(f"  [!] Dimensiones de grilla invalidas: {manifest_path.relative_to(root)}")
+                continue
+
+            valid_frames = []
+            seen_files = set()
+            seen_slots = set()
+            declared_files = set()
+            missing_files = []
+            unmappable_frames = 0
+            for frame in frame_records:
+                if not isinstance(frame, dict):
+                    continue
+                filename = frame.get("file")
+                if (
+                    not isinstance(filename, str)
+                    or Path(filename).name != filename
+                    or not filename.casefold().startswith("frame_")
+                    or Path(filename).suffix.casefold() != ".png"
+                ):
+                    continue
+                declared_files.add(filename)
+                try:
+                    slot_number = int(frame["slot"])
+                except (KeyError, TypeError, ValueError):
+                    print(f"  [!] Slot invalido en {variant_dir.name}: {filename}")
+                    continue
+                frame_path = variant_dir / filename
+                if filename in seen_files or slot_number in seen_slots:
+                    print(f"  [!] Frame/slot duplicado en {variant_dir.name}: {filename}")
+                    continue
+                seen_files.add(filename)
+                seen_slots.add(slot_number)
+                if not frame_path.is_file():
+                    missing_files.append(filename)
+                    continue
+                frame_idx = get_canonical_frame_index(grid, frame)
+                if frame_idx < 0:
+                    unmappable_frames += 1
+                    continue
+                valid_frames.append({**frame, "path": frame_path, "frame_idx": frame_idx})
+
+            extra_files = sorted(
+                path.name for path in variant_dir.glob("frame_*.png")
+                if path.name not in declared_files
+            )
+            if missing_files:
+                print(f"  [!] {variant_dir.name}: {len(missing_files)} PNG declarados ya no existen; se omiten.")
+            if extra_files:
+                print(f"  [!] {variant_dir.name}: {len(extra_files)} PNG no declarados; se ignoran.")
+            if unmappable_frames:
+                print(f"  [!] {variant_dir.name}: {unmappable_frames} frames fuera del mapeo canonico 8x12; se omiten.")
+            if manifest.get("frames_saved") != len(frame_records):
+                print(f"  [!] {variant_dir.name}: frames_saved no coincide con frames[] ({len(frame_records)}).")
+            if manifest.get("slots") != grid_slots:
+                print(f"  [!] {variant_dir.name}: slots no coincide con el tamaño de grid.")
+
             variant_desc = get_variant_desc(variant_key, variant_name)
 
             variants.append({
@@ -184,6 +289,7 @@ def discover_variants() -> list:
                 "variant_desc": variant_desc,
                 "variant_dir":  variant_dir,
                 "manifest":     manifest,
+                "frames":       valid_frames,
             })
 
     return variants
@@ -214,6 +320,7 @@ def build_supervised_dataset():
         variant_key  = v["variant_key"]
         variant_desc = v["variant_desc"]
         variant_dir  = v["variant_dir"]
+        frame_records = v["frames"]
 
         # Sanitizar nombre para uso en nombres de archivo (espacios -> guion bajo)
         char_id_safe = char_name.replace(" ", "_").replace("-", "_")
@@ -244,26 +351,16 @@ def build_supervised_dataset():
         rgb_f[~mask_f] = 0.0
         front_tensor = torch.from_numpy(rgb_f / 127.5 - 1.0).permute(2, 0, 1).float()
 
-        # 2. Procesar cada frame individual (frame_NNN_rRR_cCC.png)
-        frame_files = sorted(variant_dir.glob("frame_*.png"))
-        if not frame_files:
+        # 2. Procesar exclusivamente los frames declarados por el manifiesto.
+        if not frame_records:
             print(f"    [!] Sin frames PNG en {variant_dir.name}. Saltando.")
             skipped_variants += 1
             continue
 
         char_frames = 0
-        for frame_path in frame_files:
-            # Nombre: frame_001_r01_c01.png -> row=1, col=1
-            stem  = frame_path.stem
-            parts = stem.split("_")
-            try:
-                row_num = int(parts[2][1:])  # r01 -> 1
-                col_num = int(parts[3][1:])  # c01 -> 1
-            except (IndexError, ValueError):
-                continue
-
-            # Indice 0-basado en grilla 8x12
-            f_idx = (row_num - 1) * 8 + (col_num - 1)
+        for frame in frame_records:
+            frame_path = frame["path"]
+            f_idx = frame["frame_idx"]
 
             png_filename = f"{char_var_id}_frame_{f_idx:03d}.png"
             txt_filename = f"{char_var_id}_frame_{f_idx:03d}.txt"
@@ -326,6 +423,9 @@ def build_supervised_dataset():
     print(f"    Total muestras de entrenamiento: {total_cut_frames}")
     if skipped_variants:
         print(f"    Variantes saltadas (sin frontal/frames): {skipped_variants}")
+    if not dataset_samples:
+        print("  [ERROR] No hay muestras validas; no se guardo cache ni se actualizo el estado.")
+        return []
     print("\n  Guardando cache optimizada para PyTorch...")
     cache_path = DATASET_OUT / "supervised_cache_8x12.pt"
     torch.save(dataset_samples, cache_path)

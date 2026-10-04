@@ -17,28 +17,33 @@
   ],
   "row_edges": [
     0,
-    136,
-    272,
-    407,
-    543,
-    679,
-    814,
-    950,
-    1086,
-    1222,
-    1358,
-    1493,
-    1629,
-    1765,
-    1900,
-    2036,
+    172,
+    319,
+    477,
+    626,
+    769,
+    918,
+    1073,
+    1226,
+    1376,
+    1532,
+    1679,
+    1828,
+    1942,
+    2059,
+    2172,
     2172
   ],
   "slots": 64,
-  "frames_saved": 64,
+  "frames_saved": 60,
   "empty_slots": [],
-  "excluded_slots": [],
-  "source_border_contact_frames": 64,
+  "excluded_slots": [
+    61,
+    62,
+    63,
+    64
+  ],
+  "source_border_contact_frames": 48,
   "output_size": [
     256,
     256
@@ -388,7 +393,8 @@
       "column": 3,
       "file": "frame_035_r09_c03.png",
       "source_border_contacts": [
-        "top"
+        "top",
+        "bottom"
       ]
     },
     {
@@ -407,6 +413,7 @@
       "column": 1,
       "file": "frame_037_r10_c01.png",
       "source_border_contacts": [
+        "top",
         "bottom"
       ]
     },
@@ -416,6 +423,7 @@
       "column": 2,
       "file": "frame_038_r10_c02.png",
       "source_border_contacts": [
+        "top",
         "bottom"
       ]
     },
@@ -425,6 +433,7 @@
       "column": 3,
       "file": "frame_039_r10_c03.png",
       "source_border_contacts": [
+        "top",
         "bottom"
       ]
     },
@@ -434,6 +443,7 @@
       "column": 4,
       "file": "frame_040_r10_c04.png",
       "source_border_contacts": [
+        "top",
         "bottom"
       ]
     },
@@ -493,8 +503,7 @@
       "column": 2,
       "file": "frame_046_r12_c02.png",
       "source_border_contacts": [
-        "top",
-        "bottom"
+        "top"
       ]
     },
     {
@@ -503,8 +512,7 @@
       "column": 3,
       "file": "frame_047_r12_c03.png",
       "source_border_contacts": [
-        "top",
-        "bottom"
+        "top"
       ]
     },
     {
@@ -522,162 +530,99 @@
       "row": 13,
       "column": 1,
       "file": "frame_049_r13_c01.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 50,
       "row": 13,
       "column": 2,
       "file": "frame_050_r13_c02.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 51,
       "row": 13,
       "column": 3,
       "file": "frame_051_r13_c03.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 52,
       "row": 13,
       "column": 4,
       "file": "frame_052_r13_c04.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 53,
       "row": 14,
       "column": 1,
       "file": "frame_053_r14_c01.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 54,
       "row": 14,
       "column": 2,
       "file": "frame_054_r14_c02.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 55,
       "row": 14,
       "column": 3,
       "file": "frame_055_r14_c03.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 56,
       "row": 14,
       "column": 4,
       "file": "frame_056_r14_c04.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 57,
       "row": 15,
       "column": 1,
       "file": "frame_057_r15_c01.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 58,
       "row": 15,
       "column": 2,
       "file": "frame_058_r15_c02.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 59,
       "row": 15,
       "column": 3,
       "file": "frame_059_r15_c03.png",
-      "source_border_contacts": [
-        "top",
-        "right",
-        "bottom"
-      ]
+      "source_border_contacts": []
     },
     {
       "slot": 60,
       "row": 15,
       "column": 4,
       "file": "frame_060_r15_c04.png",
-      "source_border_contacts": [
-        "left",
-        "top",
-        "bottom"
-      ]
-    },
-    {
-      "slot": 61,
-      "row": 16,
-      "column": 1,
-      "file": "frame_061_r16_c01.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
-    },
-    {
-      "slot": 62,
-      "row": 16,
-      "column": 2,
-      "file": "frame_062_r16_c02.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
-    },
-    {
-      "slot": 63,
-      "row": 16,
-      "column": 3,
-      "file": "frame_063_r16_c03.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
-    },
-    {
-      "slot": 64,
-      "row": 16,
-      "column": 4,
-      "file": "frame_064_r16_c04.png",
-      "source_border_contacts": [
-        "top",
-        "bottom"
-      ]
+      "source_border_contacts": []
     }
-  ]
+  ],
+  "source_reconstruction": {
+    "method": "alpha_seed_watershed",
+    "overlapping_rows_rebuilt": [
+      13,
+      14,
+      15
+    ],
+    "excluded_source_slots": [
+      61,
+      62,
+      63,
+      64
+    ],
+    "reason": "La hoja fuente termina antes de mostrar una fila 16 completa."
+  }
 }

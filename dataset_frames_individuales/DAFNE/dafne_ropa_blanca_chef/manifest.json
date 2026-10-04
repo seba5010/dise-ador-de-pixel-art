@@ -35,9 +35,14 @@
     2172
   ],
   "slots": 64,
-  "frames_saved": 64,
+  "frames_saved": 60,
   "empty_slots": [],
-  "excluded_slots": [],
+  "excluded_slots": [
+    25,
+    26,
+    27,
+    28
+  ],
   "source_border_contact_frames": 9,
   "output_size": [
     256,
@@ -222,34 +227,6 @@
       "row": 6,
       "column": 4,
       "file": "frame_024_r06_c04.png",
-      "source_border_contacts": []
-    },
-    {
-      "slot": 25,
-      "row": 7,
-      "column": 1,
-      "file": "frame_025_r07_c01.png",
-      "source_border_contacts": []
-    },
-    {
-      "slot": 26,
-      "row": 7,
-      "column": 2,
-      "file": "frame_026_r07_c02.png",
-      "source_border_contacts": []
-    },
-    {
-      "slot": 27,
-      "row": 7,
-      "column": 3,
-      "file": "frame_027_r07_c03.png",
-      "source_border_contacts": []
-    },
-    {
-      "slot": 28,
-      "row": 7,
-      "column": 4,
-      "file": "frame_028_r07_c04.png",
       "source_border_contacts": []
     },
     {
