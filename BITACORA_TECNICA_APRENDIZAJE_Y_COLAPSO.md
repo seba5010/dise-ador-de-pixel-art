@@ -7,6 +7,23 @@
 
 ---
 
+## Actualización 3 de Octubre de 2026: Reanudación 8x12 en época 86
+
+Se confirmó una falla de continuidad distinta a un `NaN`: la reconstrucción se degradó de forma sostenida (`Color_L1: 0.0069 → 0.0308`) y la pérdida total subió (`G_Loss: 0.0500 → 0.3015`). El centinela detuvo la época 86, pero el flujo anterior ya había guardado esos pesos en `latest_checkpoint.pt` y luego caía al bloque final que publicaba falsamente `COMPLETADO 135/135`.
+
+La reparación aplicada introduce una ruta transaccional de recuperación:
+
+- Detecta degradación sostenida usando simultáneamente `G_Loss`, `Color_L1` y auditoría visual, evitando decidir sólo por el mínimo histórico de la pérdida adversarial.
+- Rechaza la época inestable antes de guardar `latest_checkpoint.pt`, snapshots o schedulers.
+- Selecciona el último snapshot dentro de la ventana sana; para este incidente corresponde a `checkpoint_epoch_020.pt`.
+- Conserva las épocas 21–86 dentro de `recovery_events` en vez de borrarlas y oculta sus snapshots de la ruta activa.
+- Restaura generador, discriminador, optimizadores, escaladores AMP y RNG; reinicia los schedulers con LR reducido para no repetir la trayectoria degradada.
+- Publica `RECUPERACION_LISTA` y nunca vuelve a convertir una interrupción anti-colapso en `COMPLETADO`.
+
+La reparación puede prepararse sin iniciar entrenamiento mediante `python train.py --repair_state` usando el intérprete de Forge.
+
+---
+
 ## 1. Resumen Ejecutivo del Incidente
 
 Durante el ciclo de entrenamiento de la Fase 1, se presentaron dos incidentes consecutivos:

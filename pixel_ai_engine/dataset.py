@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Any
 import numpy as np
+import cv2
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -31,6 +32,15 @@ from .config import (
     SHEET_CELL_TOLERANCE,
     get_phase_config
 )
+
+
+CANONICAL_SPRITE_HEIGHT = 112
+CANONICAL_SPRITE_MAX_WIDTH = 116
+CELL_SPRITE_HEIGHT_RATIO = CANONICAL_SPRITE_HEIGHT / 128.0
+CANONICAL_FRONT_REFERENCE_HEIGHT = 208
+CANONICAL_FRONT_REFERENCE_GROUND_Y = 232
+TRAINING_FRAME_HEIGHT = 208
+TRAINING_FRAME_MAX_WIDTH = 232
 
 
 def get_cell_coordinates(canvas_w: int, canvas_h: int, row: int, col: int, total_rows: int = GRID_ROWS, total_cols: int = GRID_COLS):
@@ -108,13 +118,20 @@ def pad_to_square(img: Image.Image, target_size: int = MODEL_RESOLUTION) -> Tupl
     return center_and_pad(img, target_size)
 
 
-def adapt_front_to_chibi(img: Image.Image, target_size: int = MODEL_RESOLUTION, target_h: int = 74, ground_y: int = 242) -> Image.Image:
+def adapt_front_to_chibi(
+    img: Image.Image,
+    target_size: int = MODEL_RESOLUTION,
+    target_h: int = CANONICAL_FRONT_REFERENCE_HEIGHT,
+    ground_y: int = CANONICAL_FRONT_REFERENCE_GROUND_Y,
+) -> Image.Image:
     """
     ADAPTADOR ANATOMICO CHIBI:
-    Toma una ilustracion pura realista (8 cabezas, 1024x1536) y la recombina
-    en proporciones Chibi canonicas (2 cabezas, ~72-76px de altura total) anclada al suelo.
+    Toma una ilustración pura realista (8 cabezas, 1024x1536) y la acondiciona
+    en proporciones Chibi canónicas y la centra como referencia frontal de alta definición.
+    Utiliza remapeo continuo y suave de coordenadas anatómicas sin cortes de guillotina,
+    evitando extremidades seccionadas, hombros flotantes o islas de píxeles desconectadas.
     Garantiza que el cielo superior (y < 160) sea 100% transparente para erradicar
-    de raiz cualquier posible nube de hollin o cabello fantasma.
+    de raíz cualquier posible nube de hollín o cabello fantasma.
     """
     arr = np.array(img.convert("RGBA"))
     alpha = arr[:, :, 3]
@@ -137,74 +154,116 @@ def adapt_front_to_chibi(img: Image.Image, target_size: int = MODEL_RESOLUTION, 
     y1, x1 = coords.max(axis=0)
     cropped = img.crop((x0, y0, x1 + 1, y1 + 1))
     cw, ch = cropped.size
+    crop_arr = np.array(cropped)
 
-    head_h_real = int(ch * 0.27)
-    torso_h_real = int(ch * 0.33)
-    
-    head_crop = cropped.crop((0, 0, cw, head_h_real))
-    torso_crop = cropped.crop((0, head_h_real, cw, head_h_real + torso_h_real))
-    legs_crop = cropped.crop((0, head_h_real + torso_h_real, cw, ch))
+    # Punto de referencia anatómico de transición cabeza-cuerpo (cuello/clavícula ~21% de la altura realista)
+    neck_orig_y = float(ch) * 0.21
+    target_head_h = float(target_h) * 0.30
+    target_body_h = float(target_h) - target_head_h
 
-    chibi_head_h = int(target_h * 0.44)
-    chibi_torso_h = int(target_h * 0.28)
-    chibi_legs_h = target_h - chibi_head_h - chibi_torso_h
+    aspect = cw / max(1.0, float(ch))
+    min_target_w = max(30, int(round(target_h * 0.40)))
+    max_target_w = max(min_target_w, int(round(target_h * 0.62)))
+    target_w = max(min_target_w, min(max_target_w, int(round(target_h * aspect * 1.12))))
 
-    scale_head = chibi_head_h / max(1, head_h_real)
-    chibi_head_w = max(1, int(round(cw * scale_head * 1.25)))
-    head_scaled = head_crop.resize((chibi_head_w, chibi_head_h), Image.Resampling.LANCZOS)
+    map_x = np.zeros((target_h, target_w), dtype=np.float32)
+    map_y = np.zeros((target_h, target_w), dtype=np.float32)
 
-    scale_body = (chibi_torso_h + chibi_legs_h) / max(1, (ch - head_h_real))
-    body_w = max(1, int(round(cw * scale_body * 1.10)))
-    torso_scaled = torso_crop.resize((body_w, chibi_torso_h), Image.Resampling.LANCZOS)
-    legs_scaled = legs_crop.resize((body_w, chibi_legs_h), Image.Resampling.LANCZOS)
+    cx_out = (target_w - 1) / 2.0
+    cx_in = (cw - 1) / 2.0
 
+    for y_out in range(target_h):
+        if y_out <= target_head_h:
+            t = y_out / max(1.0, target_head_h)
+            y_orig = t * neck_orig_y
+        else:
+            t = (y_out - target_head_h) / max(1.0, target_body_h)
+            y_orig = neck_orig_y + t * (ch - 1 - neck_orig_y)
+
+        # Transición sigmoidal suave en cuello para dar amplitud chibi a mejillas/cabeza sin quebrar el cuerpo
+        t_neck = (y_out - target_head_h) / 3.0
+        sigmoid = 1.0 / (1.0 + np.exp(-np.clip(t_neck, -5.0, 5.0)))
+        scale_x = (cw / float(target_w)) * (0.88 * (1.0 - sigmoid) + 1.0 * sigmoid)
+
+        for x_out in range(target_w):
+            dx = x_out - cx_out
+            map_x[y_out, x_out] = cx_in + dx * scale_x
+            map_y[y_out, x_out] = y_orig
+
+    warped = cv2.remap(crop_arr, map_x, map_y, interpolation=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    warped_pil = Image.fromarray(warped)
+
+    # Recortar márgenes alfa transparentes exteriores residuales
+    w_arr = np.array(warped_pil)
+    w_mask = w_arr[:, :, 3] > 15
+    w_coords = np.argwhere(w_mask)
+    if len(w_coords) > 0:
+        wy0, wx0 = w_coords.min(axis=0)
+        wy1, wx1 = w_coords.max(axis=0)
+        trimmed = warped_pil.crop((wx0, wy0, wx1 + 1, wy1 + 1))
+    else:
+        trimmed = warped_pil
+
+    tw, th = trimmed.size
     canvas = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
-    center_x = target_size // 2
-
-    legs_y = ground_y - chibi_legs_h
-    legs_x = center_x - body_w // 2
-    canvas.paste(legs_scaled, (legs_x, legs_y), legs_scaled)
-
-    torso_y = legs_y - chibi_torso_h
-    torso_x = center_x - body_w // 2
-    canvas.paste(torso_scaled, (torso_x, torso_y), torso_scaled)
-
-    head_y = torso_y - chibi_head_h + 2
-    head_x = center_x - chibi_head_w // 2
-    canvas.paste(head_scaled, (head_x, head_y), head_scaled)
+    ox = (target_size - tw) // 2
+    oy = ground_y - th
+    canvas.alpha_composite(trimmed, (ox, oy))
 
     return canvas
 
 
-def pad_target_frame_canonical(frame_img: Image.Image, target_size: int = MODEL_RESOLUTION, target_h: int = 70, ground_y: int = 242) -> Image.Image:
+def pad_target_frame_canonical(
+    frame_img: Image.Image,
+    target_size: int = MODEL_RESOLUTION,
+    target_h: int = TRAINING_FRAME_HEIGHT,
+    target_max_w: int = TRAINING_FRAME_MAX_WIDTH,
+    ground_y: Optional[int] = None,
+) -> Image.Image:
     """
-    Alinea un frame de spritesheet objetivo en el canvas 256x256 anclado al suelo canónico.
-    Si el frame proviene de Conny/Dana (16x4, dibujados a 102px), lo escala a target_h (70px).
-    Si proviene de Alex/Amaro (8x12, dibujados a 68-72px), mantiene escala nativa 1:1.
+    Amplía y centra un frame objetivo dentro del lienzo de entrenamiento 256x256.
+    La escala de exportación 128x128 se aplica después mediante place_in_cell.
     """
-    arr = np.array(frame_img.convert("RGBA"))
-    mask = arr[:, :, 3] > 20
+    rgba_frame = frame_img.convert("RGBA")
+    arr = np.array(rgba_frame)
+    mask = foreground_mask(rgba_frame, alpha_threshold=20)
     coords = np.argwhere(mask)
-    if len(coords) == 0:
+    if len(coords) < 40:
         return Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
+
     y0, x0 = coords.min(axis=0)
     y1, x1 = coords.max(axis=0)
-    fg = frame_img.crop((x0, y0, x1 + 1, y1 + 1))
+    if (x1 - x0 + 1) < 4 or (y1 - y0 + 1) < 8:
+        return Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
+
+    clean_arr = arr.copy()
+    clean_arr[~mask, 3] = 0
+    clean_frame = Image.fromarray(clean_arr, mode="RGBA")
+    fg = clean_frame.crop((x0, y0, x1 + 1, y1 + 1))
     fw, fh = fg.size
 
-    if fh > 85:
-        scale = target_h / fh
-        new_w = max(1, int(round(fw * scale)))
-        new_h = target_h
-        fg_scaled = fg.resize((new_w, new_h), Image.Resampling.NEAREST)
-    else:
-        new_w, new_h = fw, fh
-        fg_scaled = fg
+    safe_target_h = min(target_h, target_size - 14)
+    safe_target_w = min(target_max_w, target_size - 16)
+    scale = min(safe_target_h / max(1, fh), safe_target_w / max(1, fw))
+    new_w = max(1, int(round(fw * scale)))
+    new_h = max(1, int(round(fh * scale)))
+    fg_scaled = fg.resize((new_w, new_h), Image.Resampling.NEAREST)
+
+    scaled_alpha = np.array(fg_scaled)[:, :, 3]
+    visible_coordinates = np.argwhere(scaled_alpha > 20)
+    if len(visible_coordinates) > 0:
+        visible_y0, visible_x0 = visible_coordinates.min(axis=0)
+        visible_y1, visible_x1 = visible_coordinates.max(axis=0)
+        fg_scaled = fg_scaled.crop((visible_x0, visible_y0, visible_x1 + 1, visible_y1 + 1))
+        new_w, new_h = fg_scaled.size
 
     canvas = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
     ox = (target_size - new_w) // 2
-    oy = ground_y - new_h
-    canvas.paste(fg_scaled, (ox, oy), fg_scaled)
+    if ground_y is None:
+        oy = (target_size - new_h) // 2
+    else:
+        oy = min(target_size - new_h, max(0, ground_y - new_h))
+    canvas.alpha_composite(fg_scaled, (ox, oy))
     return canvas
 
 
@@ -235,14 +294,9 @@ def place_in_cell(padded_img: Image.Image, cell_w: int = CELL_WIDTH, cell_h: int
     Toma el frame generado de 256x256, extrae la figura y la ubica perfectamente centrada
     con los pies apoyados en el suelo dentro de la celda canónica (128x128).
     """
-    arr = np.array(padded_img.convert("RGBA"))
-    alpha = arr[:, :, 3]
-    mask = alpha > 20
-    if mask.sum() < 4:
-        rgb = arr[:, :, :3].astype(np.float32)
-        bg = np.median([rgb[0, 0], rgb[0, -1], rgb[-1, 0], rgb[-1, -1]], axis=0)
-        diff = np.sqrt(np.sum((rgb - bg) ** 2, axis=-1))
-        mask = diff > 20.0
+    rgba_image = padded_img.convert("RGBA")
+    arr = np.array(rgba_image)
+    mask = foreground_mask(rgba_image, alpha_threshold=20, diff_threshold=20.0)
 
     try:
         from scipy.ndimage import label
@@ -259,27 +313,34 @@ def place_in_cell(padded_img: Image.Image, cell_w: int = CELL_WIDTH, cell_h: int
         pass
 
     coords = np.argwhere(mask)
-    if len(coords) == 0:
+    if len(coords) < 40:
         return Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
 
     y0, x0 = coords.min(axis=0)
     y1, x1 = coords.max(axis=0)
-    fg = padded_img.convert("RGBA").crop((x0, y0, x1 + 1, y1 + 1))
+    if (x1 - x0 + 1) < 4 or (y1 - y0 + 1) < 8:
+        return Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
+
+    clean_arr = arr.copy()
+    clean_arr[~mask, 3] = 0
+    clean_image = Image.fromarray(clean_arr, mode="RGBA")
+    fg = clean_image.crop((x0, y0, x1 + 1, y1 + 1))
     fw, fh = fg.size
 
-    max_fw = cell_w - 8
+    max_fw = cell_w - 12
     max_fh = cell_h - 14
-    if fw > max_fw or fh > max_fh:
-        scale_down = min(max_fw / max(1, fw), max_fh / max(1, fh))
-        new_fw = max(1, int(round(fw * scale_down)))
-        new_fh = max(1, int(round(fh * scale_down)))
+    target_fh = min(max_fh, max(1, int(round(cell_h * CELL_SPRITE_HEIGHT_RATIO))))
+    scale = min(target_fh / max(1, fh), max_fw / max(1, fw))
+    new_fw = max(1, int(round(fw * scale)))
+    new_fh = max(1, int(round(fh * scale)))
+    if (new_fw, new_fh) != (fw, fh):
         fg = fg.resize((new_fw, new_fh), Image.Resampling.NEAREST)
         fw, fh = fg.size
 
     cell = Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
     cx = max(0, (cell_w - fw) // 2)
     cy = max(6, cell_h - fh - 7)
-    cell.paste(fg, (cx, cy), fg)
+    cell.alpha_composite(fg, (cx, cy))
     return cell
 
 
@@ -339,7 +400,7 @@ class TemplateManager:
         
         self.frame_tensors = []
         for frame in self.frames:
-            padded_frame, _ = pad_to_square(frame, self.target_size)
+            padded_frame = pad_target_frame_canonical(frame, self.target_size)
             arr = np.array(padded_frame).astype(np.float32)
             alpha_mask = (arr[:, :, 3] > 20)
             rgb = arr[:, :, :3]

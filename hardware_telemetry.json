@@ -1,0 +1,9 @@
+{
+  "gpu_temp": 52,
+  "vram_gb": 0.04,
+  "vram_total_gb": 4.0,
+  "vram_pct": 0.9,
+  "gpu_util": 0,
+  "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+  "cpu_temp": 55
+}

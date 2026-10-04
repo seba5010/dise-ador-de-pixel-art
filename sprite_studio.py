@@ -14,7 +14,6 @@ import os
 import sys
 import time
 import json
-import socket
 import urllib.parse
 import urllib.request
 import requests
@@ -22,7 +21,7 @@ import threading
 import subprocess
 import traceback
 from pathlib import Path
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, Optional, List, Tuple
 from PIL import Image, ImageDraw
 import numpy as np
@@ -73,58 +72,316 @@ ACTIVE_JOB = {
     "error": None
 }
 JOB_LOCK = threading.Lock()
+GLOBAL_TRAINING_PROC = None
+LAST_START_TIME = 0.0
+SERVER_HOST = os.environ.get("SPRITE_STUDIO_HOST", "192.168.1.83")
+TRAINING_LOG_FILE = PROJECT_ROOT / "training_logs" / "training.log"
+ACCESS_LOG_FILE = PROJECT_ROOT / "training_logs" / "access.log"
+SERVER_LOCK_FILE = PROJECT_ROOT / ".sprite_studio.lock"
+ACCESS_LOG_LOCK = threading.Lock()
+KNOWN_ACCESS_CLIENTS = set()
 
 
-def get_free_port(start_port: int = 8080) -> int:
-    """Busca un puerto libre a partir de start_port."""
-    port = start_port
-    while port < start_port + 50:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", port)) != 0:
-                return port
-        port += 1
-    return start_port
+def write_access_event(client_ip: str, user_agent: str, event: str, target: str, details: str = "") -> None:
+    safe_ip = str(client_ip).replace("\r", " ").replace("\n", " ")[:64]
+    safe_agent = str(user_agent).replace("\r", " ").replace("\n", " ")[:180]
+    safe_event = str(event).replace("\r", " ").replace("\n", " ")[:40]
+    safe_target = str(target).replace("\r", " ").replace("\n", " ")[:160]
+    safe_details = str(details).replace("\r", " ").replace("\n", " ")[:240]
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    client_key = (safe_ip, safe_agent)
+    lines = []
+
+    with ACCESS_LOG_LOCK:
+        if client_key not in KNOWN_ACCESS_CLIENTS:
+            KNOWN_ACCESS_CLIENTS.add(client_key)
+            lines.append(f"[{timestamp}] [CONEXION] IP={safe_ip} | Navegador={safe_agent or 'desconocido'}")
+        line = f"[{timestamp}] [{safe_event}] IP={safe_ip} | {safe_target}"
+        if safe_details:
+            line += f" | {safe_details}"
+        lines.append(line)
+        ACCESS_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ACCESS_LOG_FILE, "a", encoding="utf-8") as access_log:
+            for access_line in lines:
+                print(access_line, flush=True)
+                access_log.write(access_line + "\n")
+
+
+def _is_live_sprite_studio_process(process_id: int) -> bool:
+    if process_id <= 0 or process_id == os.getpid():
+        return False
+    try:
+        import psutil
+        process = psutil.Process(process_id)
+        command = " ".join(process.cmdline()).lower()
+        return process.is_running() and "sprite_studio.py" in command
+    except Exception:
+        return False
+
+
+def acquire_server_lock() -> bool:
+    for _ in range(2):
+        try:
+            descriptor = os.open(SERVER_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
+                lock_file.write(str(os.getpid()))
+            return True
+        except FileExistsError:
+            try:
+                existing_pid = int(SERVER_LOCK_FILE.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                existing_pid = -1
+            if _is_live_sprite_studio_process(existing_pid):
+                return False
+            try:
+                SERVER_LOCK_FILE.unlink()
+            except OSError:
+                return False
+    return False
+
+
+def release_server_lock() -> None:
+    try:
+        owner_pid = int(SERVER_LOCK_FILE.read_text(encoding="utf-8").strip())
+        if owner_pid == os.getpid():
+            SERVER_LOCK_FILE.unlink()
+    except (OSError, ValueError):
+        pass
+
+def _forward_training_output(process: subprocess.Popen) -> None:
+    TRAINING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(TRAINING_LOG_FILE, "a", encoding="utf-8", buffering=1) as log_file:
+        header = f"\n{'=' * 70}\n[Sprite Studio] Entrenamiento iniciado: {started_at}\n{'=' * 70}\n"
+        sys.stdout.write(header)
+        sys.stdout.flush()
+        log_file.write(header)
+        if process.stdout is not None:
+            for line in process.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                log_file.write(line)
+        return_code = process.wait()
+        footer = f"\n[Sprite Studio] Entrenamiento finalizado con codigo {return_code}.\n"
+        sys.stdout.write(footer)
+        sys.stdout.flush()
+        log_file.write(footer)
+
+
+def launch_training_process(command: List[str], env: Dict[str, str]) -> subprocess.Popen:
+    process_env = dict(env)
+    process_env["PYTHONIOENCODING"] = "utf-8"
+    process = subprocess.Popen(
+        command,
+        cwd=str(PROJECT_ROOT),
+        env=process_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    threading.Thread(target=_forward_training_output, args=(process,), daemon=True).start()
+    return process
+
+
+CACHED_HW_TELEMETRY = {
+    "gpu_temp": 55,
+    "cpu_temp": None,
+    "vram_gb": 0.88,
+    "vram_total_gb": 4.0,
+    "vram_pct": 22.0,
+    "gpu_util": 0,
+    "gpu_name": "NVIDIA RTX 3050 Ti",
+    "last_updated": 0.0,
+    "last_attempt": 0.0,
+    "source": "fallback",
+    "stale": True,
+    "last_cpu_check": 0.0
+}
+
+
+def update_hardware_telemetry() -> Dict[str, Any]:
+    """
+    Consulta telemetría viva de hardware de forma no bloqueante con caché interna:
+    - VRAM real usada y total de la GPU (GB y %)
+    - Temperatura de GPU (°C)
+    - Temperatura de CPU (°C) vía WMI / ACPI nativo de Windows
+    """
+    global CACHED_HW_TELEMETRY
+    now = time.time()
+    if now - CACHED_HW_TELEMETRY["last_attempt"] < 2.5:
+        return CACHED_HW_TELEMETRY
+    CACHED_HW_TELEMETRY["last_attempt"] = now
+
+    # 1. GPU via nvidia-smi
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu,memory.used,memory.total,utilization.gpu,name", "--format=csv,noheader,nounits"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5
+        )
+        first_gpu_line = res.stdout.strip().splitlines()[0] if res.stdout.strip() else ""
+        parts = [x.strip() for x in first_gpu_line.split(",")]
+        if res.returncode == 0 and len(parts) >= 3:
+            gpu_temp = int(parts[0])
+            used_mb = int(parts[1])
+            tot_mb = int(parts[2])
+            CACHED_HW_TELEMETRY["gpu_temp"] = gpu_temp
+            CACHED_HW_TELEMETRY["vram_gb"] = round(used_mb / 1024.0, 2)
+            CACHED_HW_TELEMETRY["vram_total_gb"] = round(tot_mb / 1024.0, 1)
+            CACHED_HW_TELEMETRY["vram_pct"] = round((used_mb / max(1, tot_mb)) * 100, 1)
+            if len(parts) > 3 and parts[3].isdigit():
+                CACHED_HW_TELEMETRY["gpu_util"] = int(parts[3])
+            if len(parts) > 4 and parts[4]:
+                CACHED_HW_TELEMETRY["gpu_name"] = parts[4]
+            CACHED_HW_TELEMETRY["last_updated"] = now
+            CACHED_HW_TELEMETRY["source"] = "nvidia-smi"
+    except Exception:
+        pass
+
+    # 2. CPU via WMI ACPI ThermalZone (Windows nativo)
+    if now - CACHED_HW_TELEMETRY.get("last_cpu_check", 0) > 6.0:
+        CACHED_HW_TELEMETRY["last_cpu_check"] = now
+        try:
+            cmd = ['powershell', '-NoProfile', '-Command', '(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue).CurrentTemperature']
+            out = subprocess.check_output(cmd, text=True, timeout=2.0).strip()
+            digits = [int(x.strip()) for x in out.split() if x.strip().isdigit()]
+            if digits:
+                c_temp = round(digits[0] / 10.0 - 273.15)
+                if 20 <= c_temp <= 115:
+                    CACHED_HW_TELEMETRY["cpu_temp"] = c_temp
+        except Exception:
+            pass
+
+    last_updated = CACHED_HW_TELEMETRY.get("last_updated", 0.0)
+    CACHED_HW_TELEMETRY["stale"] = last_updated <= 0.0 or now - last_updated > 6.0
+    return CACHED_HW_TELEMETRY
 
 
 def check_gpu_training_status() -> Tuple[bool, Dict[str, Any]]:
     """
-    Verifica si hay un entrenamiento activo en la GPU para protegerlo
-    y evitar colisiones de memoria VRAM (OOM).
+    Verifica con precisión si hay un entrenamiento activo en la GPU.
+    Evita bloqueos falsos (zombie/phantom locks) limpiando banderas y
+    sincronizando estados si el proceso ha finalizado o fue detenido.
     """
+    global GLOBAL_TRAINING_PROC, LAST_START_TIME
     proc_running = False
     proc_info = None
-    try:
-        import psutil
-        for p in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
-            cmd = ' '.join(p.info.get('cmdline') or [])
-            if 'train_forge_lora.py' in cmd or 'train_supervised.py' in cmd or 'train.py' in cmd:
-                proc_running = True
-                proc_info = p.info
-                break
-    except Exception:
-        pass
 
-    status_file = PROJECT_ROOT / "training_status.json"
-    if status_file.exists():
+    if GLOBAL_TRAINING_PROC is not None:
+        if GLOBAL_TRAINING_PROC.poll() is None:
+            proc_running = True
+        else:
+            GLOBAL_TRAINING_PROC = None
+
+    if not proc_running:
         try:
-            mtime = os.path.getmtime(status_file)
-            age = time.time() - mtime
-            with open(status_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            st = data.get("status", "")
-            is_active = proc_running or ((age < 600) and (st in ["ENTRENANDO", "PAUSANDO", "DETENIENDO"]))
-            if proc_running:
-                data["status"] = "ENTRENANDO"
-                # Si el proceso está corriendo, calcular tiempo real transcurrido
-                if proc_info and "create_time" in proc_info:
-                    live_elapsed = round(time.time() - proc_info["create_time"], 1)
-                    if live_elapsed > data.get("elapsed_sec", 0):
-                        data["elapsed_sec"] = live_elapsed
-            return is_active, data
+            import psutil
+            for p in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                cmd = ' '.join(p.info.get('cmdline') or [])
+                if 'train_forge_lora.py' in cmd or 'train_supervised.py' in cmd or 'train.py' in cmd:
+                    proc_running = True
+                    proc_info = p.info
+                    break
         except Exception:
             pass
-    return proc_running, {"status": "ENTRENANDO" if proc_running else "IDLE"}
+
+    startup_grace = (time.time() - LAST_START_TIME) < 8.0 if LAST_START_TIME > 0 else False
+    is_active = proc_running or startup_grace
+
+    status_file = PROJECT_ROOT / "training_status.json"
+    pause_flag = PROJECT_ROOT / "pause_training.flag"
+    stop_flag = PROJECT_ROOT / "stop_training.flag"
+
+    data: Dict[str, Any] = {}
+    if status_file.exists():
+        try:
+            with open(status_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    st = data.get("status", "")
+
+    if proc_running:
+        keep_status = (
+            pause_flag.exists()
+            or stop_flag.exists()
+            or "PAUSANDO" in st
+            or "DETENIENDO" in st
+            or st in ["RECUPERANDO", "REANUDANDO"]
+        )
+        data["status"] = st if keep_status else "ENTRENANDO"
+        if proc_info and "create_time" in proc_info:
+            live_elapsed = round(time.time() - proc_info["create_time"], 1)
+            if live_elapsed > data.get("elapsed_sec", 0):
+                data["elapsed_sec"] = live_elapsed
+    else:
+        if not startup_grace:
+            # Si el proceso ya no corre, limpiar cualquier bandera residual
+            if pause_flag.exists():
+                try: pause_flag.unlink()
+                except Exception: pass
+            if stop_flag.exists():
+                try: stop_flag.unlink()
+                except Exception: pass
+
+            # Corregir estados transitorios que hayan quedado congelados
+            state_changed = False
+            if st in ["PAUSANDO", "PAUSANDO...", "ENTRENANDO"]:
+                data["status"] = "PAUSADO"
+                state_changed = True
+            elif st in ["RECUPERANDO", "REANUDANDO"]:
+                recovery = data.get("recovery", {})
+                data["status"] = "RECUPERACION_LISTA" if recovery.get("active") else "PAUSADO"
+                state_changed = True
+            elif st in ["DETENIENDO", "DETENIENDO..."]:
+                data["status"] = "DETENIDO"
+                state_changed = True
+
+            if state_changed and status_file.exists():
+                try:
+                    with open(status_file, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+                except Exception:
+                    pass
+
+    return is_active, data
+
+
+def get_active_recovery_checkpoint() -> Optional[Path]:
+    status_file = PROJECT_ROOT / "training_status.json"
+    if not status_file.exists():
+        return None
+    try:
+        with open(status_file, "r", encoding="utf-8") as status_handle:
+            status_data = json.load(status_handle)
+        recovery = status_data.get("recovery", {})
+        if not isinstance(recovery, dict) or not recovery.get("active"):
+            return None
+        candidate = Path(recovery.get("checkpoint", ""))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        resolved = candidate.resolve()
+        resolved.relative_to(CHECKPOINT_DIR.resolve())
+        return resolved if resolved.is_file() else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def get_valid_snapshot_max_epoch() -> Optional[int]:
+    status_file = PROJECT_ROOT / "training_status.json"
+    if not status_file.exists():
+        return None
+    try:
+        with open(status_file, "r", encoding="utf-8") as status_handle:
+            status_data = json.load(status_handle)
+        if status_data.get("recovery_events"):
+            return int(status_data.get("epoch", 0))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def check_forge_status(forge_url: str = "http://127.0.0.1:7860") -> Tuple[bool, str]:
@@ -263,6 +520,7 @@ def run_pytorch_generation(
         # Auto-seleccion inteligente de checkpoint
         if format_type == "8x12":
             candidates = [
+                get_active_recovery_checkpoint(),
                 CHECKPOINT_DIR / "best_generator.pt",
                 CHECKPOINT_DIR / "latest_checkpoint.pt",
                 CHECKPOINT_DIR / "base_generator_16x4.pt"
@@ -272,7 +530,7 @@ def run_pytorch_generation(
                 CHECKPOINT_DIR / "base_generator_16x4.pt",
                 CHECKPOINT_DIR / "latest_checkpoint_16x4.pt"
             ]
-        checkpoint_path = next((c for c in candidates if c.exists()), None)
+        checkpoint_path = next((c for c in candidates if c is not None and c.exists()), None)
 
     if checkpoint_path is None:
         raise FileNotFoundError(f"No se encontro ningun checkpoint compatible para formato {format_type}.")
@@ -524,8 +782,8 @@ def reassemble_spritesheet(run_dir: Path, format_type: str = "8x12"):
                 cell_w = x1 - x0
                 cell_h = y1 - y0
                 cell_placed = place_in_cell(frame_img, cell_w=cell_w, cell_h=cell_h)
-                canvas_clean.paste(cell_placed, (x0, y0), cell_placed)
-                canvas_grid.paste(cell_placed, (x0, y0), cell_placed)
+                canvas_clean.alpha_composite(cell_placed, (x0, y0))
+                canvas_grid.alpha_composite(cell_placed, (x0, y0))
 
     canvas_clean.save(run_dir / "spritesheet_clean.png", format="PNG")
     canvas_grid.save(run_dir / "spritesheet_grid.png", format="PNG")
@@ -775,6 +1033,14 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PROJECT_ROOT), **kwargs)
 
+    def end_headers(self):
+        request_path = urllib.parse.urlparse(self.path).path.lower()
+        if not request_path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        super().end_headers()
+
     def handle_one_request(self):
         try:
             super().handle_one_request()
@@ -784,12 +1050,20 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Silenciar logs ruidosos
 
+    def audit_access(self, event: str, target: str, details: str = "") -> None:
+        client_ip = self.client_address[0] if self.client_address else "desconocida"
+        user_agent = self.headers.get("User-Agent", "desconocido")
+        write_access_event(client_ip, user_agent, event, target, details)
+
     def send_json(self, data: Any, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -798,23 +1072,42 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
+        if path in ["/", "/index.html", "/sprite_studio.html"] or path.lower().endswith(".html"):
+            self.audit_access("NAVEGACION", path or "/")
+        elif path.startswith("/api/") and path not in ["/api/status", "/api/train/snapshots"]:
+            self.audit_access("CONSULTA", path)
+
         if path == "/api/status":
             training_active, train_data = check_gpu_training_status()
             forge_active, forge_model = check_forge_status()
+            hw = update_hardware_telemetry()
             
-            gpu_name = "CPU"
-            vram_gb = 0.0
-            import torch
-            if torch.cuda.is_available():
-                gpu_name = torch.cuda.get_device_name(0)
-                vram_gb = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+            # Sincronizar métricas de hardware vivas en training_info
+            train_data["vram_gb"] = hw["vram_gb"]
+            train_data["vram_total_gb"] = hw["vram_total_gb"]
+            train_data["vram_pct"] = hw["vram_pct"]
+            train_data["gpu_temp"] = hw["gpu_temp"]
+            if hw["cpu_temp"] is not None:
+                train_data["cpu_temp"] = hw["cpu_temp"]
+            train_data["gpu_util"] = hw["gpu_util"]
+            train_data["telemetry_stale"] = hw["stale"]
+            train_data["telemetry_updated_at"] = hw["last_updated"]
+
+            gpu_name = hw.get("gpu_name") or "CPU"
+            if gpu_name == "CPU":
+                import torch
+                if torch.cuda.is_available():
+                    gpu_name = torch.cuda.get_device_name(0)
 
             self.send_json({
                 "device": str(DEVICE),
                 "gpu_name": gpu_name,
-                "vram_gb": vram_gb,
+                "vram_gb": hw["vram_total_gb"],
+                "vram_used_gb": hw["vram_gb"],
+                "vram_pct": hw["vram_pct"],
                 "training_active": training_active,
                 "training_info": train_data,
+                "hardware_telemetry": hw,
                 "forge_connected": forge_active,
                 "forge_model": forge_model,
                 "checkpoints": scan_checkpoints(),
@@ -838,10 +1131,13 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
         elif path == "/api/train/snapshots":
             snaps_dir = PROJECT_ROOT / "checkpoints" / "snapshots"
             snaps = []
+            max_valid_epoch = get_valid_snapshot_max_epoch()
             if snaps_dir.exists():
                 for p in sorted(snaps_dir.glob("checkpoint_epoch_*.pt")):
                     try:
                         ep = int(p.stem.replace("checkpoint_epoch_", ""))
+                        if max_valid_epoch is not None and ep > max_valid_epoch:
+                            continue
                         snaps.append({
                             "epoch": ep,
                             "file": p.name,
@@ -963,6 +1259,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        global GLOBAL_TRAINING_PROC, LAST_START_TIME
         parsed = urllib.parse.urlparse(self.path)
         content_len = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_len).decode("utf-8", errors="replace")
@@ -970,6 +1267,40 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             body = json.loads(post_data) if post_data else {}
         except Exception:
             body = {}
+
+        if parsed.path == "/api/audit/navigation":
+            section_names = {
+                "studio": "Generador y Editor",
+                "animator": "Reproductor de Animaciones",
+                "monitor": "Monitor de Entrenamiento",
+                "quality": "Control de Calidad",
+            }
+            section_id = str(body.get("section", "desconocida"))[:32]
+            section_name = section_names.get(section_id, "Seccion desconocida")
+            self.audit_access("NAVEGACION", section_name, f"seccion={section_id}")
+            self.send_json({"status": "recorded"})
+            return
+
+        action_names = {
+            "/api/generate": "GENERAR SPRITES",
+            "/api/train/start": "INICIAR ENTRENAMIENTO",
+            "/api/train/pause": "PAUSAR ENTRENAMIENTO",
+            "/api/train/resume": "REANUDAR ENTRENAMIENTO",
+            "/api/train/stop": "DETENER ENTRENAMIENTO",
+            "/api/train/respawn": "RESPAWN ENTRENAMIENTO",
+            "/api/regenerate_frame": "REGENERAR FRAME",
+        }
+        action_name = action_names.get(parsed.path, "SOLICITUD")
+        details = ""
+        if parsed.path in ["/api/train/start", "/api/train/resume"]:
+            details = f"epocas={body.get('epochs', 50)} | batch={body.get('batch_size', 4)}"
+        elif parsed.path == "/api/train/respawn":
+            details = f"epoca={body.get('epoch', '?')}"
+        elif parsed.path == "/api/generate":
+            details = f"personaje={body.get('character', 'desconocido')} | modo={body.get('mode', 'full')}"
+        elif parsed.path == "/api/regenerate_frame":
+            details = f"frame={body.get('frame_idx', '?')}"
+        self.audit_access("ACCION", action_name, details)
 
         if parsed.path == "/api/generate":
             with JOB_LOCK:
@@ -1072,6 +1403,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 msg_title = "Supervisado PyTorch UNet"
             
             past_eras = []
+            prev_data = {}
             status_path = PROJECT_ROOT / "training_status.json"
             if status_path.exists():
                 try:
@@ -1093,6 +1425,14 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 except Exception:
                     pass
 
+            dataset_layout = prev_data.get("dataset_layout", {})
+            if isinstance(dataset_layout, dict):
+                dataset_layout = dict(dataset_layout)
+                dataset_layout["requires_new_era"] = False
+                dataset_layout["training_era_started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            else:
+                dataset_layout = {}
+
             init_status = {
                 "epoch": 1,
                 "total_epochs": epochs,
@@ -1106,8 +1446,10 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 "gpu_temp": 55,
                 "elapsed_sec": 0,
                 "timestamp": time.strftime("%H:%M:%S"),
-                "total_frames": 1008,
-                "past_eras": past_eras
+                "total_frames": dataset_layout.get("sample_count", 1008),
+                "past_eras": past_eras,
+                "recovery_events": prev_data.get("recovery_events", []),
+                "dataset_layout": dataset_layout,
             }
             try:
                 with open(status_path, "w", encoding="utf-8") as f:
@@ -1115,14 +1457,37 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
-            subprocess.Popen([python_exe, str(train_script), "--epochs", str(epochs), "--batch_size", str(batch_size), "--mode", "start"], cwd=str(PROJECT_ROOT))
+            LAST_START_TIME = time.time()
+            train_env = os.environ.copy()
+            train_env["PYTHONUNBUFFERED"] = "1"
+            GLOBAL_TRAINING_PROC = launch_training_process(
+                [python_exe, str(train_script), "--epochs", str(epochs), "--batch_size", str(batch_size), "--mode", "start"],
+                train_env,
+            )
             self.send_json({"status": "started", "message": f"Entrenamiento de {msg_title} iniciado ({epochs} épocas)."})
             return
 
         elif parsed.path == "/api/train/pause":
+            proc_active, _ = check_gpu_training_status()
             pause_flag = PROJECT_ROOT / "pause_training.flag"
-            pause_flag.touch(exist_ok=True)
             status_file = PROJECT_ROOT / "training_status.json"
+            if not proc_active:
+                if pause_flag.exists():
+                    try: pause_flag.unlink()
+                    except Exception: pass
+                if status_file.exists():
+                    try:
+                        with open(status_file, "r", encoding="utf-8") as f:
+                            cur = json.load(f)
+                        cur["status"] = "PAUSADO"
+                        with open(status_file, "w", encoding="utf-8") as f:
+                            json.dump(cur, f, indent=2)
+                    except Exception:
+                        pass
+                self.send_json({"status": "paused", "message": "El entrenamiento ya se encuentra pausado y seguro."})
+                return
+
+            pause_flag.touch(exist_ok=True)
             if status_file.exists():
                 try:
                     with open(status_file, "r", encoding="utf-8") as f:
@@ -1132,13 +1497,21 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                         json.dump(cur, f, indent=2)
                 except Exception:
                     pass
-            self.send_json({"status": "pausing", "message": "Señal de pausa enviada. Guardando checkpoint y liberando GPU..."})
+            self.send_json({"status": "pausing", "message": "Señal de pausa enviada. Completando época en curso para pausar en frontera limpia..."})
             return
 
         elif parsed.path == "/api/train/resume":
-            training_active, _ = check_gpu_training_status()
+            training_active, training_status = check_gpu_training_status()
             if training_active:
                 self.send_json({"error": "El entrenamiento ya se encuentra en ejecución activa."}, status=409)
+                return
+            if str(training_status.get("status", "")).upper() == "DATASET_ACTUALIZADO":
+                self.send_json({
+                    "error": (
+                        "Los sprites y la caché cambiaron de escala. Pulsa Iniciar para crear una era nueva "
+                        "compatible; Reanudar mezclaría el optimizador y las métricas anteriores."
+                    )
+                }, status=409)
                 return
 
             stop_flag = PROJECT_ROOT / "stop_training.flag"
@@ -1173,21 +1546,45 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 try:
                     with open(status_file, "r", encoding="utf-8") as f:
                         cur = json.load(f)
-                    cur["status"] = "ENTRENANDO"
+                    recovery = cur.get("recovery", {})
+                    cur["status"] = "RECUPERANDO" if isinstance(recovery, dict) and recovery.get("active") else "REANUDANDO"
                     cur["timestamp"] = time.strftime("%H:%M:%S")
                     with open(status_file, "w", encoding="utf-8") as f:
                         json.dump(cur, f, indent=2)
                 except Exception:
                     pass
 
-            subprocess.Popen([python_exe, str(train_script), "--epochs", str(epochs), "--batch_size", str(batch_size), "--mode", "resume"], cwd=str(PROJECT_ROOT))
-            self.send_json({"status": "resumed", "message": f"Entrenamiento de {msg_title} reanudado desde el último checkpoint."})
+            LAST_START_TIME = time.time()
+            train_env = os.environ.copy()
+            train_env["PYTHONUNBUFFERED"] = "1"
+            GLOBAL_TRAINING_PROC = launch_training_process(
+                [python_exe, str(train_script), "--epochs", str(epochs), "--batch_size", str(batch_size), "--mode", "resume"],
+                train_env,
+            )
+            self.send_json({"status": "resumed", "message": f"Entrenamiento de {msg_title} reanudado desde el checkpoint seguro disponible."})
             return
 
         elif parsed.path == "/api/train/stop":
+            proc_active, _ = check_gpu_training_status()
             stop_flag = PROJECT_ROOT / "stop_training.flag"
-            stop_flag.touch(exist_ok=True)
             status_file = PROJECT_ROOT / "training_status.json"
+            if not proc_active:
+                if stop_flag.exists():
+                    try: stop_flag.unlink()
+                    except Exception: pass
+                if status_file.exists():
+                    try:
+                        with open(status_file, "r", encoding="utf-8") as f:
+                            cur = json.load(f)
+                        cur["status"] = "DETENIDO"
+                        with open(status_file, "w", encoding="utf-8") as f:
+                            json.dump(cur, f, indent=2)
+                    except Exception:
+                        pass
+                self.send_json({"status": "stopped", "message": "El entrenamiento ya se encuentra detenido."})
+                return
+
+            stop_flag.touch(exist_ok=True)
             if status_file.exists():
                 try:
                     with open(status_file, "r", encoding="utf-8") as f:
@@ -1218,6 +1615,12 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             target_epoch = int(body.get("epoch", 10))
             epochs = int(body.get("epochs", 50))
             batch_size = int(body.get("batch_size", 4))
+            max_valid_epoch = get_valid_snapshot_max_epoch()
+            if max_valid_epoch is not None and target_epoch > max_valid_epoch:
+                self.send_json({
+                    "error": f"El snapshot de la época {target_epoch} pertenece a la trayectoria descartada. Máximo válido actual: {max_valid_epoch}."
+                }, status=409)
+                return
             
             snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch:03d}.pt"
             if not snap_file.exists():
@@ -1248,13 +1651,16 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 except Exception:
                     pass
 
-            subprocess.Popen([
+            LAST_START_TIME = time.time()
+            train_env = os.environ.copy()
+            train_env["PYTHONUNBUFFERED"] = "1"
+            GLOBAL_TRAINING_PROC = launch_training_process([
                 python_exe, str(train_script),
                 "--epochs", str(epochs),
                 "--batch_size", str(batch_size),
                 "--mode", "resume",
                 "--respawn_epoch", str(target_epoch)
-            ], cwd=str(PROJECT_ROOT))
+            ], train_env)
             self.send_json({
                 "status": "respawned",
                 "message": f"¡Respawn exitoso! Reanudando entrenamiento desde la Época {target_epoch}."
@@ -1296,34 +1702,57 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
         self.send_json({"error": "Ruta no encontrada"}, status=404)
 
 
-def open_browser(port: int):
+def open_browser(host: str, port: int):
     import webbrowser
     time.sleep(1.0)
-    url = f"http://localhost:{port}/sprite_studio.html"
+    url = f"http://{host}:{port}/sprite_studio.html"
     print(f"[Sprite Studio] Abriendo navegador en: {url}")
     webbrowser.open(url)
 
 
 def main():
     global PORT
-    PORT = get_free_port(8080)
+    PORT = 8080
     os.chdir(PROJECT_ROOT)
+
+    if not acquire_server_lock():
+        print("=" * 70)
+        print(f"  [ERROR] Ya existe otro Sprite Studio activo en {SERVER_HOST}:{PORT}.")
+        print("  Cierra la instancia anterior antes de iniciar otra.")
+        print("  Esto evita que el entrenamiento envie sus logs a una terminal oculta.")
+        print("=" * 70)
+        raise SystemExit(1)
+
+    try:
+        server = ThreadingHTTPServer((SERVER_HOST, PORT), SpriteStudioHandler)
+    except OSError as error:
+        release_server_lock()
+        print("=" * 70)
+        print(f"  [ERROR] Ya existe otro Sprite Studio usando {SERVER_HOST}:{PORT}.")
+        print("  Cierra la instancia anterior antes de iniciar otra.")
+        print("  Esto evita que el entrenamiento envie sus logs a una terminal oculta.")
+        print(f"  Detalle: {error}")
+        print("=" * 70)
+        raise SystemExit(1)
 
     print("=" * 70)
     print("  SPRITE STUDIO - VILLA DEL CHEF (ESTUDIO LOCAL DE PIXEL ART)")
     print(f"  Directorio: {PROJECT_ROOT}")
-    print(f"  Servidor activo en: http://localhost:{PORT}")
+    print(f"  Servidor activo en: http://{SERVER_HOST}:{PORT}")
     print("=" * 70)
 
-    # Abrir navegador automaticamente
-    t = threading.Thread(target=open_browser, args=(PORT,), daemon=True)
-    t.start()
+    # Abrir navegador automáticamente salvo en reinicios técnicos en segundo plano.
+    if os.environ.get("SPRITE_STUDIO_NO_BROWSER") != "1":
+        t = threading.Thread(target=open_browser, args=(SERVER_HOST, PORT), daemon=True)
+        t.start()
 
-    server = HTTPServer(("", PORT), SpriteStudioHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[Sprite Studio] Servidor detenido por el usuario.")
+    finally:
+        server.server_close()
+        release_server_lock()
 
 
 if __name__ == "__main__":

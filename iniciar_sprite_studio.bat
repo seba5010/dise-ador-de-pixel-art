@@ -83,12 +83,14 @@ echo [OK] Dependencias verificadas con exito.
 echo.
 echo ======================================================================
 echo   Iniciando Sprite Studio...
+echo   URL de red: http://192.168.1.83:8080/sprite_studio.html
 echo   La aplicacion abrira automaticamente la interfaz en tu navegador.
 echo   Para detenerla, cierra esta ventana o presiona Ctrl + C.
 echo ======================================================================
 echo.
 
 cd /d "!STUDIO_DIR!"
+set "SPRITE_STUDIO_HOST=192.168.1.83"
 "!PYTHON_EXE!" "!STUDIO_SCRIPT!"
 
 if errorlevel 1 (

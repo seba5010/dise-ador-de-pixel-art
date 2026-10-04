@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import time
 from pathlib import Path
 from PIL import Image
 import numpy as np
@@ -11,6 +13,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from pixel_ai_engine.config import MODEL_RESOLUTION, DEVICE
 from pixel_ai_engine.dataset import (
+    CANONICAL_FRONT_REFERENCE_HEIGHT,
+    CANONICAL_SPRITE_HEIGHT,
+    CANONICAL_SPRITE_MAX_WIDTH,
+    TRAINING_FRAME_HEIGHT,
+    TRAINING_FRAME_MAX_WIDTH,
     TemplateManager,
     adapt_front_to_chibi,
     pad_target_frame_canonical,
@@ -23,10 +30,63 @@ DATASET_OUT = PROJECT_ROOT / "dataset_supervisado"
 FRAMES_PNG_DIR = DATASET_OUT / "frames_png"
 CAPTIONS_TXT_DIR = DATASET_OUT / "captions_txt"
 FRONTS_DIR = DATASET_OUT / "reference_fronts"
+STATUS_PATH = PROJECT_ROOT / "training_status.json"
 
 FRAMES_PNG_DIR.mkdir(parents=True, exist_ok=True)
 CAPTIONS_TXT_DIR.mkdir(parents=True, exist_ok=True)
 FRONTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def mark_dataset_layout_updated(total_samples: int) -> None:
+    status_data = {}
+    if STATUS_PATH.exists():
+        try:
+            with open(STATUS_PATH, "r", encoding="utf-8") as status_file:
+                status_data = json.load(status_file)
+        except (OSError, json.JSONDecodeError):
+            status_data = {}
+
+    recovery = status_data.get("recovery")
+    if isinstance(recovery, dict):
+        recovery["active"] = False
+        recovery["invalidated_by_dataset_layout"] = True
+
+    status_data["status"] = "DATASET_ACTUALIZADO"
+    status_data["dataset_layout"] = {
+        "version": 4,
+        "front_reference_height": CANONICAL_FRONT_REFERENCE_HEIGHT,
+        "training_frame_height": TRAINING_FRAME_HEIGHT,
+        "training_frame_max_width": TRAINING_FRAME_MAX_WIDTH,
+        "canonical_sprite_height": CANONICAL_SPRITE_HEIGHT,
+        "canonical_sprite_max_width": CANONICAL_SPRITE_MAX_WIDTH,
+        "cell_width": 128,
+        "cell_height": 128,
+        "sample_count": int(total_samples),
+        "requires_new_era": True,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    status_data["dataset_message"] = (
+        "Sprites ampliados y cache regenerada. Inicia una nueva era; no reanudes la métrica anterior."
+    )
+    status_data["timestamp"] = time.strftime("%H:%M:%S")
+
+    temp_path = STATUS_PATH.with_suffix(".json.tmp")
+    with open(temp_path, "w", encoding="utf-8") as status_file:
+        json.dump(status_data, status_file, indent=2, ensure_ascii=False)
+    os.replace(temp_path, STATUS_PATH)
+
+
+def has_trainable_content(image: Image.Image, minimum_pixels: int = 40) -> bool:
+    alpha = np.array(image.convert("RGBA"))[:, :, 3]
+    return int(np.count_nonzero(alpha > 20)) >= minimum_pixels
+
+
+def remove_stale_empty_sample(png_filename: str, txt_filename: str) -> None:
+    for path in (FRAMES_PNG_DIR / png_filename, CAPTIONS_TXT_DIR / txt_filename):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 # Plantilla de poses canonica 8x12
 TEMPLATE_PATH = PROJECT_ROOT / "dataset_moldes" / "plantilla de los spritesheets.png"
@@ -121,13 +181,17 @@ def build_supervised_dataset():
                         cell = sheet_img.crop((x0, y0, x1, y1))
                         padded_tgt = pad_target_frame_canonical(cell, target_size=MODEL_RESOLUTION)
 
-                        # Guardar PNG limpio
                         png_filename = f"{char_var_id}_frame_{f_idx:03d}.png"
+                        txt_filename = f"{char_var_id}_frame_{f_idx:03d}.txt"
+                        if not has_trainable_content(padded_tgt):
+                            remove_stale_empty_sample(png_filename, txt_filename)
+                            continue
+
+                        # Guardar PNG limpio
                         padded_tgt.save(FRAMES_PNG_DIR / png_filename)
 
                         # Generar caption descriptivo para entrenamiento LoRA
                         info = get_frame_semantic_info(f_idx, "8x12")
-                        txt_filename = f"{char_var_id}_frame_{f_idx:03d}.txt"
                         caption = (
                             f"pixel art of {char_name}, {var_desc}, facing {info['direction']}, "
                             f"{info['action_desc']}, {info['sub_phase']}, 16-bit retro game style, "
@@ -167,10 +231,14 @@ def build_supervised_dataset():
                         padded_tgt = pad_target_frame_canonical(cell, target_size=MODEL_RESOLUTION)
 
                         png_filename = f"{char_var_id}_frame_{mapped_idx:03d}.png"
+                        txt_filename = f"{char_var_id}_frame_{mapped_idx:03d}.txt"
+                        if not has_trainable_content(padded_tgt):
+                            remove_stale_empty_sample(png_filename, txt_filename)
+                            continue
+
                         padded_tgt.save(FRAMES_PNG_DIR / png_filename)
 
                         info = get_frame_semantic_info(mapped_idx, "8x12")
-                        txt_filename = f"{char_var_id}_frame_{mapped_idx:03d}.txt"
                         caption = (
                             f"pixel art of {char_name}, {var_desc}, facing {info['direction']}, "
                             f"{info['action_desc']}, {info['sub_phase']}, 16-bit retro game style, "
@@ -203,6 +271,8 @@ def build_supervised_dataset():
     cache_path = DATASET_OUT / "supervised_cache_8x12.pt"
     torch.save(dataset_samples, cache_path)
     print(f"  [OK] Cache guardada en: {cache_path} ({round(cache_path.stat().st_size / (1024*1024), 1)} MB)")
+    mark_dataset_layout_updated(len(dataset_samples))
+    print("  [OK] Estado marcado como DATASET_ACTUALIZADO: inicia una nueva era de entrenamiento.")
     print("=" * 70)
     return dataset_samples
 
