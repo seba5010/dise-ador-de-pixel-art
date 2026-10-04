@@ -8,12 +8,9 @@ semántica de análisis visual y la acción correctiva en un componente modular 
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
-
-from .enhancer import PixelArtEnhancer
-
 
 QUALITY_DIMENSIONS: Tuple[str, ...] = (
     "global_score",
@@ -228,137 +225,394 @@ def build_quality_vector(
     )
 
 
-class QualityGuidanceController:
-    """Diagnostica fallas visuales y decide la siguiente acción segura."""
+DEFAULT_TARGETS: Dict[str, float] = {
+    "global": 80.0,
+    "anatomy": 75.0,
+    "silhouette": 75.0,
+    "pose": 75.0,
+    "face": 70.0,
+    "hair": 75.0,
+    "clothing": 80.0,
+    "arms_hands": 70.0,
+    "feet": 80.0,
+    "props": 70.0,
+    "palette": 85.0,
+    "alpha": 95.0,
+    "micro_detail": 70.0,
+    "outline": 75.0,
+    "training_stability": 90.0,
+}
 
-    SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+DEFAULT_CRITICAL_FLOORS: Dict[str, float] = {
+    "global": 35.0,
+    "anatomy": 45.0,
+    "silhouette": 45.0,
+    "face": 40.0,
+    "palette": 50.0,
+    "alpha": 75.0,
+    "training_stability": 50.0,
+}
 
-    def __init__(self, target_assimilation: float = 99.5, max_reinforcement_rounds: int = 3):
-        self.target_assimilation = float(target_assimilation)
-        self.max_reinforcement_rounds = int(max_reinforcement_rounds)
-        self.history: List[Dict[str, Any]] = []
+GUIDANCE_ACTIONS: Tuple[str, ...] = (
+    "CONTINUE",
+    "REINFORCE",
+    "ADJUST_WEIGHTS",
+    "ADJUST_SAMPLING",
+    "REDUCE_LR",
+    "FREEZE",
+    "ROLLBACK",
+    "STOP",
+)
 
-    def normalize_metrics(self, metrics: Optional[Dict[str, Any]]) -> Dict[str, float]:
-        if not isinstance(metrics, dict):
-            return {}
 
-        normalized: Dict[str, float] = {}
-        for key in [
-            "score_total",
-            "fidelidad_paleta",
-            "alineacion_molde",
-            "micro_textura",
-            "pureza_alfa",
-            "cuerpo_precision",
-            "defectos_cuerpo",
-            "total_px_cuerpo",
-            "colores_ia",
-            "colores_original",
-            "silueta_iou_real",
-            "preservacion_tatuajes",
-            "micro_detalles",
-            "pelo_gorro",
-            "gestos_ojos",
-            "ropa_delantal",
-            "tatuajes_brazos",
-            "objetos_utensilios",
-            "zapatos_pies",
-        ]:
-            value = metrics.get(key)
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                continue
-            if number != number or number in (float("inf"), float("-inf")):
-                continue
-            normalized[key] = number
+@dataclass
+class QualityGuidanceConfig:
+    enabled: bool = True
+    mode: str = "observational"
+    targets: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_TARGETS))
+    critical_floors: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_CRITICAL_FLOORS))
+    baseline_points: int = 5
+    baseline_margin: float = 5.0
+    trend_window: int = 5
+    min_trend_points: int = 3
+    improvement_delta: float = 3.0
+    regression_delta: float = 3.0
+    collapse_delta: float = 15.0
+    plateau_range: float = 2.0
+    max_history: int = 200
 
-        if "score_total" not in normalized and normalized:
-            normalized["score_total"] = sum(normalized.values()) / len(normalized)
+    def __post_init__(self) -> None:
+        # Increment 1 is intentionally incapable of applying interventions.
+        self.mode = "observational"
+        self.baseline_points = max(2, int(self.baseline_points))
+        self.trend_window = max(3, int(self.trend_window))
+        self.min_trend_points = max(3, int(self.min_trend_points))
+        self.max_history = max(10, int(self.max_history))
+        self.targets = _normalized_thresholds(self.targets, DEFAULT_TARGETS)
+        self.critical_floors = _normalized_thresholds(self.critical_floors, DEFAULT_CRITICAL_FLOORS)
 
-        return normalized
-
-    def _metric_value(self, metrics: Dict[str, float], *keys: str, default: float = 0.0) -> float:
-        for key in keys:
-            value = metrics.get(key)
-            if value is not None:
-                return float(value)
-        return float(default)
-
-    def _compute_root_causes(self, metrics: Dict[str, float]) -> List[str]:
-        causes: List[str] = []
-        if self._metric_value(metrics, "fidelidad_paleta", "colores_ia", "colores_original") < 85.0:
-            causes.append("paleta desalineada")
-        if self._metric_value(metrics, "cuerpo_precision", "silueta_iou_real") < 85.0:
-            causes.append("anatomía y silueta inestables")
-        if self._metric_value(metrics, "pureza_alfa", "micro_textura") < 85.0:
-            causes.append("alfa o micro-textura con artefactos")
-        if self._metric_value(metrics, "gestos_ojos", "pelo_gorro") < 85.0:
-            causes.append("detalle facial o capilar frágil")
-        if self._metric_value(metrics, "ropa_delantal", "objetos_utensilios", "zapatos_pies") < 85.0:
-            causes.append("ropa, accesorios o pies desalineados")
-        if not causes:
-            causes.append("sin causa principal detectada")
-        return causes
-
-    def _severity_for(self, score_total: float, root_causes: List[str]) -> str:
-        if score_total < 50.0 or "paleta desalineada" in root_causes and score_total < 60.0:
-            return "critical"
-        if score_total < 75.0 or len(root_causes) >= 3:
-            return "high"
-        if score_total < 90.0:
-            return "medium"
-        return "low"
-
-    def _action_for(self, score_total: float, root_causes: List[str], severity: str) -> str:
-        if score_total < 50.0:
-            return "rollback_to_last_healthy_snapshot"
-        if "paleta desalineada" in root_causes:
-            return "recalibrate_palette_and_reinforce"
-        if "anatomía y silueta inestables" in root_causes:
-            return "reinforce_anatomy_with_targeted_preview"
-        if "alfa o micro-textura con artefactos" in root_causes:
-            return "clean_alpha_and_micro_details"
-        if severity in {"high", "medium"}:
-            return "continue_with_guarded_reinforcement"
-        return "continue_training"
-
-    def build_quality_guide(self, metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        guide = PixelArtEnhancer.build_quality_guide(metrics or {})
-        if not isinstance(guide, dict):
-            return {
-                "guide_score": 0.0,
-                "body_score": 0.0,
-                "face_score": 0.0,
-                "clothes_score": 0.0,
-                "accessory_score": 0.0,
-                "dominant_signal": "body",
-                "alerts": ["Sin métricas de calidad disponibles."],
-            }
-        return guide
-
-    def evaluate(self, metrics: Optional[Dict[str, Any]], trend: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        normalized = self.normalize_metrics(metrics)
-        guide = self.build_quality_guide(normalized)
-        score_total = float(self._metric_value(normalized, "score_total", default=guide.get("guide_score", 0.0)))
-        root_causes = self._compute_root_causes(normalized)
-        severity = self._severity_for(score_total, root_causes)
-        action = self._action_for(score_total, root_causes, severity)
-        recommendation = self._recommendation_text(score_total, severity, action, root_causes)
-
-        decision = {
-            "severity": severity,
-            "score_total": round(score_total, 2),
-            "target_assimilation": round(self.target_assimilation, 2),
-            "action": action,
-            "root_causes": root_causes,
-            "recommendation": recommendation,
-            "quality_guide": guide,
-            "trend": trend or {},
-            "reinforcement_rounds_remaining": max(0, self.max_reinforcement_rounds),
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "mode": self.mode,
+            "targets": dict(self.targets),
+            "critical_floors": dict(self.critical_floors),
+            "baseline_points": self.baseline_points,
+            "baseline_margin": self.baseline_margin,
+            "trend_window": self.trend_window,
+            "min_trend_points": self.min_trend_points,
+            "improvement_delta": self.improvement_delta,
+            "regression_delta": self.regression_delta,
+            "collapse_delta": self.collapse_delta,
+            "plateau_range": self.plateau_range,
+            "max_history": self.max_history,
         }
 
-        self.history.append(decision)
+    @classmethod
+    def from_dict(cls, payload: Optional[Mapping[str, Any]]) -> "QualityGuidanceConfig":
+        data = dict(payload) if isinstance(payload, Mapping) else {}
+        allowed = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in allowed})
+
+
+def _normalized_thresholds(
+    values: Optional[Mapping[str, Any]], defaults: Mapping[str, float]
+) -> Dict[str, float]:
+    result = dict(defaults)
+    if isinstance(values, Mapping):
+        for key, raw_value in values.items():
+            score = normalize_quality_score(raw_value)
+            if score is not None:
+                result[str(key)] = score
+    return result
+
+
+def _median(values: List[float]) -> float:
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2.0
+
+
+def _coerce_quality_vector(value: Any) -> Optional[QualityVector]:
+    if isinstance(value, QualityVector):
+        return value
+    if not isinstance(value, Mapping):
+        return None
+    if isinstance(value.get("quality_vector"), Mapping):
+        return QualityVector.from_dict(value["quality_vector"])
+    guidance = value.get("guidance", value.get("quality_guidance"))
+    if isinstance(guidance, Mapping) and isinstance(guidance.get("quality_vector"), Mapping):
+        return QualityVector.from_dict(guidance["quality_vector"])
+    if isinstance(value.get("quality"), Mapping):
+        return build_quality_vector(value["quality"])
+    canonical_keys = {"global", "global_score", *QUALITY_DIMENSIONS}
+    if canonical_keys.intersection(value.keys()):
+        return QualityVector.from_dict(value)
+    return build_quality_vector(value)
+
+
+class QualityTrendAnalyzer:
+    """Classify multi-audit trajectories without acting on training."""
+
+    def __init__(self, config: Optional[QualityGuidanceConfig] = None):
+        self.config = config or QualityGuidanceConfig()
+
+    def _classify(self, values: List[float]) -> str:
+        if len(values) < self.config.min_trend_points:
+            return "INSUFFICIENT_DATA"
+        recent = values[-self.config.trend_window :]
+        delta = recent[-1] - recent[0]
+        value_range = max(recent) - min(recent)
+        changes = [right - left for left, right in zip(recent, recent[1:])]
+        signs = [1 if change > 0.5 else -1 if change < -0.5 else 0 for change in changes]
+        nonzero = [sign for sign in signs if sign]
+        sign_changes = sum(left != right for left, right in zip(nonzero, nonzero[1:]))
+
+        if recent[-1] <= 20.0 or delta <= -self.config.collapse_delta:
+            return "COLLAPSE"
+        if sign_changes >= 2 and value_range >= max(4.0, self.config.plateau_range * 2.0):
+            return "OSCILLATION"
+        if delta <= -self.config.regression_delta:
+            return "REGRESSION"
+        if delta >= self.config.improvement_delta:
+            return "IMPROVING"
+        if value_range <= self.config.plateau_range:
+            return "PLATEAU"
+        return "STABLE"
+
+    def analyze(self, history: Iterable[Any]) -> Dict[str, Any]:
+        vectors = [vector for item in history if (vector := _coerce_quality_vector(item)) is not None]
+        categories = ("global",) + tuple(name for name in QUALITY_DIMENSIONS if name != "global_score")
+        by_category: Dict[str, str] = {}
+        deltas: Dict[str, Optional[float]] = {}
+        counts: Dict[str, int] = {}
+
+        for category in categories:
+            attribute = "global_score" if category == "global" else category
+            values = [getattr(vector, attribute) for vector in vectors]
+            observed = [float(value) for value in values if value is not None]
+            by_category[category] = self._classify(observed)
+            counts[category] = len(observed)
+            deltas[category] = round(observed[-1] - observed[0], 4) if len(observed) >= 2 else None
+
+        meaningful = [status for status in by_category.values() if status != "INSUFFICIENT_DATA"]
+        priority = ("COLLAPSE", "REGRESSION", "OSCILLATION", "PLATEAU", "IMPROVING", "STABLE")
+        overall = next((status for status in priority if status in meaningful), "INSUFFICIENT_DATA")
+        return {
+            "status": overall,
+            "by_category": by_category,
+            "deltas": deltas,
+            "observations": counts,
+            "regression_categories": [
+                category
+                for category, status in by_category.items()
+                if status in {"REGRESSION", "COLLAPSE"}
+            ],
+            "window": self.config.trend_window,
+        }
+
+
+def _severity_from_deficit(deficit: float) -> str:
+    if deficit >= 25.0:
+        return "critical"
+    if deficit >= 15.0:
+        return "high"
+    if deficit >= 5.0:
+        return "medium"
+    return "low"
+
+
+def diagnose_quality_bottleneck(
+    quality: Any,
+    *,
+    thresholds: Optional[Mapping[str, Any]] = None,
+    critical_floors: Optional[Mapping[str, Any]] = None,
+    trend: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Find the worst observed category without treating unavailable data as zero."""
+    vector = _coerce_quality_vector(quality) or QualityVector()
+    target_map = _normalized_thresholds(thresholds, DEFAULT_TARGETS)
+    floor_map = _normalized_thresholds(critical_floors, DEFAULT_CRITICAL_FLOORS)
+    payload = vector.to_dict()
+    deficits: Dict[str, float] = {}
+    observed = 0
+
+    for category, target in target_map.items():
+        value = payload.get(category)
+        if value is None:
+            continue
+        observed += 1
+        deficit = round(float(target) - float(value), 4)
+        if deficit > 0.0:
+            deficits[category] = deficit
+
+    ranked = sorted(deficits, key=lambda name: (-deficits[name], name))
+    primary = ranked[0] if ranked else None
+    secondary = ranked[1:3]
+    severity = _severity_from_deficit(deficits.get(primary, 0.0)) if primary else "low"
+
+    critical_breaches = [
+        category
+        for category, floor in floor_map.items()
+        if payload.get(category) is not None and float(payload[category]) < float(floor)
+    ]
+    trend_status = str((trend or {}).get("status", "INSUFFICIENT_DATA"))
+    if critical_breaches or trend_status == "COLLAPSE":
+        severity = "critical"
+        if primary is None and critical_breaches:
+            primary = critical_breaches[0]
+    elif trend_status == "REGRESSION":
+        severity = {"low": "medium", "medium": "high", "high": "critical", "critical": "critical"}[severity]
+
+    coverage = observed / max(1, len(target_map))
+    separation = 1.0
+    if len(ranked) > 1 and deficits[ranked[0]] > 0:
+        separation = max(0.0, min(1.0, (deficits[ranked[0]] - deficits[ranked[1]]) / deficits[ranked[0]]))
+    confidence = round(min(0.99, 0.45 + coverage * 0.4 + separation * 0.14), 2) if primary else round(min(0.95, 0.4 + coverage * 0.5), 2)
+
+    return {
+        "primary_problem": primary,
+        "secondary_problems": secondary,
+        "severity": severity,
+        "confidence": confidence,
+        "deficits": deficits,
+        "critical_breaches": critical_breaches,
+        "observed_categories": observed,
+    }
+
+
+class QualityGuidanceController:
+    """Produce explainable recommendations while preserving observational safety."""
+
+    STATE_VERSION = 1
+    SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+    def __init__(
+        self,
+        config: Optional[QualityGuidanceConfig] = None,
+        target_assimilation: Optional[float] = None,
+        max_reinforcement_rounds: int = 3,
+        state: Optional[Mapping[str, Any]] = None,
+    ):
+        self.config = config or QualityGuidanceConfig()
+        if target_assimilation is not None:
+            target = normalize_quality_score(target_assimilation)
+            if target is not None:
+                self.config.targets["global"] = target
+        self.target_assimilation = self.config.targets["global"]
+        self.max_reinforcement_rounds = max(0, int(max_reinforcement_rounds))
+        self.quality_history: List[Dict[str, Any]] = []
+        self.decision_history: List[Dict[str, Any]] = []
+        self.history = self.decision_history  # Backward-compatible public alias.
+        if state:
+            self.load_state(state)
+
+    def normalize_metrics(self, metrics: Optional[Dict[str, Any]]) -> Dict[str, float]:
+        return build_quality_vector(metrics).to_dict(include_unavailable=False)  # type: ignore[return-value]
+
+    def _effective_thresholds(self) -> Dict[str, float]:
+        thresholds = dict(self.config.targets)
+        baseline = self.quality_history[: self.config.baseline_points]
+        if len(baseline) < self.config.baseline_points:
+            return thresholds
+        for category, configured_target in list(thresholds.items()):
+            values = [
+                item.get("quality_vector", {}).get(category)
+                for item in baseline
+                if isinstance(item.get("quality_vector"), Mapping)
+            ]
+            observed = [float(value) for value in values if _finite_number(value) is not None]
+            if len(observed) < self.config.baseline_points:
+                continue
+            relative_target = _median(observed) - self.config.baseline_margin
+            floor = self.config.critical_floors.get(category, 0.0)
+            thresholds[category] = round(max(floor, min(configured_target, relative_target)), 4)
+        return thresholds
+
+    def _recommend_action(self, diagnosis: Mapping[str, Any], trend: Mapping[str, Any]) -> str:
+        problem = diagnosis.get("primary_problem")
+        severity = diagnosis.get("severity", "low")
+        if not problem:
+            return "CONTINUE"
+        if trend.get("status") == "COLLAPSE" or severity == "critical":
+            return "ROLLBACK"
+        if problem == "training_stability":
+            return "REDUCE_LR" if severity in {"medium", "high"} else "CONTINUE"
+        if problem in {"palette", "alpha", "micro_detail", "outline"} and severity == "high":
+            return "ADJUST_WEIGHTS"
+        if severity in {"medium", "high"} or trend.get("status") == "REGRESSION":
+            return "REINFORCE"
+        return "CONTINUE"
+
+    def _recommendation_text(self, diagnosis: Mapping[str, Any], recommendation: str) -> str:
+        problem = diagnosis.get("primary_problem")
+        if problem is None:
+            return "Las señales observadas no muestran un cuello de botella dominante; continuar y acumular tendencia."
+        if recommendation == "ROLLBACK":
+            return f"Se recomienda revisar el último snapshot saludable por degradación crítica en {problem}."
+        if recommendation == "ADJUST_WEIGHTS":
+            return f"Se recomienda evaluar un ajuste acotado y atribuible de loss para {problem} en un incremento futuro."
+        if recommendation == "REDUCE_LR":
+            return "Se recomienda revisar estabilidad y una reducción acotada de LR en el incremento de Recovery."
+        if recommendation == "REINFORCE":
+            return f"Se recomienda refuerzo dirigido a {problem}, sujeto a feature flag y validación A/B futura."
+        return f"Mantener observación de {problem}; el déficit actual no justifica una intervención."
+
+    def evaluate(
+        self,
+        metrics: Optional[Dict[str, Any]],
+        trend: Optional[Dict[str, Any]] = None,
+        *,
+        training_metrics: Optional[Mapping[str, Any]] = None,
+        history: Optional[Iterable[Any]] = None,
+        epoch: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        vector = build_quality_vector(metrics, training_metrics)
+        historical = list(history) if history is not None else list(self.quality_history)
+        trend_report = dict(trend) if isinstance(trend, Mapping) else QualityTrendAnalyzer(self.config).analyze([*historical, vector])
+        thresholds = self._effective_thresholds()
+        diagnosis = diagnose_quality_bottleneck(
+            vector,
+            thresholds=thresholds,
+            critical_floors=self.config.critical_floors,
+            trend=trend_report,
+        )
+        recommended_action = self._recommend_action(diagnosis, trend_report)
+        quality_payload = vector.to_dict()
+        decision = {
+            "enabled": bool(self.config.enabled),
+            "mode": self.config.mode,
+            "action": "CONTINUE",
+            "recommended_action": recommended_action,
+            "problem": diagnosis["primary_problem"],
+            "primary_problem": diagnosis["primary_problem"],
+            "secondary_problems": diagnosis["secondary_problems"],
+            "severity": diagnosis["severity"],
+            "confidence": diagnosis["confidence"],
+            "quality_score": quality_payload.get("global"),
+            "quality_vector": quality_payload,
+            "trend": trend_report,
+            "diagnosis": diagnosis,
+            "effective_thresholds": thresholds,
+            "recommendation": self._recommendation_text(diagnosis, recommended_action),
+            "training_modified": False,
+            "reinforcement_rounds_remaining": self.max_reinforcement_rounds,
+        }
+        if epoch is not None:
+            decision["epoch"] = int(epoch)
+
+        record = {"epoch": int(epoch) if epoch is not None else None, "quality_vector": quality_payload}
+        if epoch is not None:
+            self.quality_history = [item for item in self.quality_history if item.get("epoch") != int(epoch)]
+            self.decision_history = [item for item in self.decision_history if item.get("epoch") != int(epoch)]
+            self.history = self.decision_history
+        self.quality_history.append(record)
+        self.decision_history.append(dict(decision))
+        self.quality_history = self.quality_history[-self.config.max_history :]
+        self.decision_history = self.decision_history[-self.config.max_history :]
+        self.history = self.decision_history
         return decision
 
     def decide_action(self, metrics: Optional[Dict[str, Any]], trend: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -370,46 +624,39 @@ class QualityGuidanceController:
     def summarize(self, metrics: Optional[Dict[str, Any]], trend: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.evaluate(metrics=metrics, trend=trend)
 
-    def _recommendation_text(self, score_total: float, severity: str, action: str, root_causes: List[str]) -> str:
-        if score_total >= self.target_assimilation:
-            return "La calidad actual supera el umbral objetivo; continuar el ciclo actual con vigilancia normal."
+    def export_state(self) -> Dict[str, Any]:
+        return {
+            "version": self.STATE_VERSION,
+            "config": self.config.to_dict(),
+            "last_action": self.decision_history[-1].get("action") if self.decision_history else "CONTINUE",
+            "last_problem": self.decision_history[-1].get("primary_problem") if self.decision_history else None,
+            "intervention_count": 0,
+            "loss_multipliers": {"color": 1.0, "alpha": 1.0, "edge": 1.0, "adversarial": 1.0},
+            "sampling_weights": {},
+            "quality_history": list(self.quality_history),
+            "decision_history": list(self.decision_history),
+        }
 
-        cause_text = ", ".join(root_causes)
-        if action == "rollback_to_last_healthy_snapshot":
-            return (
-                f"Colapso de calidad severo ({score_total:.1f} / {self.target_assimilation:.1f}). "
-                f"Retroceder al último snapshot saludable y reforzar el siguiente tramo con un objetivo centrado en {cause_text}."
-            )
-        if action == "recalibrate_palette_and_reinforce":
-            return (
-                f"Se detectó pérdida crítica de paleta ({cause_text}). "
-                f"Ajustar la remap de colores y volver a reforzar con una vista previa focalizada sobre identidad cromática."
-            )
-        if action == "reinforce_anatomy_with_targeted_preview":
-            return (
-                f"El fallo principal apunta a anatomía ({cause_text}). "
-                f"Reforzar poses y silueta con preview orientado a cuerpo y detalle facial antes de continuar."
-            )
-        if action == "clean_alpha_and_micro_details":
-            return (
-                f"Los artefactos de alfa o micro-textura son relevantes ({cause_text}). "
-                f"Limpiar el canal alfa y reforzar detalles antes de continuar el siguiente ciclo."
-            )
-        if severity == "high":
-            return (
-                f"La calidad está por debajo del umbral objetivo ({score_total:.1f} < {self.target_assimilation:.1f}) "
-                f"y requiere refuerzo moderado: {cause_text}."
-            )
-        return (
-            f"La calidad requiere seguimiento cercano ({score_total:.1f} < {self.target_assimilation:.1f}). "
-            f"Mantener vigilancia y evaluar {cause_text} antes del siguiente tramo."
-        )
+    def load_state(self, state: Optional[Mapping[str, Any]]) -> None:
+        if not isinstance(state, Mapping):
+            return
+        quality_history = state.get("quality_history", [])
+        decision_history = state.get("decision_history", [])
+        self.quality_history = [dict(item) for item in quality_history if isinstance(item, Mapping)][-self.config.max_history :]
+        self.decision_history = [dict(item) for item in decision_history if isinstance(item, Mapping)][-self.config.max_history :]
+        self.history = self.decision_history
 
 
 __all__ = [
+    "DEFAULT_CRITICAL_FLOORS",
+    "DEFAULT_TARGETS",
+    "GUIDANCE_ACTIONS",
     "QUALITY_DIMENSIONS",
+    "QualityGuidanceConfig",
     "QualityGuidanceController",
+    "QualityTrendAnalyzer",
     "QualityVector",
     "build_quality_vector",
+    "diagnose_quality_bottleneck",
     "normalize_quality_score",
 ]

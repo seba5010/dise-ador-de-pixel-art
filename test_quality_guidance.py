@@ -3,8 +3,12 @@ import json
 import pytest
 
 from pixel_ai_engine.quality_guidance import (
+    QualityGuidanceConfig,
+    QualityGuidanceController,
+    QualityTrendAnalyzer,
     QualityVector,
     build_quality_vector,
+    diagnose_quality_bottleneck,
     normalize_quality_score,
 )
 
@@ -109,3 +113,103 @@ def test_training_stability_penalizes_non_finite_metrics_and_skipped_amp_steps()
         },
     )
     assert vector.training_stability == 65.0
+
+
+def test_bottleneck_diagnosis_does_not_hide_weak_face_behind_global_score():
+    diagnosis = diagnose_quality_bottleneck(
+        QualityVector(
+            global_score=92,
+            anatomy=86,
+            silhouette=84,
+            face=42,
+            clothing=98,
+            palette=99,
+            alpha=100,
+        )
+    )
+
+    assert diagnosis["primary_problem"] == "face"
+    assert diagnosis["severity"] == "critical"
+    assert diagnosis["critical_breaches"] == []  # 42 is poor, but above the configurable floor of 40.
+    assert diagnosis["confidence"] >= 0.6
+
+
+@pytest.mark.parametrize(
+    ("face_score", "expected"),
+    [(68, "low"), (62, "medium"), (50, "high"), (30, "critical")],
+)
+def test_severity_levels_are_driven_by_category_deficit(face_score, expected):
+    diagnosis = diagnose_quality_bottleneck(
+        QualityVector(face=face_score),
+        thresholds={"face": 70},
+        critical_floors={"face": 35},
+    )
+    assert diagnosis["severity"] == expected
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([60, 65, 72], "IMPROVING"),
+        ([72, 72.5, 72], "PLATEAU"),
+        ([72, 67, 63], "REGRESSION"),
+        ([70, 78, 68, 77], "OSCILLATION"),
+        ([72, 60, 51], "COLLAPSE"),
+    ],
+)
+def test_trend_analyzer_detects_required_states(values, expected):
+    history = [QualityVector(global_score=80, face=value) for value in values]
+    trend = QualityTrendAnalyzer().analyze(history)
+    assert trend["by_category"]["face"] == expected
+
+
+def test_regression_escalates_severity_even_when_latest_score_is_acceptable():
+    trend = QualityTrendAnalyzer().analyze(
+        [QualityVector(face=78), QualityVector(face=74), QualityVector(face=70)]
+    )
+    diagnosis = diagnose_quality_bottleneck(QualityVector(face=70), trend=trend)
+    assert diagnosis["primary_problem"] is None
+    assert diagnosis["severity"] == "medium"
+
+
+def test_observational_controller_recommends_but_never_modifies_training():
+    controller = QualityGuidanceController()
+    decision = controller.evaluate(
+        {
+            "score_total": 76.8,
+            "cuerpo_precision": 82,
+            "silueta_iou_real": 79,
+            "gestos_ojos": 61,
+            "ropa_delantal": 94,
+            "fidelidad_paleta": 91,
+            "pureza_alfa": 99,
+            "micro_detalles": 68,
+        },
+        epoch=40,
+    )
+
+    assert decision["mode"] == "observational"
+    assert decision["primary_problem"] == "face"
+    assert decision["severity"] == "medium"
+    assert decision["recommended_action"] == "REINFORCE"
+    assert decision["action"] == "CONTINUE"
+    assert decision["training_modified"] is False
+
+
+def test_controller_state_round_trip_is_backward_compatible():
+    controller = QualityGuidanceController()
+    controller.evaluate({"score_total": 80, "gestos_ojos": 65}, epoch=10)
+    serialized = json.loads(json.dumps(controller.export_state(), allow_nan=False))
+
+    restored = QualityGuidanceController(state=serialized)
+    assert restored.export_state()["quality_history"] == serialized["quality_history"]
+    assert restored.export_state()["decision_history"] == serialized["decision_history"]
+
+    empty = QualityGuidanceController(state={"legacy_checkpoint": True})
+    assert empty.export_state()["last_action"] == "CONTINUE"
+
+
+def test_config_forces_observational_mode_during_increment_one():
+    config = QualityGuidanceConfig(mode="active", targets={"face": 75})
+    assert config.mode == "observational"
+    assert config.targets["face"] == 75.0

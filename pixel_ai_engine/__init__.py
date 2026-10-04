@@ -31,7 +31,14 @@ from .dataset import (
 from .enhancer import PixelArtEnhancer
 from .phase3_critical_enhancer import Phase3CriticalReviewer
 from .quality_gate import QualityGate
-from .quality_guidance import QualityGuidanceController, QualityVector, build_quality_vector
+from .quality_guidance import (
+    QualityGuidanceConfig,
+    QualityGuidanceController,
+    QualityTrendAnalyzer,
+    QualityVector,
+    build_quality_vector,
+    diagnose_quality_bottleneck,
+)
 from .generate_character_sheet import generate_spritesheet
 from .train import train
 
@@ -60,8 +67,11 @@ __all__ = [
     "Phase3CriticalReviewer",
     "QualityGate",
     "QualityGuidanceController",
+    "QualityGuidanceConfig",
+    "QualityTrendAnalyzer",
     "QualityVector",
     "build_quality_vector",
+    "diagnose_quality_bottleneck",
     "generate_spritesheet",
     "train",
 ]
