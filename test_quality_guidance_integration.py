@@ -160,6 +160,27 @@ def test_past_era_quality_summary_tracks_best_observed_categories():
     assert summary["best_palette"] is None
 
 
+def test_frame_quality_batch_is_per_sample_and_detached_from_training_graph():
+    targets = torch.zeros(2, 4, 4, 4)
+    targets[:, 3, 1:3, 1:3] = 1.0
+    predictions = targets.clone().requires_grad_(True)
+    predictions.data[1, :3] = 1.0
+    predictions.data[1, 3] = -1.0
+
+    measurements = train_supervised.compute_frame_quality_batch(
+        predictions,
+        targets,
+        torch.tensor([3, 9]),
+        ["hero_a", "hero_b"],
+    )
+
+    assert [item["frame_idx"] for item in measurements] == [3, 9]
+    assert [item["char_id"] for item in measurements] == ["hero_a", "hero_b"]
+    assert measurements[0]["quality"] == 100.0
+    assert measurements[1]["quality"] < measurements[0]["quality"]
+    assert predictions.grad is None
+
+
 def test_monitor_reads_new_guidance_contract():
     project_root = train_supervised.PROJECT_ROOT
     monitor = (project_root / "monitor.html").read_text(encoding="utf-8")

@@ -433,6 +433,54 @@ class SupervisedTensorDataset(Dataset):
 
         return front, f_idx, target, s["char_id"]
 
+
+def compute_frame_quality_batch(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    frame_indices: Any,
+    char_ids: Any,
+) -> list[Dict[str, Any]]:
+    """Compute detached per-sample scores; these values never enter ``total_g``."""
+    if predictions.ndim != 4 or targets.ndim != 4 or predictions.shape[0] != targets.shape[0]:
+        return []
+    measurements: list[Dict[str, Any]] = []
+    with torch.no_grad():
+        predicted = predictions.detach().float().clamp(-1.0, 1.0)
+        expected = targets.detach().float().clamp(-1.0, 1.0)
+        batch_size = predicted.shape[0]
+        for index in range(batch_size):
+            color_error = torch.mean(torch.abs(predicted[index, :3] - expected[index, :3])) / 2.0
+            color_score = float((1.0 - color_error).clamp(0.0, 1.0).item() * 100.0)
+            if predicted.shape[1] >= 4 and expected.shape[1] >= 4:
+                alpha_error = torch.mean(torch.abs(predicted[index, 3] - expected[index, 3])) / 2.0
+                alpha_score = float((1.0 - alpha_error).clamp(0.0, 1.0).item() * 100.0)
+                pred_mask = predicted[index, 3] > 0.0
+                target_mask = expected[index, 3] > 0.0
+                intersection = torch.logical_and(pred_mask, target_mask).sum().float()
+                union = torch.logical_or(pred_mask, target_mask).sum().float()
+                silhouette = float((intersection / union.clamp_min(1.0)).item() * 100.0)
+                target_pixels = int(target_mask.sum().item())
+            else:
+                alpha_score = 100.0
+                silhouette = color_score
+                target_pixels = int(expected[index, :3].abs().sum().item() > 0)
+            quality = color_score * 0.50 + silhouette * 0.30 + alpha_score * 0.20
+            frame_value = frame_indices[index]
+            frame_idx = int(frame_value.item()) if hasattr(frame_value, "item") else int(frame_value)
+            char_id = char_ids[index] if isinstance(char_ids, (list, tuple)) else char_ids[index]
+            measurements.append({
+                "char_id": str(char_id),
+                "frame_idx": frame_idx,
+                "quality": round(quality, 4),
+                "confidence": 1.0 if target_pixels > 0 else 0.25,
+                "metrics": {
+                    "color": round(color_score, 4),
+                    "alpha": round(alpha_score, 4),
+                    "silhouette": round(silhouette, 4),
+                },
+            })
+    return measurements
+
 def get_hardware_telemetry():
     telemetry = {
         "gpu_temp": 55,

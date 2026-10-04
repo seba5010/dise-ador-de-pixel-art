@@ -137,6 +137,255 @@ class QualityVector:
         return cls(**kwargs)
 
 
+def frame_quality_key(char_id: Any, frame_idx: Any) -> str:
+    """Stable identifier shared by cache samples, metrics and sampler weights."""
+    try:
+        normalized_index = int(frame_idx)
+    except (TypeError, ValueError):
+        normalized_index = -1
+    return f"{str(char_id)}::frame_{normalized_index:03d}"
+
+
+class FrameQualityTracker:
+    """Accumulate trustworthy per-frame metrics using a bounded moving average."""
+
+    def __init__(
+        self,
+        records: Optional[Mapping[str, Any]] = None,
+        *,
+        ema_decay: float = 0.7,
+        max_records: int = 10000,
+    ):
+        self.ema_decay = min(0.95, max(0.0, float(ema_decay)))
+        self.max_records = max(1, int(max_records))
+        self.records: Dict[str, Dict[str, Any]] = {}
+        if isinstance(records, Mapping):
+            for key, value in records.items():
+                if isinstance(value, Mapping):
+                    score = normalize_quality_score(value.get("quality"))
+                    observations = _finite_number(value.get("observations"))
+                    if score is None or observations is None or observations < 1:
+                        continue
+                    raw_confidence = _finite_number(value.get("confidence", 1.0))
+                    confidence = 1.0 if raw_confidence is None else raw_confidence
+                    if confidence > 1.0:
+                        confidence /= 100.0
+                    key_text = str(key)
+                    key_char, _, key_frame = key_text.rpartition("::frame_")
+                    stored_frame = _finite_number(value.get("frame_idx"))
+                    if stored_frame is None:
+                        stored_frame = _finite_number(key_frame)
+                    self.records[str(key)] = {
+                        "char_id": str(value.get("char_id", key_char or "unknown")),
+                        "frame_idx": int(stored_frame) if stored_frame is not None else -1,
+                        "quality": score,
+                        "observations": int(observations),
+                        "confidence": round(min(1.0, max(0.0, confidence)), 4),
+                        "last_epoch": int(_finite_number(value.get("last_epoch")) or 0),
+                        "metrics": dict(value.get("metrics", {})) if isinstance(value.get("metrics"), Mapping) else {},
+                    }
+
+    def update(
+        self,
+        char_id: Any,
+        frame_idx: Any,
+        quality: Any,
+        *,
+        epoch: int,
+        metrics: Optional[Mapping[str, Any]] = None,
+        confidence: float = 1.0,
+    ) -> Optional[Dict[str, Any]]:
+        score = normalize_quality_score(quality)
+        finite_confidence = _finite_number(confidence)
+        if score is None or finite_confidence is None or finite_confidence <= 0.0:
+            return None
+        key = frame_quality_key(char_id, frame_idx)
+        previous = self.records.get(key)
+        observations = int(previous.get("observations", 0)) + 1 if previous else 1
+        if previous:
+            score = round(
+                float(previous["quality"]) * self.ema_decay + score * (1.0 - self.ema_decay),
+                4,
+            )
+        confidence_value = min(1.0, max(0.0, float(finite_confidence)))
+        record = {
+            "char_id": str(char_id),
+            "frame_idx": int(frame_idx),
+            "quality": score,
+            "observations": observations,
+            "confidence": round(confidence_value, 4),
+            "last_epoch": int(epoch),
+            "metrics": {
+                key: round(value, 4)
+                for key, raw in (metrics or {}).items()
+                if (value := _finite_number(raw)) is not None
+            },
+        }
+        self.records[key] = record
+        if len(self.records) > self.max_records:
+            oldest = sorted(
+                self.records,
+                key=lambda item: (self.records[item].get("last_epoch", 0), item),
+            )[: len(self.records) - self.max_records]
+            for old_key in oldest:
+                self.records.pop(old_key, None)
+        return dict(record)
+
+    def update_many(self, measurements: Iterable[Mapping[str, Any]], *, epoch: int) -> None:
+        for measurement in measurements:
+            if not isinstance(measurement, Mapping):
+                continue
+            self.update(
+                measurement.get("char_id", "unknown"),
+                measurement.get("frame_idx", -1),
+                measurement.get("quality"),
+                epoch=epoch,
+                metrics=measurement.get("metrics") if isinstance(measurement.get("metrics"), Mapping) else None,
+                confidence=float(_finite_number(measurement.get("confidence")) or 1.0),
+            )
+
+    def export(self) -> Dict[str, Dict[str, Any]]:
+        return {key: dict(value) for key, value in sorted(self.records.items())}
+
+
+@dataclass(frozen=True)
+class SamplingPlan:
+    active: bool
+    reason: str
+    weights: Tuple[float, ...]
+    sample_keys: Tuple[str, ...]
+    eligible_frames: int
+    hard_frames: int
+    min_weight: float
+    max_weight: float
+    effective_sample_size: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "active": self.active,
+            "reason": self.reason,
+            "weights": list(self.weights),
+            "sample_keys": list(self.sample_keys),
+            "eligible_frames": self.eligible_frames,
+            "hard_frames": self.hard_frames,
+            "min_weight": self.min_weight,
+            "max_weight": self.max_weight,
+            "effective_sample_size": self.effective_sample_size,
+        }
+
+
+class HardExampleMiningPolicy:
+    """Convert reliable frame scores into conservative 1.0..2.0 weights."""
+
+    def __init__(
+        self,
+        *,
+        min_observations: int = 2,
+        min_confidence: float = 0.75,
+        max_weight: float = 2.0,
+        hard_threshold: float = 75.0,
+        very_hard_threshold: float = 50.0,
+    ):
+        self.min_observations = max(1, int(min_observations))
+        self.min_confidence = min(1.0, max(0.0, float(min_confidence)))
+        self.max_weight = min(2.0, max(1.0, float(max_weight)))
+        self.hard_threshold = normalize_quality_score(hard_threshold) or 75.0
+        self.very_hard_threshold = normalize_quality_score(very_hard_threshold) or 50.0
+
+    def _weight_for(self, record: Optional[Mapping[str, Any]]) -> Tuple[float, bool]:
+        if not isinstance(record, Mapping):
+            return 1.0, False
+        score = normalize_quality_score(record.get("quality"))
+        observations = _finite_number(record.get("observations"))
+        confidence = _finite_number(record.get("confidence"))
+        if (
+            score is None
+            or observations is None
+            or observations < self.min_observations
+            or confidence is None
+            or confidence < self.min_confidence
+        ):
+            return 1.0, False
+        if score <= self.very_hard_threshold:
+            return self.max_weight, True
+        if score <= self.hard_threshold:
+            severity = (self.hard_threshold - score) / max(1.0, self.hard_threshold - self.very_hard_threshold)
+            weight = min(self.max_weight, 1.5 + severity * (self.max_weight - 1.5))
+            return round(weight, 4), True
+        return 1.0, True
+
+    def build_plan(
+        self,
+        samples: Iterable[Mapping[str, Any]],
+        frame_quality: Optional[Mapping[str, Any]],
+        *,
+        enabled: bool,
+        recommendation: str = "REINFORCE",
+    ) -> SamplingPlan:
+        records = frame_quality if isinstance(frame_quality, Mapping) else {}
+        keys: List[str] = []
+        weights: List[float] = []
+        eligible = 0
+        hard = 0
+        for sample in samples:
+            key = frame_quality_key(sample.get("char_id", "unknown"), sample.get("frame_idx", -1))
+            weight, is_eligible = self._weight_for(records.get(key))
+            keys.append(key)
+            weights.append(weight)
+            eligible += int(is_eligible)
+            hard += int(is_eligible and weight > 1.0)
+
+        intervention_allowed = recommendation in {"REINFORCE", "ADJUST_SAMPLING"}
+        active = bool(enabled and intervention_allowed and eligible > 0 and hard > 0)
+        if not enabled:
+            reason = "feature_disabled"
+        elif not intervention_allowed:
+            reason = "guidance_did_not_request_sampling"
+        elif eligible == 0:
+            reason = "insufficient_reliable_frame_metrics"
+        elif hard == 0:
+            reason = "no_hard_frames_detected"
+        else:
+            reason = "hard_example_sampling_active"
+        if not active:
+            weights = [1.0 for _ in weights]
+
+        total = sum(weights)
+        squared = sum(weight * weight for weight in weights)
+        effective_size = (total * total / squared) if squared > 0.0 else 0.0
+        return SamplingPlan(
+            active=active,
+            reason=reason,
+            weights=tuple(weights),
+            sample_keys=tuple(keys),
+            eligible_frames=eligible,
+            hard_frames=hard,
+            min_weight=round(min(weights), 4) if weights else 1.0,
+            max_weight=round(max(weights), 4) if weights else 1.0,
+            effective_sample_size=round(effective_size, 4),
+        )
+
+
+def compare_sampling_ab(plan: SamplingPlan) -> Dict[str, Any]:
+    """Deterministic distribution comparison; it does not claim model improvement."""
+    count = len(plan.weights)
+    if count == 0:
+        return {"sample_count": 0, "baseline_max_probability": 0.0, "experiment_max_probability": 0.0}
+    total = sum(plan.weights)
+    baseline_probability = 1.0 / count
+    experiment_probabilities = [weight / total for weight in plan.weights]
+    return {
+        "sample_count": count,
+        "active": plan.active,
+        "baseline_max_probability": round(baseline_probability, 8),
+        "experiment_max_probability": round(max(experiment_probabilities), 8),
+        "effective_sample_size": plan.effective_sample_size,
+        "hard_frames": plan.hard_frames,
+        "weight_ratio": round(plan.max_weight / max(plan.min_weight, 1e-8), 4),
+        "quality_improvement_claimed": False,
+    }
+
+
 def _training_stability(training_metrics: Mapping[str, Any]) -> Optional[float]:
     watched = ("g_loss", "d_loss", "l1_loss", "edge_loss", "lr")
     present = [key for key in watched if key in training_metrics]
@@ -519,6 +768,16 @@ class QualityGuidanceController:
         self.max_reinforcement_rounds = max(0, int(max_reinforcement_rounds))
         self.quality_history: List[Dict[str, Any]] = []
         self.decision_history: List[Dict[str, Any]] = []
+        self.frame_quality: Dict[str, Dict[str, Any]] = {}
+        self.sampling_weights: Dict[str, float] = {}
+        self.sampling_plan: Dict[str, Any] = {}
+        self.loss_multipliers: Dict[str, float] = {
+            "color": 1.0,
+            "alpha": 1.0,
+            "edge": 1.0,
+            "adversarial": 1.0,
+        }
+        self.intervention_count = 0
         self.history = self.decision_history  # Backward-compatible public alias.
         if state:
             self.load_state(state)
@@ -644,9 +903,11 @@ class QualityGuidanceController:
             "config": self.config.to_dict(),
             "last_action": self.decision_history[-1].get("action") if self.decision_history else "CONTINUE",
             "last_problem": self.decision_history[-1].get("primary_problem") if self.decision_history else None,
-            "intervention_count": 0,
-            "loss_multipliers": {"color": 1.0, "alpha": 1.0, "edge": 1.0, "adversarial": 1.0},
-            "sampling_weights": {},
+            "intervention_count": self.intervention_count,
+            "loss_multipliers": dict(self.loss_multipliers),
+            "sampling_weights": dict(self.sampling_weights),
+            "sampling_plan": dict(self.sampling_plan),
+            "frame_quality": {key: dict(value) for key, value in self.frame_quality.items()},
             "quality_history": list(self.quality_history),
             "decision_history": list(self.decision_history),
         }
@@ -665,6 +926,22 @@ class QualityGuidanceController:
         decision_history = state.get("decision_history", [])
         self.quality_history = [dict(item) for item in quality_history if isinstance(item, Mapping)][-self.config.max_history :]
         self.decision_history = [dict(item) for item in decision_history if isinstance(item, Mapping)][-self.config.max_history :]
+        frame_quality = state.get("frame_quality", {})
+        self.frame_quality = FrameQualityTracker(frame_quality).export() if isinstance(frame_quality, Mapping) else {}
+        sampling_weights = state.get("sampling_weights", {})
+        self.sampling_weights = {
+            str(key): min(2.0, max(1.0, float(value)))
+            for key, raw in sampling_weights.items()
+            if (value := _finite_number(raw)) is not None
+        } if isinstance(sampling_weights, Mapping) else {}
+        self.sampling_plan = dict(state.get("sampling_plan", {})) if isinstance(state.get("sampling_plan"), Mapping) else {}
+        loss_multipliers = state.get("loss_multipliers", {})
+        if isinstance(loss_multipliers, Mapping):
+            for key in self.loss_multipliers:
+                value = _finite_number(loss_multipliers.get(key))
+                if value is not None:
+                    self.loss_multipliers[key] = float(value)
+        self.intervention_count = max(0, int(_finite_number(state.get("intervention_count")) or 0))
         self.history = self.decision_history
 
 
@@ -672,6 +949,8 @@ __all__ = [
     "DEFAULT_CRITICAL_FLOORS",
     "DEFAULT_TARGETS",
     "GUIDANCE_ACTIONS",
+    "FrameQualityTracker",
+    "HardExampleMiningPolicy",
     "ENABLE_ADAPTIVE_LOSS",
     "ENABLE_QUALITY_CHECKPOINT",
     "ENABLE_QUALITY_GUIDANCE",
@@ -681,7 +960,10 @@ __all__ = [
     "QualityGuidanceController",
     "QualityTrendAnalyzer",
     "QualityVector",
+    "SamplingPlan",
     "build_quality_vector",
     "diagnose_quality_bottleneck",
+    "compare_sampling_ab",
+    "frame_quality_key",
     "normalize_quality_score",
 ]

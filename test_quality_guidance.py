@@ -3,10 +3,13 @@ import json
 import pytest
 
 from pixel_ai_engine.quality_guidance import (
+    FrameQualityTracker,
+    HardExampleMiningPolicy,
     QualityGuidanceConfig,
     QualityGuidanceController,
     QualityTrendAnalyzer,
     QualityVector,
+    compare_sampling_ab,
     build_quality_vector,
     diagnose_quality_bottleneck,
     normalize_quality_score,
@@ -214,3 +217,95 @@ def test_config_forces_observational_mode_during_increment_one():
     config = QualityGuidanceConfig(mode="active", targets={"face": 75})
     assert config.mode == "observational"
     assert config.targets["face"] == 75.0
+
+
+def test_frame_quality_tracker_uses_stable_keys_and_persists_ema():
+    tracker = FrameQualityTracker(ema_decay=0.5)
+    tracker.update("alex_rbchef", 7, 80, epoch=1, metrics={"color": 82, "silhouette": 78})
+    record = tracker.update("alex_rbchef", 7, 60, epoch=2, metrics={"color": 62}, confidence=0.9)
+
+    assert record is not None
+    assert record["quality"] == 70.0
+    assert record["observations"] == 2
+    assert record["confidence"] == 0.9
+    assert "alex_rbchef::frame_007" in tracker.export()
+
+    restored = FrameQualityTracker(json.loads(json.dumps(tracker.export())))
+    assert restored.export() == tracker.export()
+
+
+def test_frame_quality_tracker_rejects_invalid_measurements():
+    tracker = FrameQualityTracker()
+    assert tracker.update("a", 1, float("nan"), epoch=1) is None
+    assert tracker.update("a", 1, 50, epoch=1, confidence=0) is None
+    assert tracker.export() == {}
+
+
+def test_hard_example_weights_are_bounded_and_require_reliable_observations():
+    samples = [
+        {"char_id": "a", "frame_idx": 0},
+        {"char_id": "a", "frame_idx": 1},
+        {"char_id": "a", "frame_idx": 2},
+        {"char_id": "a", "frame_idx": 3},
+    ]
+    records = {
+        "a::frame_000": {"quality": 92, "observations": 3, "confidence": 1.0},
+        "a::frame_001": {"quality": 65, "observations": 3, "confidence": 1.0},
+        "a::frame_002": {"quality": 40, "observations": 3, "confidence": 1.0},
+        "a::frame_003": {"quality": 20, "observations": 1, "confidence": 1.0},
+    }
+    plan = HardExampleMiningPolicy().build_plan(samples, records, enabled=True)
+
+    assert plan.active is True
+    assert plan.weights[0] == 1.0
+    assert 1.5 <= plan.weights[1] <= 2.0
+    assert plan.weights[2] == 2.0
+    assert plan.weights[3] == 1.0
+    assert max(plan.weights) <= 2.0
+    assert min(plan.weights) >= 1.0
+
+
+def test_sampling_falls_back_to_uniform_until_metrics_are_reliable():
+    samples = [{"char_id": "a", "frame_idx": index} for index in range(3)]
+    records = {
+        f"a::frame_{index:03d}": {"quality": 20, "observations": 1, "confidence": 1.0}
+        for index in range(3)
+    }
+    plan = HardExampleMiningPolicy().build_plan(samples, records, enabled=True)
+    assert plan.active is False
+    assert plan.reason == "insufficient_reliable_frame_metrics"
+    assert plan.weights == (1.0, 1.0, 1.0)
+
+
+def test_sampling_ab_report_is_deterministic_and_does_not_claim_quality_gain():
+    samples = [{"char_id": "a", "frame_idx": index} for index in range(2)]
+    records = {
+        "a::frame_000": {"quality": 90, "observations": 2, "confidence": 1.0},
+        "a::frame_001": {"quality": 30, "observations": 2, "confidence": 1.0},
+    }
+    plan = HardExampleMiningPolicy().build_plan(samples, records, enabled=True)
+    report = compare_sampling_ab(plan)
+
+    assert report["baseline_max_probability"] == 0.5
+    assert report["experiment_max_probability"] > 0.5
+    assert report["weight_ratio"] <= 2.0
+    assert report["quality_improvement_claimed"] is False
+
+
+def test_frame_quality_persists_inside_backward_compatible_guidance_state():
+    tracker = FrameQualityTracker()
+    tracker.update("a", 0, 55, epoch=1)
+    tracker.update("a", 0, 50, epoch=2)
+    controller = QualityGuidanceController(
+        state={
+            "frame_quality": tracker.export(),
+            "sampling_weights": {"a::frame_000": 1.75},
+        }
+    )
+    state = controller.export_state()
+    assert state["frame_quality"]["a::frame_000"]["observations"] == 2
+    assert state["sampling_weights"]["a::frame_000"] == 1.75
+
+    legacy = QualityGuidanceController(state={}).export_state()
+    assert legacy["frame_quality"] == {}
+    assert legacy["sampling_weights"] == {}
