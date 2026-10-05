@@ -14,12 +14,14 @@ import os
 import sys
 import time
 import json
+import hashlib
 import urllib.parse
 import urllib.request
 import requests
 import threading
 import subprocess
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, Optional, List, Tuple
@@ -69,6 +71,7 @@ from pixel_ai_engine.frame_quality_review import (
 from pixel_ai_engine.frame_regeneration import FrameRegenerationManager
 from pixel_ai_engine.hard_examples import HardExampleQueue
 from pixel_ai_engine.interactive_qc import InteractiveQualityControlService
+from pixel_ai_engine.training_recovery import write_status_file
 
 PORT = 8080
 ACTIVE_JOB = {
@@ -99,6 +102,10 @@ ACCESS_LOG_FILE = PROJECT_ROOT / "training_logs" / "access.log"
 SERVER_LOCK_FILE = PROJECT_ROOT / ".sprite_studio.lock"
 ACCESS_LOG_LOCK = threading.Lock()
 KNOWN_ACCESS_CLIENTS = set()
+QUALITY_COMPARISON_CACHE: Dict[str, Dict[str, Any]] = {}
+QUALITY_COMPARISON_CACHE_LOCK = threading.RLock()
+QUALITY_REFERENCE_PALETTE_CACHE: Dict[Tuple[str, int, int], Any] = {}
+VISUAL_QUALITY_THRESHOLD = 85.0
 
 
 def write_access_event(client_ip: str, user_agent: str, event: str, target: str, details: str = "") -> None:
@@ -361,8 +368,7 @@ def check_gpu_training_status() -> Tuple[bool, Dict[str, Any]]:
 
             if state_changed and status_file.exists():
                 try:
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                    write_status_file(status_file, data)
                 except Exception:
                     pass
 
@@ -540,6 +546,7 @@ def run_pytorch_generation(
         if format_type == "8x12":
             candidates = [
                 get_active_recovery_checkpoint(),
+                CHECKPOINT_DIR / "best_quality_generator.pt",
                 CHECKPOINT_DIR / "best_generator.pt",
                 CHECKPOINT_DIR / "latest_checkpoint.pt",
                 CHECKPOINT_DIR / "base_generator_16x4.pt"
@@ -882,6 +889,221 @@ def save_run_metadata(
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
 
+def _quality_file_signature(path: Optional[Path]) -> Optional[Tuple[str, int, int]]:
+    if path is None or not path.is_file():
+        return None
+    stat = path.stat()
+    return (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _compare_run_against_dataset(
+    run_dir: Path,
+    enhanced_dir: Path,
+    metadata: Dict[str, Any],
+    format_type: str,
+    total_frames: int,
+) -> Dict[str, Any]:
+    """Compare every generated frame with its canonical dataset target.
+
+    This intentionally reuses QualityGate.evaluate_single_frame, the same target-aware
+    evaluator used by the interactive per-frame review queue. Results are cached using
+    generated/target mtimes because the live dashboard polls repeatedly.
+    """
+    assets_by_frame: Dict[int, Dict[str, Any]] = {}
+    signature_parts = []
+    for frame_idx in range(total_frames):
+        generated = enhanced_dir / f"frame_{frame_idx:03d}.png"
+        assets = FRAME_REVIEW_MANAGER.resolve_dataset_assets(metadata, frame_idx)
+        assets_by_frame[frame_idx] = assets
+        signature_parts.append((
+            frame_idx,
+            _quality_file_signature(generated),
+            _quality_file_signature(assets.get("target")),
+            _quality_file_signature(assets.get("reference")),
+        ))
+
+    cache_key = str(run_dir.resolve())
+    signature_payload = ("visual-qc-v3", format_type, tuple(signature_parts), VISUAL_QUALITY_THRESHOLD)
+    signature = hashlib.sha256(
+        json.dumps(signature_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    frame_signatures = {
+        str(part[0]): hashlib.sha256(
+            json.dumps(part, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        for part in signature_parts
+    }
+    previous_cache = None
+    with QUALITY_COMPARISON_CACHE_LOCK:
+        cached = QUALITY_COMPARISON_CACHE.get(cache_key)
+        if cached and cached.get("signature") == signature:
+            return cached["result"]
+        if isinstance(cached, dict):
+            previous_cache = cached
+    disk_cache_path = run_dir / ".quality_comparison_cache.json"
+    try:
+        disk_cache = json.loads(disk_cache_path.read_text(encoding="utf-8"))
+        if isinstance(disk_cache, dict) and disk_cache.get("signature") == signature and isinstance(disk_cache.get("result"), dict):
+            with QUALITY_COMPARISON_CACHE_LOCK:
+                QUALITY_COMPARISON_CACHE[cache_key] = disk_cache
+            return disk_cache["result"]
+        if isinstance(disk_cache, dict):
+            previous_cache = disk_cache
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    from pixel_ai_engine.quality_gate import QualityGate
+
+    comparisons: List[Dict[str, Any]] = []
+    missing_targets: List[Dict[str, Any]] = []
+    comparison_errors: List[Dict[str, Any]] = []
+    jobs = {}
+    shared_reference_palette = None
+    reference_path = next(
+        (Path(assets["reference"]) for assets in assets_by_frame.values() if assets.get("reference") and Path(assets["reference"]).is_file()),
+        None,
+    )
+    if reference_path is not None:
+        reference_signature = _quality_file_signature(reference_path)
+        with QUALITY_COMPARISON_CACHE_LOCK:
+            shared_reference_palette = QUALITY_REFERENCE_PALETTE_CACHE.get(reference_signature)
+        if shared_reference_palette is None:
+            try:
+                with Image.open(reference_path) as reference_image:
+                    shared_reference_palette = PixelArtEnhancer.extract_palette(reference_image.convert("RGBA"), max_colors=40)
+                with QUALITY_COMPARISON_CACHE_LOCK:
+                    QUALITY_REFERENCE_PALETTE_CACHE[reference_signature] = shared_reference_palette
+            except (OSError, ValueError):
+                shared_reference_palette = None
+
+    def evaluate_pair(frame_idx: int, generated: Path, assets: Dict[str, Any]) -> Dict[str, Any]:
+        audit = QualityGate.evaluate_single_frame(
+            generated,
+            assets["target"],
+            reference_front=assets.get("reference"),
+            reference_palette=shared_reference_palette,
+            frame_idx=frame_idx,
+            metadata=metadata,
+        )
+        info = get_frame_semantic_info(frame_idx, format_type)
+        return {
+            "frame": frame_idx,
+            "desc": info.get("action_desc", f"Frame {frame_idx}"),
+            "action": info.get("action", ""),
+            "direction": info.get("direction", ""),
+            "score": audit.get("score_total"),
+            "approved": bool(audit.get("aprobado")),
+            "quality": dict(audit.get("quality") or {}),
+            "issues": list(audit.get("issues") or []),
+            "severity": str(audit.get("severity") or "unknown"),
+            "diagnosis": dict(audit.get("diagnosis") or {}),
+            "target_frame_path": FRAME_REVIEW_MANAGER._relative(assets.get("target")),
+        }
+
+    workers = min(6, max(1, (os.cpu_count() or 2) // 2))
+    previous_frame_signatures = previous_cache.get("frame_signatures", {}) if isinstance(previous_cache, dict) else {}
+    previous_frame_results = previous_cache.get("frame_results", {}) if isinstance(previous_cache, dict) else {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="qc-visual") as executor:
+        for frame_idx, assets in assets_by_frame.items():
+            generated = enhanced_dir / f"frame_{frame_idx:03d}.png"
+            target = assets.get("target")
+            if target is None or not Path(target).is_file():
+                missing_targets.append({"frame": frame_idx, "reason": "target_not_found"})
+                continue
+            if not generated.is_file():
+                continue
+            frame_key = str(frame_idx)
+            if (
+                previous_frame_signatures.get(frame_key) == frame_signatures.get(frame_key)
+                and isinstance(previous_frame_results.get(frame_key), dict)
+            ):
+                comparisons.append(dict(previous_frame_results[frame_key]))
+                continue
+            jobs[executor.submit(evaluate_pair, frame_idx, generated, assets)] = frame_idx
+        for future in as_completed(jobs):
+            frame_idx = jobs[future]
+            try:
+                comparisons.append(future.result())
+            except Exception as exc:
+                comparison_errors.append({"frame": frame_idx, "reason": str(exc)[:240]})
+
+    comparisons.sort(key=lambda item: item["frame"])
+    missing_targets.sort(key=lambda item: item["frame"])
+    scores = [float(item["score"]) for item in comparisons if item.get("score") is not None]
+    failed_frames = [item for item in comparisons if not item.get("approved")]
+    dimension_values: Dict[str, List[float]] = {}
+    for item in comparisons:
+        for name, value in item.get("quality", {}).items():
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(number):
+                dimension_values.setdefault(str(name), []).append(number)
+    dimension_averages = {
+        name: round(float(np.mean(values)), 2)
+        for name, values in dimension_values.items()
+        if values
+    }
+
+    target_count = total_frames - len(missing_targets)
+    compared_count = len(scores)
+    conservative_score = round(float(np.percentile(scores, 20)), 2) if scores else None
+    average_score = round(float(np.mean(scores)), 2) if scores else None
+    worst_score = round(float(min(scores)), 2) if scores else None
+    target_coverage = round((target_count / total_frames) * 100.0, 2) if total_frames else 0.0
+    visual_certified = bool(
+        total_frames > 0
+        and target_count == total_frames
+        and compared_count == total_frames
+        and not failed_frames
+        and not comparison_errors
+        and conservative_score is not None
+        and conservative_score >= VISUAL_QUALITY_THRESHOLD
+    )
+    result = {
+        "available": compared_count > 0,
+        "method": "quality_gate_dataset_target_frame_by_frame",
+        "threshold": VISUAL_QUALITY_THRESHOLD,
+        "score": conservative_score,
+        "average_score": average_score,
+        "worst_score": worst_score,
+        "percentile": 20,
+        "target_coverage_pct": target_coverage,
+        "targets_found": target_count,
+        "frames_compared": compared_count,
+        "frames_passed": compared_count - len(failed_frames),
+        "frames_failed": len(failed_frames),
+        "dimension_averages": dimension_averages,
+        "failed_frames": failed_frames,
+        "missing_targets": missing_targets,
+        "comparison_errors": comparison_errors,
+        "certified": visual_certified,
+    }
+    cache_record = {
+        "signature": signature,
+        "result": result,
+        "frame_signatures": frame_signatures,
+        "frame_results": {str(item["frame"]): item for item in comparisons},
+    }
+    with QUALITY_COMPARISON_CACHE_LOCK:
+        if len(QUALITY_COMPARISON_CACHE) >= 8 and cache_key not in QUALITY_COMPARISON_CACHE:
+            QUALITY_COMPARISON_CACHE.pop(next(iter(QUALITY_COMPARISON_CACHE)))
+        QUALITY_COMPARISON_CACHE[cache_key] = cache_record
+    try:
+        temporary_cache = disk_cache_path.with_suffix(disk_cache_path.suffix + ".tmp")
+        with temporary_cache.open("w", encoding="utf-8") as handle:
+            json.dump(cache_record, handle, ensure_ascii=False, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_cache, disk_cache_path)
+    except OSError:
+        pass
+    return result
+
+
 def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any]:
     """Auditoria quirurgica completa del spritesheet generado o en borrador con diagnostico en vivo."""
     run_dir = Path(run_dir)
@@ -995,20 +1217,24 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
     alpha_purity_score = round(max(0, 100 - len(blurry_alpha_cells) * 1.5), 1)
     border_safety_score = round(max(0, 100 - len(border_touch_cells) * 2.0), 1)
 
-    is_ready = (
+    technical_ready = (
         completeness_score == 100.0 and
         len(border_touch_cells) == 0 and
         len(empty_cells) == 0 and
         len(blurry_alpha_cells) == 0 and
         alpha_purity_score >= 95.0
     )
+    visual_comparison = _compare_run_against_dataset(run_dir, enh_dir, meta, format_type, total)
+    is_ready = technical_ready and bool(visual_comparison.get("certified"))
     audit_logs = [
         f"[{time.strftime('%H:%M:%S')}] Iniciando auditoria quirurgica de {run_dir.name}...",
         f"[{time.strftime('%H:%M:%S')}] Formato de spritesheet: {format_type} ({total} frames esperados).",
         f"[{time.strftime('%H:%M:%S')}] Escaneando celdas en {enh_dir.name}...",
         f"[{time.strftime('%H:%M:%S')}] Frames generados validos: {valid_frames}/{total} ({completeness_score}% completitud).",
         f"[{time.strftime('%H:%M:%S')}] Pureza de canal alfa: {alpha_purity_score}% ({len(blurry_alpha_cells)} celdas con semitransparencia borrosa).",
-        f"[{time.strftime('%H:%M:%S')}] Seguridad de margenes (anti-sangrado): {border_safety_score}% ({len(border_touch_cells)} celdas tocando bordes)."
+        f"[{time.strftime('%H:%M:%S')}] Seguridad de margenes (anti-sangrado): {border_safety_score}% ({len(border_touch_cells)} celdas tocando bordes).",
+        f"[{time.strftime('%H:%M:%S')}] Comparacion visual contra dataset: {visual_comparison.get('frames_compared', 0)}/{total} frames; percentil 20 = {visual_comparison.get('score')}%; promedio = {visual_comparison.get('average_score')}%; peor = {visual_comparison.get('worst_score')}%.",
+        f"[{time.strftime('%H:%M:%S')}] Fidelidad visual: {visual_comparison.get('frames_failed', 0)} frames bajo el Quality Gate; cobertura de targets {visual_comparison.get('target_coverage_pct', 0)}%."
     ]
     if len(empty_cells) > 0:
         audit_logs.append(f"[{time.strftime('%H:%M:%S')}] AVISO: {len(empty_cells)} celdas vacias pendientes de generacion.")
@@ -1017,7 +1243,9 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
     if len(blurry_alpha_cells) > 0:
         audit_logs.append(f"[{time.strftime('%H:%M:%S')}] AVISO: {len(blurry_alpha_cells)} celdas con canal alfa semitransparente/borroso (no apto para Unity).")
     if is_ready:
-        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: SPRITESHEET CERTIFICADO 100% PARA UNITY (ALFA PURO Y SIN SANGRADO).")
+        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: SPRITESHEET TECNICA Y VISUALMENTE CERTIFICADO CONTRA EL DATASET.")
+    elif technical_ready and not visual_comparison.get("certified"):
+        audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: ESTRUCTURA TECNICA CORRECTA, PERO FIDELIDAD VISUAL INSUFICIENTE O SIN TARGETS COMPLETOS.")
     else:
         audit_logs.append(f"[{time.strftime('%H:%M:%S')}] VEREDICTO: BORRADOR / REVISION REQUERIDA ({completeness_score}% completado, {len(blurry_alpha_cells)} celdas con alfa defectuoso).")
 
@@ -1034,6 +1262,9 @@ def run_quality_audit(run_dir: Path, format_type: str = "8x12") -> Dict[str, Any
         "blurry_alpha_cells": blurry_alpha_cells,
         "alpha_purity_score": alpha_purity_score,
         "border_safety_score": border_safety_score,
+        "technical_ready": technical_ready,
+        "visual_comparison": visual_comparison,
+        "visual_quality_score": visual_comparison.get("score"),
         "is_ready_for_game": is_ready,
         "certified": is_ready,
         "metadata": meta,
@@ -1772,8 +2003,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 "dataset_layout": dataset_layout,
             }
             try:
-                with open(status_path, "w", encoding="utf-8") as f:
-                    json.dump(init_status, f, indent=2)
+                write_status_file(status_path, init_status)
             except Exception:
                 pass
 
@@ -1800,8 +2030,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                         with open(status_file, "r", encoding="utf-8") as f:
                             cur = json.load(f)
                         cur["status"] = "PAUSADO"
-                        with open(status_file, "w", encoding="utf-8") as f:
-                            json.dump(cur, f, indent=2)
+                        write_status_file(status_file, cur)
                     except Exception:
                         pass
                 self.send_json({"status": "paused", "message": "El entrenamiento ya se encuentra pausado y seguro."})
@@ -1813,8 +2042,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                     with open(status_file, "r", encoding="utf-8") as f:
                         cur = json.load(f)
                     cur["status"] = "PAUSANDO..."
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(cur, f, indent=2)
+                    write_status_file(status_file, cur)
                 except Exception:
                     pass
             self.send_json({"status": "pausing", "message": "Señal de pausa enviada. Completando época en curso para pausar en frontera limpia..."})
@@ -1869,8 +2097,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                     recovery = cur.get("recovery", {})
                     cur["status"] = "RECUPERANDO" if isinstance(recovery, dict) and recovery.get("active") else "REANUDANDO"
                     cur["timestamp"] = time.strftime("%H:%M:%S")
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(cur, f, indent=2)
+                    write_status_file(status_file, cur)
                 except Exception:
                     pass
 
@@ -1897,8 +2124,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                         with open(status_file, "r", encoding="utf-8") as f:
                             cur = json.load(f)
                         cur["status"] = "DETENIDO"
-                        with open(status_file, "w", encoding="utf-8") as f:
-                            json.dump(cur, f, indent=2)
+                        write_status_file(status_file, cur)
                     except Exception:
                         pass
                 self.send_json({"status": "stopped", "message": "El entrenamiento ya se encuentra detenido."})
@@ -1910,8 +2136,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                     with open(status_file, "r", encoding="utf-8") as f:
                         cur = json.load(f)
                     cur["status"] = "DETENIENDO..."
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(cur, f, indent=2)
+                    write_status_file(status_file, cur)
                 except Exception:
                     pass
             self.send_json({"status": "stopping", "message": "Señal de detención enviada al entrenamiento."})
@@ -1966,8 +2191,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                     cur["status"] = f"RESPAWN EPOCA {target_epoch}"
                     cur["epoch"] = target_epoch
                     cur["timestamp"] = time.strftime("%H:%M:%S")
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(cur, f, indent=2)
+                    write_status_file(status_file, cur)
                 except Exception:
                     pass
 

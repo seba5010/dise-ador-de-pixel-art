@@ -63,6 +63,7 @@ from pixel_ai_engine.training_recovery import (
     detect_training_instability,
     finite_positive,
     load_status_file,
+    retain_checkpoint_atomic,
     write_status_file,
 )
 
@@ -106,13 +107,31 @@ def _evaluate_observational_guidance(
     training_metrics: Dict[str, Any],
     previous_state: Optional[Dict[str, Any]] = None,
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    runtime_metrics = dict(training_metrics)
+    previous = previous_state if isinstance(previous_state, dict) else {}
+    cumulative_skips = max(0, int(runtime_metrics.get("skipped_amp_steps", 0) or 0))
+    previous_cumulative = max(0, int(previous.get("last_skipped_amp_steps", 0) or 0))
+    # AMP counters restart with the process, so a lower value means a new run.
+    current_delta = cumulative_skips if cumulative_skips < previous_cumulative else cumulative_skips - previous_cumulative
+    recent_skips = [
+        max(0, int(value))
+        for value in previous.get("amp_skip_history", [])
+        if isinstance(value, (int, float))
+    ][-4:]
+    recent_skips.append(current_delta)
+    runtime_metrics["skipped_amp_steps_window"] = sum(recent_skips)
+
     controller = QualityGuidanceController(state=previous_state)
     decision = controller.evaluate(
         quality,
-        training_metrics=training_metrics,
+        training_metrics=runtime_metrics,
         epoch=epoch,
     )
-    return decision, controller.export_state()
+    state = controller.export_state()
+    state["last_skipped_amp_steps"] = cumulative_skips
+    state["amp_skip_history"] = recent_skips
+    state["amp_skips_in_window"] = sum(recent_skips)
+    return decision, state
 
 
 def _dataset_sample_descriptors(dataset: Any) -> list[Dict[str, Any]]:
@@ -265,6 +284,98 @@ def _apply_intervention_policy(status_data: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+def _apply_authorized_lr_reduction(
+    status_data: Dict[str, Any],
+    optimizer_g: Any,
+    optimizer_d: Any,
+    scheduler_g: Any = None,
+    scheduler_d: Any = None,
+    *,
+    factor: float = 0.5,
+    minimum_lr: float = 1e-6,
+) -> tuple[Dict[str, Any], Optional[float]]:
+    """Apply a QC-authorized LR reduction and make it survive scheduler steps."""
+    data = dict(status_data)
+    guidance = data.get("guidance")
+    if not isinstance(guidance, dict) or guidance.get("authorized_action") != "REDUCE_LR":
+        return data, None
+
+    factor = min(1.0, max(0.05, float(factor)))
+    minimum_lr = max(0.0, float(minimum_lr))
+
+    def reduce_optimizer(optimizer: Any) -> list[float]:
+        values: list[float] = []
+        for group in getattr(optimizer, "param_groups", []):
+            old_lr = float(group.get("lr", minimum_lr))
+            new_lr = max(minimum_lr, old_lr * factor)
+            group["lr"] = new_lr
+            values.append(new_lr)
+        return values
+
+    generator_lrs = reduce_optimizer(optimizer_g)
+    discriminator_lrs = reduce_optimizer(optimizer_d)
+    for scheduler, values in ((scheduler_g, generator_lrs), (scheduler_d, discriminator_lrs)):
+        if scheduler is None or not values:
+            continue
+        if hasattr(scheduler, "base_lrs"):
+            scheduler.base_lrs = [max(minimum_lr, float(value) * factor) for value in scheduler.base_lrs]
+        if hasattr(scheduler, "_last_lr"):
+            scheduler._last_lr = list(values)
+
+    guidance = dict(guidance)
+    guidance["action"] = "REDUCE_LR"
+    guidance["training_modified"] = True
+    guidance["lr_change"] = {
+        "factor": factor,
+        "generator_lr": generator_lrs[0] if generator_lrs else None,
+        "discriminator_lr": discriminator_lrs[0] if discriminator_lrs else None,
+    }
+    data["guidance"] = guidance
+    data["quality_guidance"] = guidance
+    data["lr"] = generator_lrs[0] if generator_lrs else data.get("lr")
+    for entry in data.get("history", []):
+        if isinstance(entry, dict) and entry.get("epoch") == data.get("epoch"):
+            entry["guidance"] = guidance
+            entry["quality_guidance"] = guidance
+    return data, generator_lrs[0] if generator_lrs else None
+
+
+def _quality_is_critical(status_data: Dict[str, Any]) -> bool:
+    guidance = status_data.get("guidance")
+    return isinstance(guidance, dict) and str(guidance.get("severity", "")).lower() == "critical"
+
+
+def _approved_checkpoint_path() -> Optional[Path]:
+    for candidate in (
+        CHECKPOINT_DIR / "best_quality_generator.pt",
+        CHECKPOINT_DIR / "best_generator.pt",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _attach_model_approval(status_data: Dict[str, Any], *, final_critical: bool) -> Dict[str, Any]:
+    """Separate the resumable latest checkpoint from the model served to generation."""
+    data = dict(status_data)
+    selected = _approved_checkpoint_path()
+    selected_name = None
+    if selected is not None:
+        try:
+            selected_name = str(selected.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        except ValueError:
+            selected_name = str(selected)
+    data["model_approval"] = {
+        "approved": not final_critical,
+        "latest_rejected": bool(final_critical),
+        "selected_checkpoint": selected_name,
+        "reason": "final_quality_critical" if final_critical else "quality_gate_passed",
+    }
+    if final_critical:
+        data["status"] = "COMPLETADO_CON_ALERTA_QC"
+    return data
+
+
 def _guidance_state_from_checkpoint(
     status_data: Optional[Dict[str, Any]], checkpoint: Any, *, prefer_checkpoint: bool = False
 ) -> Optional[Dict[str, Any]]:
@@ -355,6 +466,44 @@ def _active_recovery_checkpoint(status_data: Dict[str, Any]) -> Optional[Path]:
     return resolved if resolved.is_file() else None
 
 
+def _last_quality_healthy_checkpoint(
+    history: Any,
+    failed_epoch: int,
+) -> Optional[Dict[str, Any]]:
+    """Return the exact latest epoch accepted by QC, when its full state was retained."""
+    checkpoint_file = CHECKPOINT_DIR / "last_quality_healthy_checkpoint.pt"
+    if not checkpoint_file.is_file():
+        return None
+    try:
+        checkpoint = torch.load(checkpoint_file, map_location="cpu")
+    except Exception:
+        return None
+    if not _checkpoint_is_complete(checkpoint):
+        return None
+    source_epoch = int(checkpoint.get("epoch", 0))
+    if source_epoch <= 0 or source_epoch >= int(failed_epoch):
+        return None
+    matching_entry = next(
+        (
+            entry for entry in reversed(history if isinstance(history, list) else [])
+            if isinstance(entry, dict) and int(entry.get("epoch", 0)) == source_epoch
+        ),
+        None,
+    )
+    if not isinstance(matching_entry, dict):
+        # Do not restore a checkpoint retained by a previous training era.
+        return None
+    guidance = matching_entry.get("guidance", matching_entry.get("quality_guidance"))
+    if isinstance(guidance, dict) and str(guidance.get("severity", "low")).lower() == "critical":
+        return None
+    return {
+        "epoch": source_epoch,
+        "path": checkpoint_file,
+        "selection": "latest_qc_healthy_epoch",
+        "checkpoint": checkpoint,
+    }
+
+
 def _checkpoint_is_complete(checkpoint: Any) -> bool:
     return (
         isinstance(checkpoint, dict)
@@ -439,12 +588,16 @@ def _materialize_recovery_route(
     rejected_metrics: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     failed_epoch = int(reason.get("failed_epoch", status_data.get("epoch", 0)))
-    recovery_plan = choose_recovery_snapshot(status_data.get("history", []), SNAPSHOTS_DIR, failed_epoch)
+    recovery_plan = _last_quality_healthy_checkpoint(status_data.get("history", []), failed_epoch)
+    if recovery_plan is None:
+        recovery_plan = choose_recovery_snapshot(status_data.get("history", []), SNAPSHOTS_DIR, failed_epoch)
     if recovery_plan is None:
         return None
 
     source_file = Path(recovery_plan["path"])
-    source_checkpoint = torch.load(source_file, map_location="cpu")
+    source_checkpoint = recovery_plan.get("checkpoint")
+    if not isinstance(source_checkpoint, dict):
+        source_checkpoint = torch.load(source_file, map_location="cpu")
     if not _checkpoint_is_complete(source_checkpoint):
         raise RuntimeError(f"El snapshot de recuperacion no contiene un estado completo: {source_file}")
     source_epoch = int(source_checkpoint.get("epoch", recovery_plan["epoch"]))
@@ -764,7 +917,7 @@ def get_available_snapshots():
                 pass
     return snaps
 
-def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None, guidance_runtime=None):
+def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None, guidance_runtime=None, reevaluate_guidance=True):
     elapsed = round(time.time() - start_time, 1)
     history = []
     past_eras = []
@@ -900,7 +1053,7 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     quality_guidance = prev_guidance if isinstance(prev_guidance, dict) else None
     if not ENABLE_QUALITY_GUIDANCE:
         quality_guidance = _disabled_guidance()
-    elif isinstance(quality, dict) and quality:
+    elif reevaluate_guidance and isinstance(quality, dict) and quality:
         try:
             quality_guidance, guidance_state = _evaluate_observational_guidance(
                 quality,
@@ -917,11 +1070,11 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                 previous_state=guidance_state,
             )
         except Exception as guidance_error:
-            # Guidance is observational: an audit error must never interrupt training.
+            # A broken audit must not corrupt the training state.
             quality_guidance = dict(quality_guidance or _disabled_guidance())
             quality_guidance.update({
                 "enabled": True,
-                "mode": "observational",
+                "mode": "enforcing",
                 "error": str(guidance_error),
                 "training_modified": False,
             })
@@ -1502,15 +1655,15 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 sdata["quality_guidance"] = sdata["guidance"]
                 sdata["epoch"] = 0
                 sdata["status"] = "INICIANDO"
-                with open(STATUS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(sdata, f, indent=2, allow_nan=False)
+                write_status_file(STATUS_FILE, sdata)
             except Exception as e:
                 print(f"[!] Aviso al archivar era previa: {e}")
 
         # Warm start: Si existe best_generator o base_generator, iniciar desde pesos entrenados
         warm_ckpt = _active_recovery_checkpoint(status_at_start)
         if warm_ckpt is None:
-            warm_ckpt = CHECKPOINT_DIR / "best_generator.pt"
+            quality_warm_start = CHECKPOINT_DIR / "best_quality_generator.pt"
+            warm_ckpt = quality_warm_start if quality_warm_start.exists() else CHECKPOINT_DIR / "best_generator.pt"
         if not warm_ckpt.exists():
             warm_ckpt = CHECKPOINT_DIR / "base_generator_16x4.pt"
         if warm_ckpt.exists():
@@ -1939,6 +2092,22 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         )
         published_status = _apply_intervention_policy(published_status)
         authorized_action = published_status.get("guidance", {}).get("authorized_action")
+        if authorized_action == "STOP":
+            published_status["status"] = "PAUSADO_QC"
+            published_status["error_details"] = {
+                "epoch": epoch,
+                "metric": "repeated_quality_collapse",
+                "error": "Control de Calidad pausó el entrenamiento tras una recaída crítica posterior al rollback.",
+            }
+            published_status = _attach_model_approval(published_status, final_critical=True)
+            published_status["status"] = "PAUSADO_QC"
+            write_status_file(STATUS_FILE, published_status)
+            print(
+                "\n[CONTROL DE CALIDAD] Segunda degradación crítica confirmada. "
+                "Entrenamiento pausado; el checkpoint degradado no fue aprobado.",
+                flush=True,
+            )
+            return
         if authorized_action == "ROLLBACK":
             # The existing TrainingRecovery machinery remains the sole owner of
             # snapshot selection, atomic copying, LR reduction and history repair.
@@ -1973,6 +2142,25 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 return
             published_status["guidance"]["authorized_action"] = "CONTINUE"
             published_status["guidance"]["intervention_policy"]["reason"] = "rollback_snapshot_unavailable"
+            intervention_state = published_status.get("guidance_state", {}).get("intervention_state")
+            if isinstance(intervention_state, dict):
+                intervention_state["rollback_count"] = max(0, int(intervention_state.get("rollback_count", 1)) - 1)
+                intervention_state["total_interventions"] = max(0, int(intervention_state.get("total_interventions", 1)) - 1)
+                intervention_state["critical_streak"] = 0
+                published_status["guidance_state"]["intervention_count"] = intervention_state["total_interventions"]
+        published_status, reduced_lr = _apply_authorized_lr_reduction(
+            published_status,
+            opt_g,
+            opt_d,
+            scheduler_g,
+            scheduler_d,
+        )
+        if reduced_lr is not None:
+            current_lr = reduced_lr
+            print(
+                f"\n[CONTROL DE CALIDAD] Learning rate reducido a {reduced_lr:.8f} por inestabilidad.",
+                flush=True,
+            )
         next_sampling_plan = _build_sampling_plan(
             dataset,
             frame_quality_tracker.export(),
@@ -2009,13 +2197,21 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f}, Best: {best_loss:.4f})")
 
         # Checkpoints de mejor rendimiento y ultimo (preservando siempre best_loss)
-        if avg_g < best_loss and math.isfinite(avg_g) and avg_g > 0.0:
+        if avg_g < best_loss and math.isfinite(avg_g) and avg_g > 0.0 and not _quality_is_critical(published_status):
             best_loss = avg_g
             save_checkpoint(CHECKPOINT_DIR / "best_generator.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             print(f"[*] ¡Nuevo mejor modelo registrado! G_Loss: {best_loss:.4f}")
 
         if math.isfinite(avg_g):
-            save_checkpoint(CHECKPOINT_DIR / "latest_checkpoint.pt", epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
+            latest_checkpoint = CHECKPOINT_DIR / "latest_checkpoint.pt"
+            save_checkpoint(latest_checkpoint, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
+            if not _quality_is_critical(published_status):
+                retain_checkpoint_atomic(
+                    latest_checkpoint,
+                    CHECKPOINT_DIR / "last_quality_healthy_checkpoint.pt",
+                )
+                published_status["last_quality_healthy_epoch"] = int(epoch)
+                write_status_file(STATUS_FILE, published_status)
             last_completed_epoch = epoch
 
         # Termostato Inteligente Adaptativo en Tiempo Real (Protección Dual: GPU <= 84°C, CPU <= 90°C)
@@ -2038,8 +2234,30 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             try: STOP_FLAG_FILE.unlink()
             except Exception: pass
         final_lr = float(opt_g.param_groups[0].get("lr", effective_lr))
-        update_status(last_completed_epoch, total_target_epochs, "COMPLETADO", avg_g, avg_d, avg_l1, avg_edge, start_time, final_lr, skipped_amp=skipped_amp_g + skipped_amp_d)
-        print("\n[OK] Ciclo de entrenamiento supervisado finalizado exitosamente.", flush=True)
+        final_status = update_status(
+            last_completed_epoch,
+            total_target_epochs,
+            "COMPLETADO",
+            avg_g,
+            avg_d,
+            avg_l1,
+            avg_edge,
+            start_time,
+            final_lr,
+            skipped_amp=skipped_amp_g + skipped_amp_d,
+            reevaluate_guidance=False,
+        )
+        final_critical = _quality_is_critical(final_status)
+        final_status = _attach_model_approval(final_status, final_critical=final_critical)
+        write_status_file(STATUS_FILE, final_status)
+        if final_critical:
+            print(
+                "\n[CONTROL DE CALIDAD] Ciclo finalizado, pero el último checkpoint fue rechazado. "
+                "Se conservará el mejor checkpoint aprobado para generación.",
+                flush=True,
+            )
+        else:
+            print("\n[OK] Ciclo de entrenamiento finalizado y aprobado por Control de Calidad.", flush=True)
     else:
         diag = "Ciclo finalizado con perdidas invalidas o no finitas."
         update_status(last_completed_epoch, total_target_epochs, "ERROR_NAN", None, None, None, None, start_time, effective_lr,

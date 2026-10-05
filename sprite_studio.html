@@ -791,6 +791,7 @@
     .qc-incident-item.border-issue { border-left: 3px solid var(--danger); }
     .qc-incident-item.empty-issue { border-left: 3px solid var(--warning); }
     .qc-incident-item.alpha-issue { border-left: 3px solid var(--accent2); }
+    .qc-incident-item.visual-issue { border-left: 3px solid #a78bfa; }
 
     .qc-tag {
       font-size: 9px;
@@ -830,6 +831,7 @@
     .fqr-summary-item { background:#10141e; border:1px solid #252d40; border-radius:6px; padding:9px 12px; }
     .fqr-summary-item strong { display:block; font:700 18px var(--mono); color:#fff; }
     .fqr-summary-item span { font-size:10px; color:var(--dim); text-transform:uppercase; }
+    .fqr-view-filters { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
     .fqr-list { display:grid; grid-template-columns:repeat(auto-fit, minmax(330px, 1fr)); gap:10px; }
     .fqr-card { background:#0f131c; border:1px solid #283044; border-left:4px solid #f59e0b; border-radius:7px; padding:12px; display:flex; flex-direction:column; gap:9px; }
     .fqr-card.OK, .fqr-card.APPROVED { border-left-color:#10b981; }
@@ -1478,6 +1480,21 @@
               <span id="qcBorderTouchCount">0 contactos</span>
             </div>
           </div>
+
+          <div class="monitor-card">
+            <div class="card-title">
+              <span>Fidelidad Visual vs Dataset (P20)</span>
+              <span id="qcVisualPill" class="stat-badge">SIN MEDIR</span>
+            </div>
+            <div class="metric-big" style="color:#a78bfa" id="qcVisualQuality">-- %</div>
+            <div class="progress-bar-bg" style="height:6px; background:#121622; border-radius:3px; overflow:hidden; margin-top:4px;">
+              <div id="qcVisualQualityBar" class="progress-bar-fill" style="height:100%; width:0%; background:#a78bfa; border-radius:3px; transition:width 0.4s ease;"></div>
+            </div>
+            <div style="font-size:11px; color:var(--dim); display:flex; justify-content:space-between; margin-top:4px; gap:8px;">
+              <span id="qcVisualDesc">Comparación frame a frame pendiente</span>
+              <span id="qcVisualFailedCount">0 deficientes</span>
+            </div>
+          </div>
         </div>
 
         <!-- SECCIÓN SPLIT: VISOR DE HOJA CON INCIDENCIAS + LISTA DESGLOSADA -->
@@ -1526,6 +1543,7 @@
             <!-- FILTRO DE INCIDENCIAS -->
             <div class="qc-filter-bar">
               <button class="qc-filter-btn active" id="filterAll" onclick="setQcFilter('all')">Todos (<span id="countAll">0</span>)</button>
+              <button class="qc-filter-btn" id="filterVisual" onclick="setQcFilter('visual')">Fidelidad (<span id="countVisual">0</span>)</button>
               <button class="qc-filter-btn" id="filterBorders" onclick="setQcFilter('borders')">Sangrado (<span id="countBorders">0</span>)</button>
               <button class="qc-filter-btn" id="filterEmpty" onclick="setQcFilter('empty')">Vacíos (<span id="countEmpty">0</span>)</button>
               <button class="qc-filter-btn" id="filterAlpha" onclick="setQcFilter('alpha')">Alfa (<span id="countAlpha">0</span>)</button>
@@ -1558,6 +1576,7 @@
               <div style="font-size:10px; color:var(--dim); margin-top:3px;">La regeneración crea candidatos aislados; el refuerzo se aplicará en un entrenamiento futuro y nunca usa el generado como target.</div>
             </div>
             <div class="fqr-toolbar-actions">
+              <button id="fqrSelectAllVisible" class="qc-mini-btn" onclick="toggleAllVisibleFrameReviews()">Seleccionar todos</button>
               <button id="fqrEvaluateSelected" class="qc-mini-btn" onclick="evaluateSelectedQcFrame()" disabled>Evaluar seleccionados</button>
               <button class="qc-mini-btn" onclick="refreshFrameReviewQueue()">Actualizar cola</button>
               <button id="fqrReevaluateAll" class="qc-mini-btn" onclick="startQcBatch('REEVALUATE_ALL')">Reevaluar todos</button>
@@ -1570,6 +1589,13 @@
             <div class="fqr-summary-item"><strong id="fqrApproved">0</strong><span>Aprobados</span></div>
             <div class="fqr-summary-item"><strong id="fqrRejected">0</strong><span>Rechazados</span></div>
             <div class="fqr-summary-item"><strong id="fqrTotal">0</strong><span>Total evaluados</span></div>
+          </div>
+          <div class="fqr-view-filters" aria-label="Filtrar tarjetas de revisión">
+            <button id="fqrFilterActive" class="qc-filter-btn active" onclick="setFrameReviewFilter('active')">Activos (<span id="fqrCountActive">0</span>)</button>
+            <button id="fqrFilterReinforcement" class="qc-filter-btn" onclick="setFrameReviewFilter('reinforcement')">En refuerzo (<span id="fqrCountReinforcement">0</span>)</button>
+            <button id="fqrFilterRejected" class="qc-filter-btn" onclick="setFrameReviewFilter('rejected')">Rechazados (<span id="fqrCountRejected">0</span>)</button>
+            <button id="fqrFilterApproved" class="qc-filter-btn" onclick="setFrameReviewFilter('approved')">Aprobados (<span id="fqrCountApproved">0</span>)</button>
+            <button id="fqrFilterHistory" class="qc-filter-btn" onclick="setFrameReviewFilter('history')">Historial (<span id="fqrCountHistory">0</span>)</button>
           </div>
           <div id="fqrMessage" style="font-size:11px; color:var(--dim);" role="status">Cola lista para cargar.</div>
           <div id="fqrBatchStatus" style="display:none;font:10px var(--mono);color:var(--accent);background:#101522;border:1px solid #27314a;border-radius:5px;padding:8px;align-items:center;justify-content:space-between;gap:8px;">
@@ -2317,6 +2343,7 @@
       selectedReviewIds: new Set(),
       selectionBusy: false,
       reviewQueue: [],
+      reviewFilter: "active",
       reviewSummary: {},
       capabilities: {},
       activeBatchJob: null
@@ -2351,6 +2378,61 @@
       return selected && selected !== 'auto' ? selected.replace(/\\/g, '/').split('/').pop() : '';
     }
 
+    const FQR_ACTIVE_STATUSES = new Set(['OK', 'NEEDS_REVIEW', 'REEVALUATED', 'REGENERATED', 'ERROR']);
+
+    function fqrReviewMatchesFilter(review, filter = qcState.reviewFilter) {
+      const status = String(review?.status || '');
+      if (filter === 'active') return FQR_ACTIVE_STATUSES.has(status);
+      if (filter === 'reinforcement') return status === 'SENT_TO_REINFORCEMENT';
+      if (filter === 'rejected') return status === 'REJECTED';
+      if (filter === 'approved') return status === 'APPROVED';
+      return true;
+    }
+
+    function fqrVisibleReviews() {
+      return (qcState.reviewQueue || []).filter(review => fqrReviewMatchesFilter(review));
+    }
+
+    function setFrameReviewFilter(filter) {
+      qcState.reviewFilter = filter;
+      const buttonIds = {
+        active: 'fqrFilterActive', reinforcement: 'fqrFilterReinforcement', rejected: 'fqrFilterRejected',
+        approved: 'fqrFilterApproved', history: 'fqrFilterHistory'
+      };
+      Object.entries(buttonIds).forEach(([name, id]) => {
+        document.getElementById(id)?.classList.toggle('active', name === filter);
+      });
+      clearQcSelection(true);
+      renderFrameReviewQueue();
+      updateQualitySelectionUi();
+      const message = document.getElementById('fqrMessage');
+      if (message) message.textContent = `Vista ${filter}: ${fqrVisibleReviews().length} tarjeta${fqrVisibleReviews().length === 1 ? '' : 's'}.`;
+    }
+
+    function toggleAllVisibleFrameReviews() {
+      const visible = fqrVisibleReviews();
+      if (!visible.length || qcState.selectionBusy) return;
+      const allSelected = visible.every(review => qcState.selectedReviewIds.has(String(review.review_id)));
+      visible.forEach(review => {
+        const reviewId = String(review.review_id);
+        const frame = Number(review.frame_idx);
+        if (allSelected) {
+          qcState.selectedReviewIds.delete(reviewId);
+          if (Number.isFinite(frame)) qcState.selectedCells.delete(frame);
+        } else {
+          qcState.selectedReviewIds.add(reviewId);
+          if (Number.isFinite(frame)) qcState.selectedCells.add(frame);
+        }
+      });
+      qcState.selectedCell = allSelected ? (qcSelectedFrameList().at(-1) ?? null) : Number(visible.at(-1)?.frame_idx);
+      refreshQcOverlaySelection();
+      updateQualitySelectionUi();
+      const message = document.getElementById('fqrMessage');
+      if (message) message.textContent = allSelected
+        ? 'Se deseleccionaron todas las tarjetas visibles.'
+        : `Se seleccionaron ${visible.length} tarjetas visibles.`;
+    }
+
     function qcSelectedFrameList() {
       return Array.from(qcState.selectedCells || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
     }
@@ -2380,7 +2462,8 @@
     function updateQualitySelectionUi() {
       const frames = qcSelectedFrameList();
       const frameCount = frames.length;
-      const reviewCount = qcState.selectedReviewIds.size;
+      const selectedReviews = qcState.reviewQueue.filter(review => qcState.selectedReviewIds.has(String(review.review_id)));
+      const reinforceCount = selectedReviews.filter(review => review.status !== 'APPROVED' && review.target_frame_path).length;
       const badge = document.getElementById('qcSelectedCellBadge');
       if (badge) {
         const preview = frames.slice(0, 6).map(frame => `#${String(frame).padStart(3, '0')}`).join(', ');
@@ -2394,8 +2477,15 @@
       });
       const reinforce = document.getElementById('fqrReinforceSelected');
       if (reinforce) {
-        reinforce.disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.manual_reinforcement || reviewCount === 0 || qcState.selectionBusy;
-        reinforce.textContent = reviewCount > 0 ? `Enviar ${reviewCount} seleccionado${reviewCount === 1 ? '' : 's'} a refuerzo` : 'Enviar seleccionados a refuerzo';
+        reinforce.disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.manual_reinforcement || reinforceCount === 0 || qcState.selectionBusy;
+        reinforce.textContent = reinforceCount > 0 ? `Enviar ${reinforceCount} seleccionado${reinforceCount === 1 ? '' : 's'} a refuerzo` : 'Enviar seleccionados a refuerzo';
+      }
+      const selectAll = document.getElementById('fqrSelectAllVisible');
+      if (selectAll) {
+        const visible = fqrVisibleReviews();
+        const allVisibleSelected = visible.length > 0 && visible.every(review => qcState.selectedReviewIds.has(String(review.review_id)));
+        selectAll.disabled = visible.length === 0 || qcState.selectionBusy;
+        selectAll.textContent = allVisibleSelected ? 'Deseleccionar todos' : 'Seleccionar todos';
       }
       document.querySelectorAll('.fqr-select').forEach(input => {
         input.checked = qcState.selectedReviewIds.has(input.value);
@@ -2443,7 +2533,7 @@
         qcState.capabilities = payload.capabilities || {};
         const validReviewIds = new Set(qcState.reviewQueue.map(review => String(review.review_id)));
         qcState.selectedReviewIds = new Set(Array.from(qcState.selectedReviewIds).filter(id => validReviewIds.has(String(id))));
-        qcState.reviewQueue.forEach(review => {
+        fqrVisibleReviews().forEach(review => {
           if (qcState.selectedCells.has(Number(review.frame_idx))) qcState.selectedReviewIds.add(String(review.review_id));
         });
         document.getElementById('fqrReevaluateAll').disabled = !qcState.capabilities.batch_actions;
@@ -2460,17 +2550,39 @@
 
     function renderFrameReviewQueue() {
       const summary = qcState.reviewSummary || {};
+      const filterButtons = {
+        active: 'fqrFilterActive', reinforcement: 'fqrFilterReinforcement', rejected: 'fqrFilterRejected',
+        approved: 'fqrFilterApproved', history: 'fqrFilterHistory'
+      };
+      Object.entries(filterButtons).forEach(([name, id]) => {
+        document.getElementById(id)?.classList.toggle('active', name === qcState.reviewFilter);
+      });
       document.getElementById('fqrPending').textContent = summary.pending ?? 0;
       document.getElementById('fqrApproved').textContent = summary.approved ?? 0;
       document.getElementById('fqrRejected').textContent = summary.rejected ?? 0;
       document.getElementById('fqrTotal').textContent = summary.total ?? 0;
+      const statusCounts = qcState.reviewQueue.reduce((counts, review) => {
+        const status = String(review.status || '');
+        counts[status] = (counts[status] || 0) + 1;
+        return counts;
+      }, {});
+      const activeCount = qcState.reviewQueue.filter(review => fqrReviewMatchesFilter(review, 'active')).length;
+      document.getElementById('fqrCountActive').textContent = activeCount;
+      document.getElementById('fqrCountReinforcement').textContent = statusCounts.SENT_TO_REINFORCEMENT || 0;
+      document.getElementById('fqrCountRejected').textContent = statusCounts.REJECTED || 0;
+      document.getElementById('fqrCountApproved').textContent = statusCounts.APPROVED || 0;
+      document.getElementById('fqrCountHistory').textContent = qcState.reviewQueue.length;
       const container = document.getElementById('fqrList');
       if (!container) return;
-      if (!qcState.reviewQueue.length) {
-        container.innerHTML = '<div style="color:var(--dim); font-size:11px; padding:12px;">No hay frames evaluados para esta ejecución.</div>';
+      const visibleReviews = fqrVisibleReviews();
+      if (!visibleReviews.length) {
+        const emptyText = qcState.reviewQueue.length
+          ? 'No hay tarjetas en esta vista. Los registros siguen disponibles en Historial.'
+          : 'No hay frames evaluados para esta ejecución.';
+        container.innerHTML = `<div style="color:var(--dim); font-size:11px; padding:12px;">${emptyText}</div>`;
         return;
       }
-      container.innerHTML = qcState.reviewQueue.map(review => {
+      container.innerHTML = visibleReviews.map(review => {
         const quality = review.quality || {};
         const metricNames = ['global', 'anatomy', 'silhouette', 'face', 'props', 'alpha', 'micro_detail', 'outline'];
         const metrics = metricNames.map(name => {
@@ -2574,6 +2686,7 @@
 
     async function frameReviewAction(reviewId, action) {
       const message = document.getElementById('fqrMessage');
+      const sourceReview = qcState.reviewQueue.find(review => String(review.review_id) === String(reviewId));
       if (action === 'reinforce' && !window.confirm('Se validará el target correcto y se añadirá este caso a refuerzo futuro. No se iniciará entrenamiento. ¿Continuar?')) return;
       if (message) message.textContent = `Aplicando ${action}...`;
       try {
@@ -2586,6 +2699,11 @@
         if (response.status === 202 && payload.job) {
           await pollQcBatch(payload.job.job_id);
         }
+        if (['reject', 'reinforce'].includes(action)) {
+          qcState.selectedReviewIds.delete(String(reviewId));
+          if (sourceReview) qcState.selectedCells.delete(Number(sourceReview.frame_idx));
+        }
+        if (['regenerate', 'apply-best'].includes(action)) qcState.reviewFilter = 'active';
         await refreshFrameReviewQueue();
         const resultingStatus = payload.review?.status || payload.status || 'completado';
         if (message) message.textContent = `Frame actualizado: ${resultingStatus}.`;
@@ -2622,7 +2740,13 @@
 
     async function startQcBatch(action) {
       document.querySelectorAll('.fqr-select:checked').forEach(input => qcState.selectedReviewIds.add(input.value));
-      const selected = Array.from(qcState.selectedReviewIds);
+      let selected = Array.from(qcState.selectedReviewIds);
+      if (action === 'REINFORCE_SELECTED') {
+        const eligible = new Set(qcState.reviewQueue
+          .filter(review => review.status !== 'APPROVED' && review.target_frame_path)
+          .map(review => String(review.review_id)));
+        selected = selected.filter(reviewId => eligible.has(String(reviewId)));
+      }
       if (action === 'REINFORCE_SELECTED' && selected.length === 0) {
         document.getElementById('fqrMessage').textContent = 'Selecciona al menos un frame para enviarlo a refuerzo.';
         return;
@@ -2640,6 +2764,8 @@
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'No se pudo iniciar el lote');
         await pollQcBatch(payload.job.job_id);
+        if (action.startsWith('REGENERATE')) qcState.reviewFilter = 'active';
+        clearQcSelection(true);
         await refreshFrameReviewQueue();
       } catch (error) {
         document.getElementById('fqrMessage').textContent = `Acción batch bloqueada: ${error.message}`;
@@ -2835,6 +2961,27 @@
       const touchCountEl = document.getElementById('qcBorderTouchCount');
       if (touchCountEl) touchCountEl.textContent = `${data.border_touch_cells.length} contactos`;
 
+      const visual = data.visual_comparison || {};
+      const visualScore = Number.isFinite(Number(visual.score)) ? Number(visual.score) : null;
+      const visualAverage = Number.isFinite(Number(visual.average_score)) ? Number(visual.average_score) : null;
+      const visualEl = document.getElementById('qcVisualQuality');
+      if (visualEl) visualEl.textContent = visualScore === null ? '-- %' : `${visualScore.toFixed(1)}%`;
+      const visualBar = document.getElementById('qcVisualQualityBar');
+      if (visualBar) visualBar.style.width = `${visualScore === null ? 0 : Math.min(100, Math.max(0, visualScore))}%`;
+      const visualPill = document.getElementById('qcVisualPill');
+      if (visualPill) {
+        visualPill.textContent = !visual.available ? 'SIN TARGETS' : visual.certified ? 'APROBADO' : 'REVISAR';
+        visualPill.style.color = visual.certified ? 'var(--success)' : 'var(--warning)';
+      }
+      const visualDesc = document.getElementById('qcVisualDesc');
+      if (visualDesc) {
+        visualDesc.textContent = visual.available
+          ? `${visual.frames_compared}/${data.total_frames_expected} comparados · promedio ${visualAverage === null ? '--' : visualAverage.toFixed(1)}% · cobertura ${visual.target_coverage_pct}%`
+          : `No se encontraron targets canónicos para ${data.character || 'este personaje'}`;
+      }
+      const visualFailedCount = document.getElementById('qcVisualFailedCount');
+      if (visualFailedCount) visualFailedCount.textContent = `${visual.frames_failed || 0} deficientes`;
+
       // Veredicto general
       const banner = document.getElementById('qcVerdictBanner');
       const icon = document.getElementById('qcVerdictIcon');
@@ -2854,8 +3001,8 @@
       } else if (data.is_ready_for_game) {
         if (banner) banner.className = "qc-verdict-banner ready";
         if (icon) icon.textContent = "✅";
-        if (title) title.textContent = "100% APTO PARA UNITY (SPRITESHEET CERTIFICADO)";
-        if (desc) desc.textContent = "Hoja completa, simetría y proporciones conservadas, canal alfa puro y márgenes 100% seguros sin sangrado inter-celdas.";
+        if (title) title.textContent = "APTO PARA JUEGO: ESTRUCTURA Y FIDELIDAD CERTIFICADAS";
+        if (desc) desc.textContent = `Hoja técnicamente válida y ${visual.frames_compared}/${data.total_frames_expected} frames aprobados contra sus targets del dataset (P20 ${visualScore?.toFixed(1)}%).`;
         if (badge) {
           badge.className = "qc-verdict-pill ready";
           badge.textContent = "LISTO PARA JUEGO";
@@ -2868,10 +3015,17 @@
         if (data.empty_cells.length > 0) issuesSummary.push(`${data.empty_cells.length} celdas vacías`);
         if (data.border_touch_cells.length > 0) issuesSummary.push(`${data.border_touch_cells.length} frames tocan bordes`);
         if (data.blurry_alpha_cells.length > 0) issuesSummary.push(`${data.blurry_alpha_cells.length} con alfa borroso`);
-        if (desc) desc.textContent = `Incidencias: ${issuesSummary.join(", ")}. Haz clic en las celdas problemáticas para inspeccionarlas o corregirlas.`;
+        if (visual.frames_failed > 0) issuesSummary.push(`${visual.frames_failed} frames con baja fidelidad visual`);
+        if ((visual.missing_targets || []).length > 0) issuesSummary.push(`${visual.missing_targets.length} targets ausentes`);
+        if (data.technical_ready && visual.available) {
+          if (title) title.textContent = `TÉCNICAMENTE CORRECTO, VISUALMENTE INSUFICIENTE: ${data.character?.toUpperCase() || 'SPRITESHEET'}`;
+        } else if (data.technical_ready && !visual.available) {
+          if (title) title.textContent = `SIN CERTIFICACIÓN VISUAL: ${data.character?.toUpperCase() || 'SPRITESHEET'}`;
+        }
+        if (desc) desc.textContent = `Incidencias: ${issuesSummary.join(", ") || 'comparación visual no disponible'}. La certificación exige estructura válida y comparación completa contra el dataset.`;
         if (badge) {
           badge.className = "qc-verdict-pill warning";
-          badge.textContent = "CALIBRACIÓN REQUERIDA";
+          badge.textContent = visual.available ? "FIDELIDAD A CORREGIR" : "TARGETS REQUERIDOS";
         }
       }
 
@@ -2887,12 +3041,23 @@
       rep += `Completitud: ${data.completeness_score}% (${data.valid_frames_count}/${data.total_frames_expected} frames generados)\n`;
       rep += `Pureza Alfa: ${data.alpha_purity_score}%\n`;
       rep += `Seguridad Márgenes: ${data.border_safety_score}%\n`;
-      rep += `Veredicto Juego: ${data.is_ready_for_game ? 'CERTIFICADO PARA UNITY' : 'BORRADOR / CORRECCIÓN REQUERIDA'}\n`;
+      rep += `Integridad técnica: ${data.technical_ready ? 'APROBADA' : 'RECHAZADA'}\n`;
+      rep += `Fidelidad visual P20: ${visualScore === null ? 'NO DISPONIBLE' : visualScore.toFixed(2) + '%'} | Promedio: ${visualAverage === null ? '--' : visualAverage.toFixed(2) + '%'} | Peor frame: ${visual.worst_score ?? '--'}%\n`;
+      rep += `Comparación dataset: ${visual.frames_compared || 0}/${data.total_frames_expected} frames | Fallidos: ${visual.frames_failed || 0} | Targets: ${visual.targets_found || 0}/${data.total_frames_expected}\n`;
+      rep += `Veredicto Juego: ${data.is_ready_for_game ? 'CERTIFICADO TÉCNICA Y VISUALMENTE' : 'CORRECCIÓN REQUERIDA'}\n`;
       if (data.border_touch_cells && data.border_touch_cells.length > 0) {
         rep += `Frames con contacto en bordes (${data.border_touch_cells.length}): ` + data.border_touch_cells.map(c => `#${c.frame}`).slice(0, 15).join(", ") + (data.border_touch_cells.length > 15 ? '...' : '') + `\n`;
       }
       if (data.empty_cells && data.empty_cells.length > 0) {
         rep += `Frames vacíos (${data.empty_cells.length}): ` + data.empty_cells.map(c => `#${typeof c === 'object' ? c.frame : c}`).slice(0, 15).join(", ") + `\n`;
+      }
+      if (visual.failed_frames && visual.failed_frames.length > 0) {
+        rep += `Frames con fidelidad insuficiente (${visual.failed_frames.length}): ` + visual.failed_frames
+          .slice()
+          .sort((a, b) => Number(a.score ?? 0) - Number(b.score ?? 0))
+          .slice(0, 20)
+          .map(item => `#${item.frame}=${item.score ?? '--'}%`)
+          .join(", ") + (visual.failed_frames.length > 20 ? '...' : '') + `\n`;
       }
       const repEl = document.getElementById('qcReportText');
       if (repEl) {
@@ -2941,6 +3106,7 @@
 
       const emptySet = new Set((data.empty_cells || []).map(e => (typeof e === 'object' ? e.frame : e)));
       const blurrySet = new Set((data.blurry_alpha_cells || []).map(a => (typeof a === 'object' ? a.frame : a)));
+      const visualFailureMap = new Map(((data.visual_comparison || {}).failed_frames || []).map(item => [Number(item.frame), item]));
 
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
@@ -2951,6 +3117,7 @@
           const hasBorderIssue = borderMap.has(fIdx);
           const isEmpty = emptySet.has(fIdx);
           const isBlurry = blurrySet.has(fIdx);
+          const hasVisualIssue = visualFailureMap.has(fIdx);
 
           const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
           g.setAttribute('data-frame', fIdx);
@@ -3020,6 +3187,10 @@
             rect.setAttribute('fill', 'rgba(78, 205, 196, 0.2)');
             rect.setAttribute('stroke', '#4ecdc4');
             rect.setAttribute('stroke-width', '1.5');
+          } else if (hasVisualIssue) {
+            rect.setAttribute('fill', 'rgba(139, 92, 246, 0.18)');
+            rect.setAttribute('stroke', '#a78bfa');
+            rect.setAttribute('stroke-width', '1.5');
           }
           rect.dataset.baseFill = rect.getAttribute('fill') || 'transparent';
           rect.dataset.baseStroke = rect.getAttribute('stroke') || 'transparent';
@@ -3034,6 +3205,7 @@
               let tag = `Frame #${fIdx}`;
               if (hasBorderIssue) tag += ` (⚠️ Sangrado en bordes)`;
               else if (isEmpty) tag += ` (⚠️ Celda vacía)`;
+              else if (hasVisualIssue) tag += ` (Fidelidad ${visualFailureMap.get(fIdx).score ?? '--'}%)`;
               else tag += ` (✅ Seguro)`;
               badge.textContent = tag;
             }
@@ -3058,10 +3230,13 @@
       const borderIssues = data.border_touch_cells || [];
       const emptyIssues = data.empty_cells || [];
       const alphaIssues = data.blurry_alpha_cells || [];
+      const visualIssues = (data.visual_comparison || {}).failed_frames || [];
 
       // Actualizar contadores en botones de filtro
       const cAll = document.getElementById('countAll');
-      if (cAll) cAll.textContent = borderIssues.length + emptyIssues.length + alphaIssues.length;
+      if (cAll) cAll.textContent = borderIssues.length + emptyIssues.length + alphaIssues.length + visualIssues.length;
+      const cVisual = document.getElementById('countVisual');
+      if (cVisual) cVisual.textContent = visualIssues.length;
       const cBorders = document.getElementById('countBorders');
       if (cBorders) cBorders.textContent = borderIssues.length;
       const cEmpty = document.getElementById('countEmpty');
@@ -3069,11 +3244,16 @@
       const cAlpha = document.getElementById('countAlpha');
       if (cAlpha) cAlpha.textContent = alphaIssues.length;
 
-      const totalIncidents = borderIssues.length + emptyIssues.length + alphaIssues.length;
+      const totalIncidents = borderIssues.length + emptyIssues.length + alphaIssues.length + visualIssues.length;
       const badge = document.getElementById('qcIncidentCountBadge');
       if (badge) badge.textContent = `${totalIncidents} incidencias`;
 
       let items = [];
+      if (qcState.activeFilter === 'all' || qcState.activeFilter === 'visual') {
+        visualIssues.forEach(v => {
+          items.push({ type: 'visual', frame: v.frame, desc: v.desc, data: v });
+        });
+      }
       if (qcState.activeFilter === 'all' || qcState.activeFilter === 'borders') {
         borderIssues.forEach(b => {
           items.push({ type: 'border', frame: b.frame, desc: b.desc, data: b });
@@ -3101,7 +3281,7 @@
           <div style="padding:30px 16px; text-align:center; color:var(--dim); font-size:12px;">
             <div style="font-size:24px; margin-bottom:8px;">🎉</div>
             <div style="font-weight:600; color:var(--success); margin-bottom:4px;">¡Sin incidencias en esta categoría!</div>
-            <div>Todos los frames cumplen los estándares quirúrgicos para Unity.</div>
+            <div>Este filtro no contiene incidencias detectadas.</div>
           </div>
         `;
         return;
@@ -3126,6 +3306,10 @@
           tagsHtml = '<span class="qc-tag warning">⚠️ Celda Vacía</span>';
         } else if (item.type === 'alpha') {
           tagsHtml = '<span class="qc-tag info">Alfa Borroso</span>';
+        } else if (item.type === 'visual') {
+          const score = item.data.score === null || item.data.score === undefined ? '--' : Number(item.data.score).toFixed(1);
+          const primary = item.data.diagnosis?.primary_problem || item.data.issues?.[0] || 'fidelidad';
+          tagsHtml = `<span class="qc-tag warning">Fidelidad ${score}%</span> <span class="qc-tag danger">${primary}</span>`;
         }
 
         div.innerHTML = `

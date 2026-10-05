@@ -47,6 +47,7 @@ class QualityGate:
         target_frame=None,
         *,
         reference_front=None,
+        reference_palette=None,
         frame_idx=None,
         metadata=None,
     ) -> Dict[str, Any]:
@@ -118,7 +119,9 @@ class QualityGate:
         if generated.size != target.size:
             target = target.resize(generated.size, Image.Resampling.NEAREST)
 
-        palette = PixelArtEnhancer.extract_palette(identity, max_colors=40) if identity is not None else None
+        palette = reference_palette
+        if palette is None and identity is not None:
+            palette = PixelArtEnhancer.extract_palette(identity, max_colors=40)
         raw_metrics = PixelArtEnhancer.analyze_quality(
             generated,
             identity_img=identity,

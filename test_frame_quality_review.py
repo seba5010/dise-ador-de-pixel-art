@@ -214,6 +214,84 @@ def test_quality_gate_never_approves_without_target(tmp_path):
     assert result["diagnosis"]["reason"] == "target_not_found"
 
 
+def test_sheet_audit_uses_dataset_comparison_and_blocks_false_technical_100(tmp_path, monkeypatch):
+    import sprite_studio
+
+    run = tmp_path / "output" / "run_001"
+    generated_dir = run / "enhanced_frames"
+    target_dir = tmp_path / "dataset_frames_individuales" / "ADA" / "ada_ropa_normal"
+    generated_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+    frames = []
+    for frame_idx in range(64):
+        generated = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        target = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        for x in range(4, 12):
+            for y in range(3, 13):
+                generated.putpixel((x, y), (180, 40, 40, 255))
+                target.putpixel((x, y), (40, 80, 180, 255))
+        generated.save(generated_dir / f"frame_{frame_idx:03d}.png")
+        target_name = f"frame_{frame_idx + 1:03d}.png"
+        target.save(target_dir / target_name)
+        frames.append({"slot": frame_idx + 1, "file": target_name})
+    (run / "metadata.json").write_text(
+        json.dumps({"character": "Ada", "variant": "rnormal", "format": "16x4"}),
+        encoding="utf-8",
+    )
+    (target_dir / "manifest.json").write_text(
+        json.dumps({"character": "Ada", "variant": "rnormal", "frames": frames}),
+        encoding="utf-8",
+    )
+    supervised = tmp_path / "dataset_supervisado"
+    supervised.mkdir()
+    manager = FrameQualityReviewManager(
+        tmp_path / "reviews.jsonl",
+        project_root=tmp_path,
+        output_root=tmp_path / "output",
+        dataset_frames_root=tmp_path / "dataset_frames_individuales",
+        supervised_root=supervised,
+    )
+
+    evaluator_calls = {"count": 0}
+
+    def low_fidelity(*_args, **_kwargs):
+        evaluator_calls["count"] += 1
+        return {
+            "audit_available": True,
+            "aprobado": False,
+            "score_total": 42.0,
+            "quality": {"global": 42.0, "anatomy": 35.0, "silhouette": 55.0},
+            "issues": ["BODY_STRUCTURE_FAIL"],
+            "severity": "critical",
+            "diagnosis": {"primary_problem": "anatomy", "severity": "critical"},
+        }
+
+    monkeypatch.setattr(sprite_studio, "FRAME_REVIEW_MANAGER", manager)
+    monkeypatch.setattr(QualityGate, "evaluate_single_frame", staticmethod(low_fidelity))
+    sprite_studio.QUALITY_COMPARISON_CACHE.clear()
+
+    audit = sprite_studio.run_quality_audit(run, "16x4")
+
+    assert audit["completeness_score"] == 100.0
+    assert audit["alpha_purity_score"] == 100.0
+    assert audit["border_safety_score"] == 100.0
+    assert audit["technical_ready"] is True
+    assert audit["visual_quality_score"] == 42.0
+    assert audit["visual_comparison"]["frames_compared"] == 64
+    assert audit["visual_comparison"]["frames_failed"] == 64
+    assert audit["is_ready_for_game"] is False
+    assert audit["certified"] is False
+
+    sprite_studio.run_quality_audit(run, "16x4")
+    assert evaluator_calls["count"] == 64
+
+    changed = Image.open(generated_dir / "frame_000.png").convert("RGBA")
+    changed.putpixel((5, 5), (200, 60, 60, 255))
+    changed.save(generated_dir / "frame_000.png")
+    sprite_studio.run_quality_audit(run, "16x4")
+    assert evaluator_calls["count"] == 65
+
+
 def _json_request(url, *, method="GET", payload=None):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(

@@ -178,7 +178,7 @@ def test_regression_escalates_severity_even_when_latest_score_is_acceptable():
     assert diagnosis["severity"] == "medium"
 
 
-def test_observational_controller_recommends_but_never_modifies_training():
+def test_enforcing_controller_reports_recommendation_without_mutating_by_itself():
     controller = QualityGuidanceController()
     decision = controller.evaluate(
         {
@@ -194,7 +194,7 @@ def test_observational_controller_recommends_but_never_modifies_training():
         epoch=40,
     )
 
-    assert decision["mode"] == "observational"
+    assert decision["mode"] == "enforcing"
     assert decision["primary_problem"] == "face"
     assert decision["severity"] == "critical"
     assert decision["recommended_action"] == "ROLLBACK"
@@ -216,9 +216,9 @@ def test_controller_state_round_trip_is_backward_compatible():
     assert empty.export_state()["last_action"] == "CONTINUE"
 
 
-def test_config_forces_observational_mode_during_increment_one():
+def test_config_migrates_legacy_modes_to_enforcing():
     config = QualityGuidanceConfig(mode="active", targets={"face": 75})
-    assert config.mode == "observational"
+    assert config.mode == "enforcing"
     assert config.targets["face"] == 75.0
 
 
@@ -362,20 +362,48 @@ def test_loss_ab_report_preserves_baseline_and_makes_no_quality_claim():
     assert report["quality_improvement_claimed"] is False
 
 
-def test_intervention_policy_requires_sustained_collapse_for_rollback():
+def test_intervention_policy_confirms_critical_regression_or_accepts_immediate_collapse():
     policy = GuidanceInterventionPolicy(cooldown_epochs=5, max_consecutive=3)
-    critical_only = policy.decide(
+    first_critical = policy.decide(
         10,
-        {"recommended_action": "ROLLBACK", "trend": {"status": "REGRESSION"}},
+        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "REGRESSION"}},
+    )
+    confirmed = policy.decide(
+        11,
+        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "REGRESSION"}},
+        first_critical["state"],
     )
     sustained = policy.decide(
         10,
-        {"recommended_action": "ROLLBACK", "trend": {"status": "COLLAPSE"}},
+        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "COLLAPSE"}},
     )
 
-    assert critical_only["authorized_action"] == "CONTINUE"
-    assert critical_only["reason"] == "rollback_requires_sustained_collapse"
+    assert first_critical["authorized_action"] == "CONTINUE"
+    assert first_critical["reason"] == "awaiting_critical_confirmation"
+    assert confirmed["authorized_action"] == "ROLLBACK"
     assert sustained["authorized_action"] == "ROLLBACK"
+
+
+def test_intervention_policy_stops_after_a_post_rollback_quality_collapse():
+    policy = GuidanceInterventionPolicy(max_rollbacks=1)
+    decision = policy.decide(
+        20,
+        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "COLLAPSE"}},
+        {"rollback_count": 1},
+    )
+
+    assert decision["authorized_action"] == "STOP"
+    assert decision["reason"] == "quality_stop_after_repeated_collapse"
+
+
+def test_intervention_policy_can_authorize_learning_rate_reduction():
+    policy = GuidanceInterventionPolicy()
+    decision = policy.decide(
+        20,
+        {"recommended_action": "REDUCE_LR", "severity": "high", "trend": {"status": "REGRESSION"}},
+    )
+
+    assert decision["authorized_action"] == "REDUCE_LR"
 
 
 def test_intervention_policy_enforces_cooldown_and_maximum():

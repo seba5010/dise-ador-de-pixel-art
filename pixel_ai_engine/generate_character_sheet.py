@@ -232,17 +232,19 @@ def generate_spritesheet(input_image_path: Path,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generar Spritesheet completo de 96 frames (8x12) o 64 frames (16x4) a partir de un personaje frontal")
     parser.add_argument("--input", "-i", type=str, required=True, help="Ruta a la imagen frontal del personaje (ej: belial/belial_rnormal.png o mauricio_rnormal.png)")
-    parser.add_argument("--checkpoint", "-c", type=str, default=str(CHECKPOINT_DIR / "best_generator.pt"), help="Ruta al checkpoint del generador (.pt)")
+    parser.add_argument("--checkpoint", "-c", type=str, default=str(CHECKPOINT_DIR / "best_quality_generator.pt"), help="Ruta al checkpoint del generador (.pt)")
     parser.add_argument("--output", "-o", type=str, default=None, help="Ruta de salida para la hoja de sprites generada")
     parser.add_argument("--template", "-t", type=str, default=None, help="Ruta a plantilla personalizada (opcional)")
     parser.add_argument("--phase", "-p", type=str, default="2", choices=["1", "2"], help="Fase / Formato: '2' para 8x12 (96 frames, por defecto), '1' para 16x4 (64 frames)")
     parser.add_argument("--alpha-threshold", type=int, default=60, help="Umbral de recorte alfa para pixel art (0-255)")
     args = parser.parse_args()
 
-    # Si no se encuentra best_generator.pt, intentar latest_checkpoint.pt o base_generator_16x4.pt
+    # Si no existe el mejor checkpoint visual, usar el mejor loss antes que el último.
     ckpt_path = Path(args.checkpoint)
     if not ckpt_path.exists():
-        fallback_ckpt = CHECKPOINT_DIR / "latest_checkpoint.pt"
+        fallback_ckpt = CHECKPOINT_DIR / "best_generator.pt"
+        if not fallback_ckpt.exists():
+            fallback_ckpt = CHECKPOINT_DIR / "latest_checkpoint.pt"
         if not fallback_ckpt.exists():
             fallback_ckpt = CHECKPOINT_DIR / "base_generator_16x4.pt"
         if fallback_ckpt.exists():

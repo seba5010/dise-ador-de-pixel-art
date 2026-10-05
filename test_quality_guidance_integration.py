@@ -58,7 +58,7 @@ def _publish(epoch, face):
     )
 
 
-def test_status_persists_observational_guidance_and_epoch_history(monkeypatch, tmp_path):
+def test_status_persists_enforcing_guidance_and_epoch_history(monkeypatch, tmp_path):
     status_file = _configure_status_test(monkeypatch, tmp_path)
 
     status = _publish(1, 71)
@@ -67,7 +67,7 @@ def test_status_persists_observational_guidance_and_epoch_history(monkeypatch, t
     persisted = json.loads(status_file.read_text(encoding="utf-8"))
 
     assert status == persisted
-    assert persisted["guidance"]["mode"] == "observational"
+    assert persisted["guidance"]["mode"] == "enforcing"
     assert persisted["guidance"]["action"] == "CONTINUE"
     assert persisted["guidance"]["recommended_action"] == "ROLLBACK"
     assert persisted["guidance"]["training_modified"] is False
@@ -376,6 +376,108 @@ def test_intervention_policy_state_is_attached_for_resume():
     assert status["history"][0]["guidance"]["authorized_action"] == "ROLLBACK"
 
 
+def test_amp_stability_uses_recent_window_instead_of_lifetime_total():
+    decision, state = train_supervised._evaluate_observational_guidance(
+        {"score_total": 80},
+        epoch=31,
+        training_metrics={
+            "g_loss": 0.2,
+            "d_loss": 0.4,
+            "l1_loss": 0.06,
+            "edge_loss": 0.003,
+            "lr": 1e-4,
+            "skipped_amp_steps": 31,
+        },
+        previous_state={
+            "last_skipped_amp_steps": 30,
+            "amp_skip_history": [1, 0, 2, 0],
+        },
+    )
+
+    assert decision["quality_vector"]["training_stability"] == 92.0
+    assert state["amp_skips_in_window"] == 4
+
+
+def test_authorized_reduce_lr_changes_optimizers_and_status():
+    class Optimizer:
+        def __init__(self, lr):
+            self.param_groups = [{"lr": lr}]
+
+    class Scheduler:
+        def __init__(self, lr):
+            self.base_lrs = [lr]
+            self._last_lr = [lr]
+
+    opt_g = Optimizer(1e-4)
+    opt_d = Optimizer(5e-5)
+    sched_g = Scheduler(1e-4)
+    sched_d = Scheduler(5e-5)
+    status, reduced = train_supervised._apply_authorized_lr_reduction(
+        {"epoch": 8, "history": [{"epoch": 8}], "guidance": {"authorized_action": "REDUCE_LR"}},
+        opt_g,
+        opt_d,
+        sched_g,
+        sched_d,
+    )
+
+    assert reduced == 5e-5
+    assert opt_g.param_groups[0]["lr"] == 5e-5
+    assert opt_d.param_groups[0]["lr"] == 2.5e-5
+    assert status["guidance"]["training_modified"] is True
+    assert status["guidance"]["lr_change"]["generator_lr"] == 5e-5
+
+
+def test_final_critical_status_rejects_latest_and_selects_best_quality(tmp_path, monkeypatch):
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    best_quality = checkpoint_dir / "best_quality_generator.pt"
+    best_quality.write_bytes(b"checkpoint")
+    monkeypatch.setattr(train_supervised, "CHECKPOINT_DIR", checkpoint_dir)
+
+    status = train_supervised._attach_model_approval(
+        {"status": "COMPLETADO", "guidance": {"severity": "critical"}},
+        final_critical=True,
+    )
+
+    assert status["status"] == "COMPLETADO_CON_ALERTA_QC"
+    assert status["model_approval"]["approved"] is False
+    assert status["model_approval"]["latest_rejected"] is True
+    assert status["model_approval"]["selected_checkpoint"].endswith("best_quality_generator.pt")
+
+
+def test_recovery_can_restore_the_exact_latest_qc_healthy_epoch(tmp_path, monkeypatch):
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    monkeypatch.setattr(train_supervised, "CHECKPOINT_DIR", checkpoint_dir)
+    healthy_file = checkpoint_dir / "last_quality_healthy_checkpoint.pt"
+    torch.save(
+        {
+            "epoch": 15,
+            "loss": 0.15,
+            "generator": {"weight": torch.tensor([1.0])},
+            "discriminator": {"weight": torch.tensor([1.0])},
+        },
+        healthy_file,
+    )
+    history = [
+        {
+            "epoch": 15,
+            "guidance": {"severity": "medium", "recommended_action": "REINFORCE"},
+        },
+        {
+            "epoch": 19,
+            "guidance": {"severity": "critical", "recommended_action": "ROLLBACK"},
+        },
+    ]
+
+    selected = train_supervised._last_quality_healthy_checkpoint(history, failed_epoch=19)
+
+    assert selected is not None
+    assert selected["epoch"] == 15
+    assert selected["selection"] == "latest_qc_healthy_epoch"
+    assert train_supervised._last_quality_healthy_checkpoint([], failed_epoch=19) is None
+
+
 def test_policy_authorization_prevents_simultaneous_sampling_and_loss(monkeypatch):
     monkeypatch.setattr(train_supervised, "ENABLE_SMART_SAMPLING", True)
     monkeypatch.setattr(train_supervised, "ENABLE_ADAPTIVE_LOSS", True)
@@ -509,14 +611,14 @@ def test_cpu_smoke_training_completes_and_resumes_with_guidance(monkeypatch, tmp
 
     train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="start")
     first = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
-    assert first["status"] == "COMPLETADO"
+    assert first["status"] == "COMPLETADO_CON_ALERTA_QC"
     assert first["epoch"] == 1
     assert first["guidance"]["action"] == "CONTINUE"
     assert (checkpoint_dir / "latest_checkpoint.pt").is_file()
 
     train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="resume")
     resumed = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
-    assert resumed["status"] == "COMPLETADO"
+    assert resumed["status"] == "COMPLETADO_CON_ALERTA_QC"
     assert resumed["epoch"] == 2
     assert [entry["epoch"] for entry in resumed["history"]] == [1, 2]
     assert len(resumed["guidance_state"]["quality_history"]) == 2
@@ -542,6 +644,6 @@ def test_cpu_smoke_training_completes_and_resumes_with_guidance(monkeypatch, tmp
     monkeypatch.setattr(train_supervised, "PAUSE_FLAG_FILE", tmp_path / "pause-after-resume.flag")
     train_supervised.train_supervised_model(epochs=1, batch_size=1, lr=1e-4, mode="resume")
     after_pause = json.loads(train_supervised.STATUS_FILE.read_text(encoding="utf-8"))
-    assert after_pause["status"] == "COMPLETADO"
+    assert after_pause["status"] == "COMPLETADO_CON_ALERTA_QC"
     assert after_pause["epoch"] == 4
     assert [entry["epoch"] for entry in after_pause["history"]] == [1, 2, 3, 4]

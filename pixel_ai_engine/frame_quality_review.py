@@ -122,6 +122,8 @@ class FrameQualityReviewManager:
         self.supervised_root = Path(supervised_root or (root / "dataset_supervisado")).resolve()
         self._evaluator = evaluator
         self._lock = threading.RLock()
+        self._dataset_index_lock = threading.RLock()
+        self._dataset_manifest_index: Optional[Dict[tuple[str, str], tuple[Path, Dict[str, Any]]]] = None
 
     @staticmethod
     def validate_status(status: Any) -> str:
@@ -305,22 +307,33 @@ class FrameQualityReviewManager:
                     break
         return character, _variant_code(variant)
 
+    def _get_dataset_manifest_index(self) -> Dict[tuple[str, str], tuple[Path, Dict[str, Any]]]:
+        """Index dataset manifests once so a full 64/96-frame audit stays responsive."""
+        with self._dataset_index_lock:
+            if self._dataset_manifest_index is not None:
+                return self._dataset_manifest_index
+            index: Dict[tuple[str, str], tuple[Path, Dict[str, Any]]] = {}
+            if self.dataset_frames_root.is_dir():
+                for manifest_path in self.dataset_frames_root.rglob("manifest.json"):
+                    try:
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(manifest, dict):
+                        continue
+                    key = (_slug(manifest.get("character")), _variant_code(manifest.get("variant")))
+                    if key[0] and key[1] and key not in index:
+                        index[key] = (manifest_path, manifest)
+            self._dataset_manifest_index = index
+            return index
+
     def resolve_dataset_assets(self, metadata: Mapping[str, Any], frame_idx: int) -> Dict[str, Any]:
         character, variant = self._identity_from_metadata(metadata)
         character_slug = _slug(character)
         if not character_slug or not variant:
             return {"character_id": character or None, "variant": variant or None, "target": None, "reference": None}
 
-        matching_manifest = None
-        if self.dataset_frames_root.is_dir():
-            for manifest_path in self.dataset_frames_root.rglob("manifest.json"):
-                try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
-                if _slug(manifest.get("character")) == character_slug and _variant_code(manifest.get("variant")) == variant:
-                    matching_manifest = (manifest_path, manifest)
-                    break
+        matching_manifest = self._get_dataset_manifest_index().get((character_slug, variant))
 
         target = None
         reference = None

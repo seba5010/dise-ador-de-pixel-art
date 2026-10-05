@@ -111,7 +111,7 @@ def test_alpha_certification():
     print("\n--- TEST 2: Certificación del canal Alfa ---")
     tmp_dir = Path(tempfile.mkdtemp())
     
-    # 2.1 Caso A: Contenido opaco (alfa 255), centrado y con márgenes -> APROBADO
+    # 2.1 Caso A: la estructura puede aprobar, pero sin targets no hay certificación visual.
     def draw_opaque(im, idx):
         # 32x32 square inside 64x64 (leaving 16px margins on all 4 sides)
         for y in range(16, 48):
@@ -119,10 +119,12 @@ def test_alpha_certification():
                 im.putpixel((x, y), (220, 50, 50, 255))
     run_a = _create_synthetic_run(tmp_dir, "run_opaque", draw_opaque)
     audit_a = run_quality_audit(run_a, format_type="16x4")
-    assert audit_a["certified"] is True, f"Opaque with margins should be certified, got: {audit_a}"
+    assert audit_a["technical_ready"] is True, f"Opaque with margins should pass the technical gate, got: {audit_a}"
+    assert audit_a["certified"] is False, "A run without canonical dataset targets must never be fully certified"
+    assert audit_a["visual_comparison"]["available"] is False
     assert audit_a["alpha_purity_score"] == 100.0
     assert len(audit_a["blurry_alpha_cells"]) == 0
-    print("[PASS] 2.1: Contenido opaco, centrado y con márgenes: APROBADO (certified=True, pureza=100%).")
+    print("[PASS] 2.1: Estructura técnica aprobada; certificación visual bloqueada correctamente por ausencia de targets.")
 
     # 2.2 Caso B: Contenido completamente semitransparente con alfa 128 (ghost) -> RECHAZADO
     def draw_ghost(im, idx):
@@ -458,4 +460,3 @@ if __name__ == "__main__":
     print("\n==============================================")
     print("TODAS LAS PRUEBAS COMPLETADAS EXITOSAMENTE")
     print("==============================================")
-

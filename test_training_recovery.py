@@ -1,9 +1,14 @@
+import json
 from pathlib import Path
+
+import pixel_ai_engine.training_recovery as recovery_mod
 
 from pixel_ai_engine.training_recovery import (
     activate_recovery_status,
     choose_recovery_snapshot,
     detect_training_instability,
+    retain_checkpoint_atomic,
+    write_status_file,
 )
 
 
@@ -113,3 +118,38 @@ def test_recovery_status_preserves_rejected_history():
     assert len(repaired["recovery_events"][0]["history"]) == 66
     assert repaired["past_eras"] == [{"era": 1}]
     assert repaired["recovery"]["active"] is True
+
+
+def test_status_write_retries_transient_windows_replace_lock(tmp_path, monkeypatch):
+    status_file = tmp_path / "training_status.json"
+    real_replace = recovery_mod.os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(source, destination):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise PermissionError(5, "temporary Windows lock", str(destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(recovery_mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(recovery_mod.time, "sleep", lambda _seconds: None)
+
+    write_status_file(status_file, {"status": "ENTRENANDO", "epoch": 28})
+
+    assert attempts["count"] == 3
+    assert json.loads(status_file.read_text(encoding="utf-8"))["epoch"] == 28
+    assert not list(tmp_path.glob(".training_status.json.*.tmp"))
+
+
+def test_retain_checkpoint_keeps_previous_epoch_when_latest_is_replaced(tmp_path):
+    latest = tmp_path / "latest.pt"
+    healthy = tmp_path / "healthy.pt"
+    latest.write_bytes(b"epoch-15")
+
+    retain_checkpoint_atomic(latest, healthy)
+    replacement = tmp_path / "replacement.pt"
+    replacement.write_bytes(b"epoch-16")
+    recovery_mod.os.replace(replacement, latest)
+
+    assert latest.read_bytes() == b"epoch-16"
+    assert healthy.read_bytes() == b"epoch-15"

@@ -3,7 +3,9 @@ import math
 import os
 import shutil
 import statistics
+import threading
 import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -39,12 +41,39 @@ def load_status_file(status_file: Path) -> Dict[str, Any]:
         return {}
 
 
+def _unique_temporary_path(destination: Path) -> Path:
+    return destination.with_name(
+        f".{destination.name}.{os.getpid()}.{threading.get_ident()}.{uuid4().hex}.tmp"
+    )
+
+
+def _replace_with_retry(temporary_file: Path, destination: Path, attempts: int = 12) -> None:
+    """Replace atomically, tolerating short-lived Windows reader/antivirus locks."""
+    for attempt in range(attempts):
+        try:
+            os.replace(temporary_file, destination)
+            return
+        except PermissionError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(min(0.25, 0.02 * (2 ** attempt)))
+
+
 def write_status_file(status_file: Path, data: Dict[str, Any]) -> None:
     status_file.parent.mkdir(parents=True, exist_ok=True)
-    temporary_file = status_file.with_suffix(status_file.suffix + ".tmp")
-    with open(temporary_file, "w", encoding="utf-8") as status_handle:
-        json.dump(data, status_handle, indent=2, allow_nan=False)
-    os.replace(temporary_file, status_file)
+    temporary_file = _unique_temporary_path(status_file)
+    try:
+        with open(temporary_file, "w", encoding="utf-8") as status_handle:
+            json.dump(data, status_handle, indent=2, allow_nan=False)
+            status_handle.flush()
+            os.fsync(status_handle.fileno())
+        _replace_with_retry(temporary_file, status_file)
+    finally:
+        if temporary_file.exists():
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
 
 
 def copy_checkpoint_atomic(source: Path, destination: Path) -> None:
@@ -53,9 +82,38 @@ def copy_checkpoint_atomic(source: Path, destination: Path) -> None:
     if source == destination:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary_file = destination.with_suffix(destination.suffix + ".tmp")
-    shutil.copy2(source, temporary_file)
-    os.replace(temporary_file, destination)
+    temporary_file = _unique_temporary_path(destination)
+    try:
+        shutil.copy2(source, temporary_file)
+        _replace_with_retry(temporary_file, destination)
+    finally:
+        if temporary_file.exists():
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
+
+
+def retain_checkpoint_atomic(source: Path, destination: Path) -> None:
+    """Retain an immutable checkpoint cheaply, with a copy fallback across volumes."""
+    source = Path(source)
+    destination = Path(destination)
+    if source == destination:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_file = _unique_temporary_path(destination)
+    try:
+        try:
+            os.link(source, temporary_file)
+        except OSError:
+            shutil.copy2(source, temporary_file)
+        _replace_with_retry(temporary_file, destination)
+    finally:
+        if temporary_file.exists():
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
 
 
 def _history_points(history: Iterable[Dict[str, Any]]) -> List[Dict[str, float]]:
@@ -174,7 +232,19 @@ def choose_recovery_snapshot(
     snapshots_dir: Path,
     failed_epoch: int,
 ) -> Optional[Dict[str, Any]]:
-    points = [point for point in _history_points(history) if point["epoch"] < int(failed_epoch)]
+    history_entries = [entry for entry in history if isinstance(entry, dict)]
+    points = [point for point in _history_points(history_entries) if point["epoch"] < int(failed_epoch)]
+    quality_health: Dict[int, bool] = {}
+    for entry in history_entries:
+        epoch_value = finite_positive(entry.get("epoch"))
+        if epoch_value is None:
+            continue
+        guidance = entry.get("guidance", entry.get("quality_guidance"))
+        if not isinstance(guidance, dict):
+            continue
+        severity = str(guidance.get("severity", "low")).lower()
+        recommendation = str(guidance.get("recommended_action", "CONTINUE")).upper()
+        quality_health[int(epoch_value)] = severity != "critical" and recommendation != "ROLLBACK"
     snapshots = []
     if snapshots_dir.exists():
         for snapshot_file in snapshots_dir.glob("checkpoint_epoch_*.pt"):
@@ -198,6 +268,7 @@ def choose_recovery_snapshot(
         point["epoch"]
         for point in points
         if point["g_loss"] <= healthy_g_limit and point["l1_loss"] <= healthy_l1_limit
+        and quality_health.get(point["epoch"], True)
     ]
     safe_epoch = max(healthy_epochs) if healthy_epochs else baseline[-1]["epoch"]
     eligible = [item for item in snapshots if item[0] <= safe_epoch]
@@ -205,7 +276,7 @@ def choose_recovery_snapshot(
     return {
         "epoch": epoch,
         "path": snapshot_file,
-        "selection": "last_healthy_snapshot",
+        "selection": "last_healthy_quality_snapshot" if quality_health else "last_healthy_snapshot",
         "safe_epoch": safe_epoch,
         "healthy_g_limit": round(healthy_g_limit, 6),
         "healthy_l1_limit": round(healthy_l1_limit, 6),

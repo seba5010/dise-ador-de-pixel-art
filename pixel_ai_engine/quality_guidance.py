@@ -476,13 +476,24 @@ def compare_loss_ab(plan: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 class GuidanceInterventionPolicy:
-    """Authorize at most one safe Guidance intervention after Recovery checks."""
+    """Turn quality recommendations into bounded, enforceable interventions."""
 
-    ACTIONABLE = {"REINFORCE", "ADJUST_SAMPLING", "ADJUST_WEIGHTS", "ROLLBACK"}
+    ACTIONABLE = {
+        "REINFORCE", "ADJUST_SAMPLING", "ADJUST_WEIGHTS", "REDUCE_LR", "ROLLBACK", "STOP"
+    }
 
-    def __init__(self, *, cooldown_epochs: int = 5, max_consecutive: int = 3):
+    def __init__(
+        self,
+        *,
+        cooldown_epochs: int = 5,
+        max_consecutive: int = 3,
+        critical_confirmations: int = 2,
+        max_rollbacks: int = 1,
+    ):
         self.cooldown_epochs = max(1, int(cooldown_epochs))
         self.max_consecutive = max(1, int(max_consecutive))
+        self.critical_confirmations = max(1, int(critical_confirmations))
+        self.max_rollbacks = max(1, int(max_rollbacks))
 
     def decide(
         self,
@@ -497,12 +508,34 @@ class GuidanceInterventionPolicy:
         last_epoch = int(_finite_number(previous.get("last_intervention_epoch")) or -10_000)
         consecutive = max(0, int(_finite_number(previous.get("consecutive_interventions")) or 0))
         total = max(0, int(_finite_number(previous.get("total_interventions")) or 0))
+        critical_streak = max(0, int(_finite_number(previous.get("critical_streak")) or 0))
+        rollback_count = max(0, int(_finite_number(previous.get("rollback_count")) or 0))
+        severity = str((guidance or {}).get("severity", "low")).lower()
+        diagnosis = (guidance or {}).get("diagnosis")
+        critical_breaches = (
+            list(diagnosis.get("critical_breaches", [])) if isinstance(diagnosis, Mapping) else []
+        )
+        if recommendation == "ROLLBACK" and severity == "critical":
+            critical_streak += 1
+        else:
+            critical_streak = 0
 
         authorized = candidate if candidate in self.ACTIONABLE else "CONTINUE"
         reason = "authorized" if authorized != "CONTINUE" else "no_action_requested"
-        if authorized == "ROLLBACK" and trend != "COLLAPSE":
-            authorized = "CONTINUE"
-            reason = "rollback_requires_sustained_collapse"
+        if authorized == "ROLLBACK":
+            rollback_ready = bool(
+                critical_breaches
+                or trend == "COLLAPSE"
+                or critical_streak >= self.critical_confirmations
+            )
+            if not rollback_ready:
+                authorized = "CONTINUE"
+                reason = "awaiting_critical_confirmation"
+            elif rollback_count >= self.max_rollbacks:
+                authorized = "STOP"
+                reason = "quality_stop_after_repeated_collapse"
+            else:
+                reason = "critical_quality_gate"
         elif authorized != "CONTINUE" and int(epoch) - last_epoch < self.cooldown_epochs:
             authorized = "CONTINUE"
             reason = "cooldown_active"
@@ -516,10 +549,18 @@ class GuidanceInterventionPolicy:
             "total_interventions": total,
             "cooldown_epochs": self.cooldown_epochs,
             "max_consecutive": self.max_consecutive,
+            "critical_streak": critical_streak,
+            "critical_confirmations": self.critical_confirmations,
+            "rollback_count": rollback_count,
+            "max_rollbacks": self.max_rollbacks,
         }
         if authorized != "CONTINUE":
-            next_state["consecutive_interventions"] = consecutive + 1
+            if authorized not in {"ROLLBACK", "STOP"}:
+                next_state["consecutive_interventions"] = consecutive + 1
             next_state["total_interventions"] = total + 1
+            if authorized == "ROLLBACK":
+                next_state["rollback_count"] = rollback_count + 1
+                next_state["critical_streak"] = 0
         elif trend in {"IMPROVING", "STABLE"}:
             next_state["consecutive_interventions"] = 0
 
@@ -534,11 +575,15 @@ class GuidanceInterventionPolicy:
 def _training_stability(training_metrics: Mapping[str, Any]) -> Optional[float]:
     watched = ("g_loss", "d_loss", "l1_loss", "edge_loss", "lr")
     present = [key for key in watched if key in training_metrics]
-    if not present and "skipped_amp_steps" not in training_metrics:
+    if not present and not any(
+        key in training_metrics for key in ("skipped_amp_steps_window", "skipped_amp_steps")
+    ):
         return None
 
     invalid_count = sum(_finite_number(training_metrics.get(key)) is None for key in present)
-    skipped = _finite_number(training_metrics.get("skipped_amp_steps")) or 0.0
+    skipped = _finite_number(training_metrics.get("skipped_amp_steps_window"))
+    if skipped is None:
+        skipped = _finite_number(training_metrics.get("skipped_amp_steps")) or 0.0
     penalty = invalid_count * 25.0 + min(50.0, max(0.0, skipped) * 2.0)
     return round(max(0.0, 100.0 - penalty), 4)
 
@@ -711,7 +756,7 @@ GUIDANCE_ACTIONS: Tuple[str, ...] = (
 @dataclass
 class QualityGuidanceConfig:
     enabled: bool = ENABLE_QUALITY_GUIDANCE
-    mode: str = "observational"
+    mode: str = "enforcing"
     targets: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_TARGETS))
     critical_floors: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_CRITICAL_FLOORS))
     baseline_points: int = 5
@@ -725,8 +770,9 @@ class QualityGuidanceConfig:
     max_history: int = 200
 
     def __post_init__(self) -> None:
-        # Increment 1 is intentionally incapable of applying interventions.
-        self.mode = "observational"
+        # Quality control is authoritative. Legacy checkpoints may still carry
+        # ``observational``; migrate them when their state is restored.
+        self.mode = "enforcing"
         self.baseline_points = max(2, int(self.baseline_points))
         self.trend_window = max(3, int(self.trend_window))
         self.min_trend_points = max(3, int(self.min_trend_points))
