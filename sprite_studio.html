@@ -557,6 +557,7 @@
       gap: 12px;
       flex-wrap: wrap;
     }
+    #tab-quality .quality-layout > * { flex: 0 0 auto; }
     .qc-selector-group {
       display: flex;
       align-items: center;
@@ -676,10 +677,12 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 12px;
       border-bottom: 1px solid rgba(255,255,255,0.06);
       padding-bottom: 8px;
     }
-    .qc-sheet-controls { display: flex; gap: 6px; align-items: center; }
+    .qc-sheet-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     .qc-mini-btn {
       background: #171b26;
       border: 1px solid #2d364a;
@@ -789,7 +792,18 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      flex: 0 0 auto;
     }
+    .fqr-toolbar-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      flex-wrap: wrap;
+      max-width: 100%;
+      margin-left: auto;
+    }
+    .fqr-toolbar-actions .qc-mini-btn { white-space: nowrap; }
     .fqr-summary { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; }
     .fqr-summary-item { background:#10141e; border:1px solid #252d40; border-radius:6px; padding:9px 12px; }
     .fqr-summary-item strong { display:block; font:700 18px var(--mono); color:#fff; }
@@ -819,6 +833,8 @@
       .fqr-summary { grid-template-columns:1fr 1fr; }
       .fqr-list { grid-template-columns:1fr; }
       .fqr-metrics { grid-template-columns:1fr 1fr; }
+      .fqr-toolbar-actions { width: 100%; margin-left: 0; justify-content: stretch; }
+      .fqr-toolbar-actions .qc-mini-btn { flex: 1 1 180px; }
     }
 
   </style>
@@ -1513,7 +1529,7 @@
               <div id="fqrTitle" style="font-size:12px; font-weight:700; text-transform:uppercase;">Control de calidad interactivo por frame</div>
               <div style="font-size:10px; color:var(--dim); margin-top:3px;">La regeneración crea candidatos aislados; el refuerzo se aplicará en un entrenamiento futuro y nunca usa el generado como target.</div>
             </div>
-            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <div class="fqr-toolbar-actions">
               <button class="qc-mini-btn" onclick="evaluateSelectedQcFrame()">Evaluar frame seleccionado</button>
               <button class="qc-mini-btn" onclick="refreshFrameReviewQueue()">Actualizar cola</button>
               <button id="fqrReevaluateAll" class="qc-mini-btn" onclick="startQcBatch('REEVALUATE_ALL')">Reevaluar todos</button>

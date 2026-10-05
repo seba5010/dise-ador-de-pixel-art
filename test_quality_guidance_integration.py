@@ -417,6 +417,8 @@ def test_monitor_reads_new_guidance_contract():
     assert 'id="monQualityComparison"' in studio
     assert "updateTrainingQualityPanel(info)" in studio
     assert "quality.evaluated_sample_count" in studio
+    assert "#tab-quality .quality-layout > * { flex: 0 0 auto; }" in studio
+    assert 'class="fqr-toolbar-actions"' in studio
 
 
 def test_terminal_quality_status_reports_when_training_is_adjusting(capsys):
