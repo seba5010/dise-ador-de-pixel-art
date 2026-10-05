@@ -58,7 +58,17 @@ from pixel_ai_engine.frame_map import (
     get_frame_semantic_info,
     get_all_frame_mappings
 )
-from pixel_ai_engine.frame_quality_review import FrameQualityReviewManager, VALID_REVIEW_STATUSES
+from pixel_ai_engine.frame_quality_review import (
+    ENABLE_BATCH_QC_ACTIONS,
+    ENABLE_FRAME_REGENERATION,
+    ENABLE_FRAME_REVIEW,
+    ENABLE_MANUAL_REINFORCEMENT,
+    FrameQualityReviewManager,
+    VALID_REVIEW_STATUSES,
+)
+from pixel_ai_engine.frame_regeneration import FrameRegenerationManager
+from pixel_ai_engine.hard_examples import HardExampleQueue
+from pixel_ai_engine.interactive_qc import InteractiveQualityControlService
 
 PORT = 8080
 ACTIVE_JOB = {
@@ -73,10 +83,17 @@ ACTIVE_JOB = {
     "error": None
 }
 FRAME_REVIEW_MANAGER = FrameQualityReviewManager(base_dir=PROJECT_ROOT)
+FRAME_REGENERATION_MANAGER = FrameRegenerationManager(FRAME_REVIEW_MANAGER)
+HARD_EXAMPLE_QUEUE = HardExampleQueue(FRAME_REVIEW_MANAGER)
+QC_SERVICE = InteractiveQualityControlService(
+    FRAME_REVIEW_MANAGER,
+    regeneration_manager=FRAME_REGENERATION_MANAGER,
+    hard_examples=HARD_EXAMPLE_QUEUE,
+)
 JOB_LOCK = threading.Lock()
 GLOBAL_TRAINING_PROC = None
 LAST_START_TIME = 0.0
-SERVER_HOST = os.environ.get("SPRITE_STUDIO_HOST", "192.168.1.83")
+SERVER_HOST = os.environ.get("SPRITE_STUDIO_HOST", "127.0.0.1")
 TRAINING_LOG_FILE = PROJECT_ROOT / "training_logs" / "training.log"
 ACCESS_LOG_FILE = PROJECT_ROOT / "training_logs" / "access.log"
 SERVER_LOCK_FILE = PROJECT_ROOT / ".sprite_studio.lock"
@@ -548,9 +565,6 @@ def run_pytorch_generation(
             if not found:
                 pngs = list(front_image_path.glob("*.png"))
                 if pngs: found = pngs[0]
-        if not found:
-            for cand in [PROJECT_ROOT / "personajes" / "alex" / "alex_front.png", PROJECT_ROOT / "personajes" / "alex_front.png"]:
-                if cand.exists(): found = cand; break
         if found:
             front_image_path = found
         else:
@@ -1036,7 +1050,9 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(PROJECT_ROOT), **kwargs)
 
     def end_headers(self):
-        request_path = urllib.parse.urlparse(self.path).path.lower()
+        # ``parse_request`` can reject malformed traffic before assigning
+        # ``self.path``.  Error responses still call ``end_headers``.
+        request_path = urllib.parse.urlparse(getattr(self, "path", "")).path.lower()
         if not request_path.startswith("/api/"):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
             self.send_header("Pragma", "no-cache")
@@ -1179,7 +1195,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             run_id = query.get("run_id", [None])[0]
             try:
                 rows = FRAME_REVIEW_MANAGER.list_reviews(status=status or None, run_id=run_id or None)
-                summary = FRAME_REVIEW_MANAGER.summary(run_id=run_id or None)
+                summary = QC_SERVICE.summary(run_id=run_id or None)
             except ValueError as exc:
                 self.send_json({"error": str(exc)}, status=400)
                 return
@@ -1189,12 +1205,35 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 "summary": summary,
                 "valid_statuses": list(VALID_REVIEW_STATUSES),
                 "capabilities": {
-                    "frame_review": True,
-                    "regeneration": False,
-                    "manual_reinforcement": False,
-                    "batch_actions": False,
+                    "frame_review": ENABLE_FRAME_REVIEW,
+                    "regeneration": ENABLE_FRAME_REGENERATION,
+                    "manual_reinforcement": ENABLE_MANUAL_REINFORCEMENT,
+                    "batch_actions": ENABLE_BATCH_QC_ACTIONS,
                 },
             })
+            return
+
+        elif path == "/api/qc/hard-examples":
+            self.send_json({
+                "hard_examples": HARD_EXAMPLE_QUEUE.list(),
+                "summary": HARD_EXAMPLE_QUEUE.summary(),
+            })
+            return
+
+        elif path == "/api/qc/batches":
+            self.send_json({"jobs": QC_SERVICE.list_batches()})
+            return
+
+        elif path.startswith("/api/qc/batch/"):
+            job_id = urllib.parse.unquote(path[len("/api/qc/batch/"):]).strip("/")
+            if not job_id or "/" in job_id:
+                self.send_json({"error": "job_id inválido"}, status=400)
+                return
+            job = QC_SERVICE.get_batch(job_id)
+            if job is None:
+                self.send_json({"error": "Trabajo batch no encontrado"}, status=404)
+                return
+            self.send_json(job)
             return
 
         elif path.startswith("/api/qc/frame/"):
@@ -1368,16 +1407,48 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             self.send_json({"status": "evaluated", "review": review})
             return
 
+        if qc_path == "/api/qc/batch/start":
+            action = str(body.get("action") or "").upper()
+            if action not in {"REEVALUATE_ALL", "REGENERATE_DEFECTIVE", "REINFORCE_SELECTED"}:
+                self.send_json({"error": "Acción batch no soportada"}, status=400)
+                return
+            if action != "REEVALUATE_ALL" and body.get("confirmed") is not True:
+                self.send_json({"error": "confirmation_required"}, status=409)
+                return
+            try:
+                job = QC_SERVICE.start_batch(
+                    action,
+                    review_ids=body.get("review_ids") if isinstance(body.get("review_ids"), list) else None,
+                    actor=str(body.get("user") or "studio_user"),
+                    num_candidates=int(body.get("num_candidates", 3)),
+                )
+            except (TypeError, ValueError, RuntimeError) as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            self.send_json({"status": "started", "job": job}, status=202)
+            return
+
+        if qc_path.startswith("/api/qc/batch/") and qc_path.endswith("/cancel"):
+            job_id = qc_path[len("/api/qc/batch/"):-len("/cancel")].strip("/")
+            try:
+                job = QC_SERVICE.cancel_batch(job_id)
+            except KeyError:
+                self.send_json({"error": "Trabajo batch no encontrado"}, status=404)
+                return
+            self.send_json({"status": "cancelling", "job": job})
+            return
+
         if qc_path.startswith("/api/qc/frame/"):
             suffix = qc_path[len("/api/qc/frame/"):]
             parts = suffix.split("/")
-            if len(parts) != 2 or parts[1] not in {"reevaluate", "approve", "reject"}:
+            allowed_actions = {"reevaluate", "approve", "reject", "regenerate", "apply-best", "discard-regeneration", "reinforce"}
+            if len(parts) != 2 or parts[1] not in allowed_actions:
                 self.send_json({"error": "Acción QC no encontrada"}, status=404)
                 return
             review_id, action = parts
             try:
                 if action == "reevaluate":
-                    review = FRAME_REVIEW_MANAGER.reevaluate_frame(
+                    review = QC_SERVICE.reevaluate(
                         review_id,
                         actor=str(body.get("user") or "studio_user"),
                     )
@@ -1387,19 +1458,56 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                         actor=str(body.get("user") or "studio_user"),
                         reason=body.get("reason") or body.get("comment"),
                     )
-                else:
+                elif action == "reject":
                     review = FRAME_REVIEW_MANAGER.reject_frame(
                         review_id,
                         actor=str(body.get("user") or "studio_user"),
                         reason=body.get("reason"),
                     )
+                elif action == "regenerate":
+                    job = QC_SERVICE.start_batch(
+                        "REGENERATE_SELECTED",
+                        review_ids=[review_id],
+                        actor=str(body.get("user") or "studio_user"),
+                        num_candidates=int(body.get("num_candidates", 3)),
+                    )
+                    self.send_json({"status": "started", "job": job}, status=202)
+                    return
+                elif action == "apply-best":
+                    review = QC_SERVICE.apply_best(
+                        review_id,
+                        candidate_id=body.get("candidate_id"),
+                        actor=str(body.get("user") or "studio_user"),
+                    )
+                elif action == "discard-regeneration":
+                    review = QC_SERVICE.discard_regeneration(
+                        review_id,
+                        actor=str(body.get("user") or "studio_user"),
+                    )
+                else:
+                    hard_example = QC_SERVICE.reinforce(
+                        review_id,
+                        actor=str(body.get("user") or "studio_user"),
+                    )
+                    self.send_json({"status": "sent_to_reinforcement", "hard_example": hard_example})
+                    return
             except KeyError:
                 self.send_json({"error": "Review no encontrado"}, status=404)
                 return
-            except (TypeError, ValueError) as exc:
-                self.send_json({"error": str(exc)}, status=409 if action == "approve" else 400)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                reason = str(exc)
+                if action == "reinforce":
+                    self.send_json({"success": False, "reason": reason, "error": reason}, status=409)
+                else:
+                    self.send_json({"error": reason}, status=409 if action == "approve" else 400)
                 return
-            response_status = {"reevaluate": "reevaluated", "approve": "approved", "reject": "rejected"}[action]
+            response_status = {
+                "reevaluate": "reevaluated",
+                "approve": "approved",
+                "reject": "rejected",
+                "apply-best": "applied",
+                "discard-regeneration": "discarded",
+            }[action]
             self.send_json({"status": response_status, "review": review})
             return
 
@@ -1543,7 +1651,6 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 ACTIVE_JOB["error"] = None
 
             char_name = body.get("character", "character")
-            front_path = PROJECT_ROOT / body.get("front_image", "")
             format_type = body.get("format", "8x12")
             mode = body.get("mode", "full")
             single_f_idx = body.get("single_frame_idx", None)
@@ -1892,7 +1999,34 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "frame_idx y run_dir son obligatorios"}, status=400)
                 return
 
-            target_run_dir = PROJECT_ROOT / run_dir_str
+            try:
+                raw_run = Path(str(run_dir_str))
+                target_run_dir = raw_run if raw_run.is_absolute() else PROJECT_ROOT / raw_run
+                target_run_dir = target_run_dir.resolve()
+                target_run_dir.relative_to(OUTPUT_DIR.resolve())
+                if not target_run_dir.is_dir():
+                    raise FileNotFoundError(target_run_dir)
+                maximum = 96 if format_type == "8x12" else 64
+                frame_idx = int(frame_idx)
+                if frame_idx < 0 or frame_idx >= maximum:
+                    raise ValueError("frame_idx fuera de rango")
+                metadata = FRAME_REVIEW_MANAGER._load_run_metadata(target_run_dir)
+                front_path = Path(str(metadata.get("front_image") or ""))
+                if not front_path.is_absolute():
+                    front_path = PROJECT_ROOT / front_path
+                front_path = front_path.resolve()
+                allowed_front_roots = (
+                    (PROJECT_ROOT / "personajes").resolve(),
+                    FRAME_REVIEW_MANAGER.dataset_frames_root,
+                    FRAME_REVIEW_MANAGER.supervised_root,
+                )
+                if not front_path.is_file() or not any(
+                    front_path.is_relative_to(root) for root in allowed_front_roots
+                ):
+                    raise ValueError("Referencia frontal inválida en metadata")
+            except (TypeError, ValueError, FileNotFoundError) as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
 
             def single_worker():
                 try:

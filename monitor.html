@@ -404,9 +404,11 @@
         <div class="info-row"><span class="info-key">Pendientes</span><span class="info-val" id="fqc-pending" style="color:var(--warn)">—</span></div>
         <div class="info-row"><span class="info-key">Aprobados</span><span class="info-val" id="fqc-approved" style="color:var(--accent2)">—</span></div>
         <div class="info-row"><span class="info-key">Rechazados</span><span class="info-val" id="fqc-rejected" style="color:var(--danger)">—</span></div>
-        <div class="info-row"><span class="info-key">Regenerados</span><span class="info-val" id="fqc-regenerated">0 (desactivado)</span></div>
-        <div class="info-row"><span class="info-key">Enviados a refuerzo</span><span class="info-val" id="fqc-reinforced">0 (desactivado)</span></div>
-        <div style="font-size:10px;color:var(--dim);margin-top:9px">La revisión humana es persistente. Regeneración y refuerzo pertenecen a incrementos posteriores.</div>
+        <div class="info-row"><span class="info-key">Regenerados</span><span class="info-val" id="fqc-regenerated">—</span></div>
+        <div class="info-row"><span class="info-key">Enviados a refuerzo</span><span class="info-val" id="fqc-reinforced">—</span></div>
+        <div class="info-row"><span class="info-key">Hard examples activos</span><span class="info-val" id="fqc-hard-active">—</span></div>
+        <div class="info-row"><span class="info-key">Regeneraciones mejores</span><span class="info-val" id="fqc-improved">—</span></div>
+        <div style="font-size:10px;color:var(--dim);margin-top:9px">El feedback manual ajusta el muestreo de entrenamientos futuros; nunca usa el frame generado como target.</div>
       </div>
 
       <!-- Log de épocas recientes -->
@@ -609,8 +611,11 @@
         document.getElementById('fqc-pending').textContent = summary.pending ?? 0;
         document.getElementById('fqc-approved').textContent = summary.approved ?? 0;
         document.getElementById('fqc-rejected').textContent = summary.rejected ?? 0;
-        document.getElementById('fqc-regenerated').textContent = `${summary.regenerated ?? 0} (desactivado)`;
-        document.getElementById('fqc-reinforced').textContent = `${summary.sent_to_reinforcement ?? 0} (desactivado)`;
+        document.getElementById('fqc-regenerated').textContent = summary.regenerated ?? 0;
+        document.getElementById('fqc-reinforced').textContent = summary.sent_to_reinforcement ?? 0;
+        document.getElementById('fqc-hard-active').textContent = summary.hard_examples?.active ?? 0;
+        const improvement = summary.metrics?.regeneration_improvement_pct;
+        document.getElementById('fqc-improved').textContent = improvement === null || improvement === undefined ? 'Sin muestra' : `${improvement}%`;
       } catch (_) {
         document.getElementById('fqc-pending').textContent = 'Sin conexión';
       }

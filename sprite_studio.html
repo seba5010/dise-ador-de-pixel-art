@@ -675,6 +675,8 @@
     .fqr-card.OK, .fqr-card.APPROVED { border-left-color:#10b981; }
     .fqr-card.REJECTED, .fqr-card.ERROR { border-left-color:#ef4444; }
     .fqr-card.REEVALUATED { border-left-color:#f97316; }
+    .fqr-card.REGENERATED { border-left-color:#f97316; }
+    .fqr-card.SENT_TO_REINFORCEMENT { border-left-color:#3b82f6; }
     .fqr-card-head, .fqr-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
     .fqr-status { font:700 10px var(--mono); padding:3px 8px; border:1px solid currentColor; border-radius:12px; }
     .fqr-images { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
@@ -684,6 +686,11 @@
     .fqr-metric { padding:5px; background:#151a26; border-radius:4px; text-align:center; font:600 10px var(--mono); }
     .fqr-issues { color:#fbbf24; font-size:10px; min-height:14px; }
     .fqr-diagnosis { white-space:pre-wrap; max-height:170px; overflow:auto; font:10px var(--mono); color:#aeb9cc; }
+    .fqr-candidates { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:6px; }
+    .fqr-candidate { border:1px solid #293248; border-radius:5px; padding:6px; background:#111723; font-size:9px; }
+    .fqr-candidate.safe { border-color:#10b981; }
+    .fqr-candidate.unsafe { border-color:#ef4444; }
+    .fqr-candidate img { width:100%; max-height:135px; object-fit:contain; image-rendering:pixelated; }
     @media (max-width: 768px) {
       .fqr-summary { grid-template-columns:1fr 1fr; }
       .fqr-list { grid-template-columns:1fr; }
@@ -1344,11 +1351,14 @@
           <div class="qc-panel-header">
             <div>
               <div id="fqrTitle" style="font-size:12px; font-weight:700; text-transform:uppercase;">Control de calidad interactivo por frame</div>
-              <div style="font-size:10px; color:var(--dim); margin-top:3px;">Selecciona una celda, evalúala y decide. Estas acciones no regeneran ni entrenan.</div>
+              <div style="font-size:10px; color:var(--dim); margin-top:3px;">La regeneración crea candidatos aislados; el refuerzo se aplicará en un entrenamiento futuro y nunca usa el generado como target.</div>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
               <button class="qc-mini-btn" onclick="evaluateSelectedQcFrame()">Evaluar frame seleccionado</button>
               <button class="qc-mini-btn" onclick="refreshFrameReviewQueue()">Actualizar cola</button>
+              <button id="fqrReevaluateAll" class="qc-mini-btn" onclick="startQcBatch('REEVALUATE_ALL')">Reevaluar todos</button>
+              <button id="fqrRegenerateDefective" class="qc-mini-btn" onclick="startQcBatch('REGENERATE_DEFECTIVE')">Regenerar defectuosos</button>
+              <button id="fqrReinforceSelected" class="qc-mini-btn" onclick="startQcBatch('REINFORCE_SELECTED')">Enviar seleccionados a refuerzo</button>
             </div>
           </div>
           <div class="fqr-summary" aria-label="Resumen de cola de revisión">
@@ -1358,6 +1368,9 @@
             <div class="fqr-summary-item"><strong id="fqrTotal">0</strong><span>Total evaluados</span></div>
           </div>
           <div id="fqrMessage" style="font-size:11px; color:var(--dim);" role="status">Cola lista para cargar.</div>
+          <div id="fqrBatchStatus" style="display:none;font:10px var(--mono);color:var(--accent);background:#101522;border:1px solid #27314a;border-radius:5px;padding:8px;align-items:center;justify-content:space-between;gap:8px;">
+            <span id="fqrBatchText"></span><button class="qc-mini-btn" onclick="cancelActiveQcBatch()">Cancelar lote</button>
+          </div>
           <div id="fqrList" class="fqr-list"></div>
         </section>
 
@@ -2097,7 +2110,9 @@
       isAuditing: false,
       selectedCell: null,
       reviewQueue: [],
-      reviewSummary: {}
+      reviewSummary: {},
+      capabilities: {},
+      activeBatchJob: null
     };
 
     async function initQualityTab() {
@@ -2140,6 +2155,10 @@
         if (!response.ok) throw new Error(payload.error || 'No se pudo cargar la cola');
         qcState.reviewQueue = payload.queue || [];
         qcState.reviewSummary = payload.summary || {};
+        qcState.capabilities = payload.capabilities || {};
+        document.getElementById('fqrReevaluateAll').disabled = !qcState.capabilities.batch_actions;
+        document.getElementById('fqrRegenerateDefective').disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.regeneration;
+        document.getElementById('fqrReinforceSelected').disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.manual_reinforcement;
         renderFrameReviewQueue();
         if (message) message.textContent = runId
           ? `Mostrando revisiones de ${runId}. Seleccionado: frame ${qcState.selectedCell ?? 'ninguno'}.`
@@ -2176,9 +2195,28 @@
         const issues = (review.issues || []).map(fqrEscape).join(' · ') || 'Sin problemas críticos registrados';
         const diagnosis = fqrEscape(JSON.stringify(review.diagnosis || {}, null, 2));
         const id = fqrEscape(review.review_id);
+        const regeneration = review.regeneration || {};
+        const ranking = regeneration.ranking || {};
+        const candidates = (ranking.candidates || []).map(candidate => {
+          const url = fqrAssetUrl(candidate.path);
+          const violations = (candidate.violations || []).map(fqrEscape).join(', ') || 'Sin regresiones críticas';
+          return `<div class="fqr-candidate ${candidate.safe ? 'safe' : 'unsafe'}">
+            ${url ? `<img src="${fqrEscape(url)}" alt="${fqrEscape(candidate.candidate_id)}">` : ''}
+            <strong>${fqrEscape(candidate.candidate_id)}</strong><br>
+            Global ${candidate.score_total ?? 'N/D'} · Δ ${candidate.global_delta ?? 'N/D'}<br>
+            ${candidate.safe ? 'APTO' : `BLOQUEADO: ${violations}`}
+          </div>`;
+        }).join('');
+        const regenerationPanel = candidates ? `<div>
+          <div style="font-size:10px;color:var(--accent);margin-bottom:5px">CANDIDATOS · ${fqrEscape(ranking.reason || '')}</div>
+          <div class="fqr-candidates">${candidates}</div>
+        </div>` : '';
+        const regenerationActions = regeneration.state === 'READY' ? `
+          <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'apply-best')" ${ranking.best_candidate && qcState.capabilities.regeneration ? '' : 'disabled'}>Aplicar mejor candidato</button>
+          <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'discard-regeneration')" ${qcState.capabilities.regeneration ? '' : 'disabled'}>Descartar regeneración</button>` : '';
         return `<article class="fqr-card ${fqrEscape(review.status)}">
           <div class="fqr-card-head">
-            <strong>Frame ${String(Number(review.frame_idx)).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
+            <strong><input type="checkbox" class="fqr-select" value="${id}" aria-label="Seleccionar frame ${Number(review.frame_idx)}"> Frame ${String(Number(review.frame_idx)).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
             <span class="fqr-status">${fqrEscape(review.status)}</span>
           </div>
           <div style="font:10px var(--mono);color:var(--dim)">${fqrEscape(review.variant || 'sin variante')} · score ${review.score_total ?? 'N/D'} · severidad ${fqrEscape(review.severity || 'N/D')}</div>
@@ -2188,10 +2226,14 @@
           </div>
           <div class="fqr-metrics">${metrics}</div>
           <div class="fqr-issues">${issues}</div>
+          ${regenerationPanel}
           <div class="fqr-actions">
             <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reevaluate')">Reevaluar</button>
+            <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'regenerate')" ${qcState.capabilities.regeneration && review.target_frame_path && review.status !== 'APPROVED' ? '' : 'disabled'}>Regenerar frame</button>
+            <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reinforce')" ${qcState.capabilities.manual_reinforcement && review.target_frame_path && review.status !== 'APPROVED' ? '' : 'disabled'}>Enviar a refuerzo</button>
             <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'approve')" ${review.audit_available ? '' : 'disabled'}>Aprobar</button>
             <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reject')">Rechazar</button>
+            ${regenerationActions}
           </div>
           <details><summary style="cursor:pointer;font-size:10px;color:var(--accent)">Ver diagnóstico e historial</summary><pre class="fqr-diagnosis">${diagnosis}\n\n${fqrEscape(JSON.stringify(review.history || [], null, 2))}</pre></details>
         </article>`;
@@ -2222,18 +2264,74 @@
 
     async function frameReviewAction(reviewId, action) {
       const message = document.getElementById('fqrMessage');
+      if (action === 'reinforce' && !window.confirm('Se validará el target correcto y se añadirá este caso a refuerzo futuro. No se iniciará entrenamiento. ¿Continuar?')) return;
       if (message) message.textContent = `Aplicando ${action}...`;
       try {
         const response = await fetch(`/api/qc/frame/${encodeURIComponent(reviewId)}/${action}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user: 'studio_user' })
+          body: JSON.stringify({ user: 'studio_user', num_candidates: 3 })
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || `Acción ${action} fallida`);
+        if (response.status === 202 && payload.job) {
+          await pollQcBatch(payload.job.job_id);
+        }
         await refreshFrameReviewQueue();
-        if (message) message.textContent = `Frame actualizado: ${payload.review.status}.`;
+        const resultingStatus = payload.review?.status || payload.status || 'completado';
+        if (message) message.textContent = `Frame actualizado: ${resultingStatus}.`;
       } catch (error) {
         if (message) message.textContent = `Acción bloqueada: ${error.message}`;
+      }
+    }
+
+    async function pollQcBatch(jobId) {
+      const box = document.getElementById('fqrBatchStatus');
+      const text = document.getElementById('fqrBatchText');
+      qcState.activeBatchJob = jobId;
+      if (box) box.style.display = 'flex';
+      for (let attempt = 0; attempt < 600; attempt++) {
+        const response = await fetch(`/api/qc/batch/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+        const job = await response.json();
+        if (!response.ok) throw new Error(job.error || 'No se pudo consultar el trabajo');
+        if (text) text.textContent = `${job.action}: ${job.status} · ${job.completed}/${job.total} · ${job.progress}% · fallos ${job.failed}`;
+        if (!['PENDING', 'RUNNING', 'CANCELLING'].includes(job.status)) {
+          qcState.activeBatchJob = null;
+          return job;
+        }
+        await new Promise(resolve => setTimeout(resolve, 700));
+      }
+      throw new Error('El trabajo excedió el tiempo de seguimiento');
+    }
+
+    async function cancelActiveQcBatch() {
+      if (!qcState.activeBatchJob) return;
+      await fetch(`/api/qc/batch/${encodeURIComponent(qcState.activeBatchJob)}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+    }
+
+    async function startQcBatch(action) {
+      const selected = Array.from(document.querySelectorAll('.fqr-select:checked')).map(input => input.value);
+      if (action === 'REINFORCE_SELECTED' && selected.length === 0) {
+        document.getElementById('fqrMessage').textContent = 'Selecciona al menos un frame para enviarlo a refuerzo.';
+        return;
+      }
+      const needsConfirmation = action !== 'REEVALUATE_ALL';
+      if (needsConfirmation) {
+        const label = action === 'REGENERATE_DEFECTIVE' ? 'regenerar sólo los frames defectuosos con target válido' : 'enviar los frames seleccionados a refuerzo futuro';
+        if (!window.confirm(`Se va a ${label}. El dataset no será modificado. ¿Continuar?`)) return;
+      }
+      try {
+        const response = await fetch('/api/qc/batch/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, review_ids: selected, confirmed: needsConfirmation, user: 'studio_user', num_candidates: 3 })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'No se pudo iniciar el lote');
+        await pollQcBatch(payload.job.job_id);
+        await refreshFrameReviewQueue();
+      } catch (error) {
+        document.getElementById('fqrMessage').textContent = `Acción batch bloqueada: ${error.message}`;
       }
     }
 
