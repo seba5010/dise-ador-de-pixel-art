@@ -606,8 +606,18 @@ class FrameQualityReviewManager:
         def update(record: Dict[str, Any]) -> Dict[str, Any]:
             if not record.get("audit_available") or not record.get("target_frame_path"):
                 raise ValueError("approval_blocked_missing_target")
-            if "ALPHA_FAIL" in set(record.get("issues") or []):
-                raise ValueError("approval_blocked_alpha_fail")
+            blocking_issues = {
+                "ALPHA_FAIL", "FACE_STRUCTURE_FAIL", "BODY_STRUCTURE_FAIL", "VISUAL_NOISE_FAIL",
+                "BORDER_TOUCH_TOP", "BORDER_TOUCH_BOTTOM", "BORDER_TOUCH_LEFT", "BORDER_TOUCH_RIGHT",
+            }.intersection(set(record.get("issues") or []))
+            if blocking_issues:
+                raise ValueError(f"approval_blocked_quality_gate:{','.join(sorted(blocking_issues))}")
+            try:
+                score = float(record.get("score_total"))
+            except (TypeError, ValueError):
+                score = 0.0
+            if score < 85.0:
+                raise ValueError("approval_blocked_quality_below_85")
             record["status"] = FrameReviewStatus.APPROVED.value
             record["user_action"] = "APPROVED"
             record["approved_by"] = actor

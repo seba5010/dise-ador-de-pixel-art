@@ -22,14 +22,14 @@ from .frame_quality_review import FrameQualityReviewManager
 from .models import PixelArtUNetGenerator
 
 
-MAX_ALLOWED_REGRESSION = 5.0
+MAX_ALLOWED_REGRESSION = 3.0
 CRITICAL_FLOORS: Dict[str, float] = {
-    "anatomy": 55.0,
-    "silhouette": 55.0,
-    "face": 45.0,
-    "props": 45.0,
-    "alpha": 95.0,
-    "palette": 60.0,
+    "anatomy": 75.0,
+    "silhouette": 75.0,
+    "face": 75.0,
+    "props": 60.0,
+    "alpha": 98.0,
+    "palette": 75.0,
 }
 CRITICAL_ISSUES = {
     "ALPHA_FAIL",
@@ -37,6 +37,9 @@ CRITICAL_ISSUES = {
     "BORDER_TOUCH_BOTTOM",
     "BORDER_TOUCH_LEFT",
     "BORDER_TOUCH_RIGHT",
+    "FACE_STRUCTURE_FAIL",
+    "BODY_STRUCTURE_FAIL",
+    "VISUAL_NOISE_FAIL",
 }
 
 

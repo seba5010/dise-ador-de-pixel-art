@@ -669,31 +669,31 @@ def assess_quality_checkpoint(quality: Any) -> Dict[str, Any]:
 
 
 DEFAULT_TARGETS: Dict[str, float] = {
-    "global": 80.0,
-    "anatomy": 75.0,
-    "silhouette": 75.0,
-    "pose": 75.0,
-    "face": 70.0,
-    "hair": 75.0,
-    "clothing": 80.0,
-    "arms_hands": 70.0,
-    "feet": 80.0,
-    "props": 70.0,
-    "palette": 85.0,
-    "alpha": 95.0,
-    "micro_detail": 70.0,
-    "outline": 75.0,
-    "training_stability": 90.0,
+    "global": 90.0,
+    "anatomy": 90.0,
+    "silhouette": 90.0,
+    "pose": 85.0,
+    "face": 90.0,
+    "hair": 85.0,
+    "clothing": 90.0,
+    "arms_hands": 85.0,
+    "feet": 85.0,
+    "props": 85.0,
+    "palette": 90.0,
+    "alpha": 98.0,
+    "micro_detail": 85.0,
+    "outline": 85.0,
+    "training_stability": 95.0,
 }
 
 DEFAULT_CRITICAL_FLOORS: Dict[str, float] = {
-    "global": 35.0,
-    "anatomy": 45.0,
-    "silhouette": 45.0,
-    "face": 40.0,
-    "palette": 50.0,
-    "alpha": 75.0,
-    "training_stability": 50.0,
+    "global": 55.0,
+    "anatomy": 60.0,
+    "silhouette": 60.0,
+    "face": 60.0,
+    "palette": 65.0,
+    "alpha": 90.0,
+    "training_stability": 60.0,
 }
 
 GUIDANCE_ACTIONS: Tuple[str, ...] = (
@@ -982,7 +982,11 @@ class QualityGuidanceController:
                 continue
             relative_target = _median(observed) - self.config.baseline_margin
             floor = self.config.critical_floors.get(category, 0.0)
-            thresholds[category] = round(max(floor, min(configured_target, relative_target)), 4)
+            # Baseline adaptation may soften a demanding target, but never by
+            # more than ten points. A bad initial model cannot redefine bad
+            # faces or broken anatomy as acceptable quality.
+            minimum_standard = max(floor, configured_target - 10.0)
+            thresholds[category] = round(max(minimum_standard, min(configured_target, relative_target)), 4)
         return thresholds
 
     def _recommend_action(self, diagnosis: Mapping[str, Any], trend: Mapping[str, Any]) -> str:

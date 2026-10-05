@@ -136,7 +136,7 @@ def test_bottleneck_diagnosis_does_not_hide_weak_face_behind_global_score():
 
     assert diagnosis["primary_problem"] == "face"
     assert diagnosis["severity"] == "critical"
-    assert diagnosis["critical_breaches"] == []  # 42 is poor, but above the configurable floor of 40.
+    assert diagnosis["critical_breaches"] == ["face"]
     assert diagnosis["confidence"] >= 0.6
 
 
@@ -171,9 +171,9 @@ def test_trend_analyzer_detects_required_states(values, expected):
 
 def test_regression_escalates_severity_even_when_latest_score_is_acceptable():
     trend = QualityTrendAnalyzer().analyze(
-        [QualityVector(face=78), QualityVector(face=74), QualityVector(face=70)]
+        [QualityVector(face=98), QualityVector(face=94), QualityVector(face=91)]
     )
-    diagnosis = diagnose_quality_bottleneck(QualityVector(face=70), trend=trend)
+    diagnosis = diagnose_quality_bottleneck(QualityVector(face=91), trend=trend)
     assert diagnosis["primary_problem"] is None
     assert diagnosis["severity"] == "medium"
 
@@ -196,8 +196,8 @@ def test_observational_controller_recommends_but_never_modifies_training():
 
     assert decision["mode"] == "observational"
     assert decision["primary_problem"] == "face"
-    assert decision["severity"] == "medium"
-    assert decision["recommended_action"] == "REINFORCE"
+    assert decision["severity"] == "critical"
+    assert decision["recommended_action"] == "ROLLBACK"
     assert decision["action"] == "CONTINUE"
     assert decision["training_modified"] is False
 

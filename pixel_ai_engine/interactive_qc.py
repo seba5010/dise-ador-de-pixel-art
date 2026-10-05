@@ -162,7 +162,7 @@ class InteractiveQualityControlService:
                     eligible.append(str(record["review_id"]))
             elif action == "REGENERATE_DEFECTIVE":
                 score = record.get("score_total")
-                low_score = score is None or float(score) < 80.0
+                low_score = score is None or float(score) < 85.0
                 severe = str(record.get("severity", "")).lower() in {"high", "critical"}
                 if record.get("target_frame_path") and record.get("status") != "APPROVED" and (low_score or severe):
                     eligible.append(str(record["review_id"]))

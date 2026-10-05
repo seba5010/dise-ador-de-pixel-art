@@ -61,7 +61,7 @@ def test_candidate_ranking_rejects_critical_regression_and_selects_real_improvem
     }
     result = rank_regeneration_candidates(original, [
         {"candidate_id": "candidate_bad", "quality": {"global": 76, "face": 75, "props": 70, "anatomy": 55, "alpha": 100, "palette": 90}},
-        {"candidate_id": "candidate_good", "quality": {"global": 74, "face": 72, "props": 70, "anatomy": 89, "alpha": 100, "palette": 91}},
+        {"candidate_id": "candidate_good", "quality": {"global": 86, "face": 82, "props": 70, "anatomy": 89, "alpha": 100, "palette": 91}},
     ])
 
     assert result["best_candidate"] == "candidate_good"

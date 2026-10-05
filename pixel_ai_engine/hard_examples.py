@@ -166,7 +166,7 @@ class HardExampleQueue:
         self.review_manager.mark_for_reinforcement(review_id, hard_example=record, actor=actor)
         return dict(record)
 
-    def record_outcome(self, review: Mapping[str, Any], *, approval_threshold: float = 80.0) -> Optional[Dict[str, Any]]:
+    def record_outcome(self, review: Mapping[str, Any], *, approval_threshold: float = 85.0) -> Optional[Dict[str, Any]]:
         key = self.key(review.get("character_id"), review.get("variant"), review.get("frame_idx"))
         try:
             score = float(review.get("score_total"))

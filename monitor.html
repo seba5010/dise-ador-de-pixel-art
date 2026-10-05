@@ -88,7 +88,7 @@
     .metrics-row {
       grid-column: 1 / -1;
       display: grid;
-      grid-template-columns: repeat(7, 1fr);
+      grid-template-columns: repeat(8, minmax(0, 1fr));
       gap: 12px;
     }
     .mcard {
@@ -111,6 +111,69 @@
     .mcard.good .mcard-value { color: var(--accent2); }
     .mcard.warn .mcard-value { color: var(--warn); }
     .mcard.accent .mcard-value { color: var(--accent); }
+    .quality-hero {
+      grid-column: span 2;
+      position: relative;
+      overflow: hidden;
+      border-color: rgba(108,99,255,.5);
+      background: linear-gradient(135deg, rgba(108,99,255,.14), rgba(72,187,120,.05));
+      --qc-color: #6c63ff;
+      --qc-score: 0;
+    }
+    .quality-hero::after {
+      content: '';
+      position: absolute; inset: auto -45px -65px auto;
+      width: 150px; height: 150px; border-radius: 50%;
+      background: var(--qc-color); opacity: .07; filter: blur(4px);
+      pointer-events: none;
+    }
+    .quality-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
+    .quality-head .mcard-label { margin:0; color:#c9c5ff; }
+    .quality-state {
+      display:inline-flex; align-items:center; gap:6px;
+      border:1px solid currentColor; border-radius:999px; padding:4px 9px;
+      color:#a5b4fc; background:rgba(99,102,241,.12);
+      font:700 9px var(--mono); letter-spacing:.6px;
+    }
+    .quality-state.adjusting { color:#fbbf24; background:rgba(251,191,36,.12); }
+    .quality-state.analyzing { color:#38bdf8; background:rgba(56,189,248,.12); }
+    .quality-state.stable { color:#34d399; background:rgba(52,211,153,.12); }
+    .quality-state.warning, .quality-state.recovery { color:#fb7185; background:rgba(251,113,133,.12); }
+    .quality-state-dot { width:7px; height:7px; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor; }
+    .quality-state.adjusting .quality-state-dot,
+    .quality-state.analyzing .quality-state-dot,
+    .quality-state.recovery .quality-state-dot { animation:pulse 1.1s infinite; }
+    .quality-body { display:grid; grid-template-columns:88px 1fr; gap:12px; align-items:center; }
+    .quality-ring {
+      width:84px; height:84px; border-radius:50%; padding:7px;
+      background:conic-gradient(var(--qc-color) calc(var(--qc-score) * 1%), #252836 0);
+      box-shadow:0 0 22px color-mix(in srgb, var(--qc-color) 25%, transparent);
+    }
+    .quality-ring-inner {
+      width:100%; height:100%; border-radius:50%; background:#11141c;
+      display:flex; flex-direction:column; justify-content:center; align-items:center;
+    }
+    .quality-score { font:700 24px var(--mono); color:var(--qc-color); line-height:1; }
+    .quality-score-label { margin-top:4px; color:var(--dim); font-size:8px; letter-spacing:.8px; }
+    .quality-problem { font-size:11px; color:#fff; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .quality-action { margin-top:3px; font:600 9px var(--mono); color:var(--dim); }
+    .quality-comparison { margin-top:4px; font:600 9px var(--mono); color:#a5b4fc; }
+    .quality-mini-grid { display:grid; grid-template-columns:1fr 1fr; gap:5px 10px; margin-top:8px; }
+    .quality-mini { display:flex; justify-content:space-between; font-size:9px; color:var(--dim); }
+    .quality-mini strong { color:#e2e8f0; font-family:var(--mono); }
+    .quality-footer { display:flex; justify-content:space-between; gap:8px; margin-top:9px; font-size:9px; color:var(--dim); }
+    .quality-trend.up { color:#34d399; }
+    .quality-trend.down { color:#fb7185; }
+    @media (max-width: 1250px) {
+      .metrics-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .quality-hero { grid-column: span 2; }
+    }
+    @media (max-width: 760px) {
+      .main { grid-template-columns:1fr; padding:12px; }
+      .metrics-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quality-hero { grid-column:1 / -1; }
+      .panel-left, .panel-right { grid-column:1; }
+    }
 
     /* ── LEFT PANEL ── */
     .panel-left {
@@ -322,12 +385,28 @@
         <div class="mcard-value" id="m-epsec">—</div>
         <div class="mcard-sub">Tiempo total: <span id="m-elapsed">—</span></div>
       </div>
-      <div class="mcard good" style="border-color: rgba(72,187,120,.4); background: rgba(72,187,120,.05)">
-        <div class="mcard-label" style="color:var(--accent2)">Quality Guidance</div>
-        <div class="mcard-value" id="m-qc-score" style="color:var(--accent2)">—</div>
-        <div class="mcard-sub">Cuerpo: <strong id="m-qc-body" style="color:#38bdf8">—</strong> · Defectos: <strong id="m-qc-defects" style="color:#f87171">—</strong></div>
-        <div class="mcard-sub" style="font-size:10px; color:var(--dim)">Paleta: <span id="m-qc-pal">—</span> · Alfa: <span id="m-qc-alpha">—</span></div>
-        <div class="mcard-sub" style="font-size:10px; color:#34d399">Guía: <span id="m-qc-guide">—</span></div>
+      <div class="mcard quality-hero" id="quality-hero-card" aria-label="Calidad visual del entrenamiento">
+        <div class="quality-head">
+          <div class="mcard-label">Calidad visual del diseño</div>
+          <div class="quality-state" id="qc-live-state"><span class="quality-state-dot"></span><span id="qc-live-state-text">ESPERANDO</span></div>
+        </div>
+        <div class="quality-body">
+          <div class="quality-ring" id="qc-score-ring">
+            <div class="quality-ring-inner"><span class="quality-score" id="m-qc-score">—</span><span class="quality-score-label">GLOBAL</span></div>
+          </div>
+          <div>
+            <div class="quality-problem" id="qc-main-problem">Esperando primera evaluación</div>
+            <div class="quality-action" id="m-qc-guide">Sin acción todavía</div>
+            <div class="quality-comparison" id="qc-comparison-source">Esperando comparación con el dataset</div>
+            <div class="quality-mini-grid">
+              <div class="quality-mini"><span>Anatomía</span><strong id="qh-anatomy">—</strong></div>
+              <div class="quality-mini"><span>Silueta</span><strong id="qh-silhouette">—</strong></div>
+              <div class="quality-mini"><span>Rostro</span><strong id="qh-face">—</strong></div>
+              <div class="quality-mini"><span>Paleta</span><strong id="qh-palette">—</strong></div>
+            </div>
+          </div>
+        </div>
+        <div class="quality-footer"><span id="qc-last-check">Aún sin medición</span><span class="quality-trend" id="qc-quality-trend">—</span></div>
       </div>
     </div>
 
@@ -723,17 +802,93 @@
     }
 
     // ─── UPDATE UI ─────────────────────────────────────────────────────────────
+    function qcNumber(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : null;
+    }
+
+    function qcPercent(value) {
+      const number = qcNumber(value);
+      return number === null ? 'N/D' : `${number.toFixed(1)}%`;
+    }
+
+    function updateQualityHero(d, guidance) {
+      const vector = guidance && guidance.quality_vector ? guidance.quality_vector : {};
+      const score = qcNumber(vector.global ?? d.quality?.score_total);
+      const card = document.getElementById('quality-hero-card');
+      const state = document.getElementById('qc-live-state');
+      const stateText = document.getElementById('qc-live-state-text');
+      const problem = guidance?.primary_problem || guidance?.problem || 'sin problema dominante';
+      const severity = String(guidance?.severity || 'low').toUpperCase();
+      const action = guidance?.authorized_action || guidance?.action || guidance?.recommended_action || 'CONTINUE';
+      const samplingActive = d.sampling?.active === true || guidance?.sampling_change?.active === true;
+      const lossActive = d.guidance_state?.loss_plan?.active === true || guidance?.loss_change?.active === true;
+      const recoveryActive = d.recovery?.active === true || ['RECUPERACION_LISTA', 'COLAPSO_DETECTADO'].includes(d.status);
+      const modified = guidance?.training_modified === true || samplingActive || lossActive;
+
+      let stateClass = '';
+      let stateLabel = 'ESPERANDO';
+      if (recoveryActive || action === 'ROLLBACK') {
+        stateClass = 'recovery'; stateLabel = 'RECUPERACIÓN';
+      } else if (modified) {
+        stateClass = 'adjusting'; stateLabel = 'AJUSTANDO';
+      } else if (d.status === 'ENTRENANDO' && score !== null) {
+        stateClass = 'analyzing'; stateLabel = 'ANALIZANDO';
+      } else if (score !== null && score >= 80) {
+        stateClass = 'stable'; stateLabel = 'ESTABLE';
+      } else if (score !== null) {
+        stateClass = 'warning'; stateLabel = 'REVISIÓN';
+      }
+      state.className = `quality-state ${stateClass}`.trim();
+      stateText.textContent = stateLabel;
+
+      const color = score === null ? '#6c63ff' : score >= 90 ? '#34d399' : score >= 80 ? '#38bdf8' : score >= 70 ? '#fbbf24' : '#fb7185';
+      card.style.setProperty('--qc-score', score ?? 0);
+      card.style.setProperty('--qc-color', color);
+      setText('m-qc-score', score === null ? '—' : `${score.toFixed(1)}%`);
+      setText('qc-main-problem', score === null ? 'Esperando primera evaluación' : `${problem} · ${severity}`);
+      setText('m-qc-guide', `${stateLabel} · ${action}`);
+      const compared = Number(d.quality?.evaluated_sample_count || 0);
+      const average = qcNumber(d.quality?.quality_average);
+      const worst = qcNumber(d.quality?.quality_worst);
+      const comparisonText = compared > 0
+        ? `vs ${compared} targets reales · promedio ${qcPercent(average)} · peor ${qcPercent(worst)}`
+        : 'Esperando comparación con el dataset';
+      setText('qc-comparison-source', comparisonText);
+      setText('qh-anatomy', qcPercent(vector.anatomy ?? d.quality?.cuerpo_precision));
+      setText('qh-silhouette', qcPercent(vector.silhouette));
+      setText('qh-face', qcPercent(vector.face ?? d.quality?.detalle_facial ?? d.quality?.gestos_ojos));
+      setText('qh-palette', qcPercent(vector.palette ?? d.quality?.fidelidad_paleta));
+      setText('qc-last-check', score === null ? 'Aún sin medición' : `Control: época ${d.epoch ?? '—'} · ${d.timestamp || 'ahora'}`);
+
+      const measured = (Array.isArray(d.history) ? d.history : []).map(entry => {
+        const entryGuidance = entry?.guidance || entry?.quality_guidance;
+        return qcNumber(entryGuidance?.quality_vector?.global ?? entry?.quality?.score_total);
+      }).filter(value => value !== null);
+      const previous = measured.length > 1 ? measured[measured.length - 2] : null;
+      const trend = document.getElementById('qc-quality-trend');
+      trend.className = 'quality-trend';
+      if (score !== null && previous !== null) {
+        const delta = score - previous;
+        trend.textContent = Math.abs(delta) < 0.05 ? 'Sin cambio' : `${delta > 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)} pts`;
+        if (delta > 0.05) trend.classList.add('up');
+        if (delta < -0.05) trend.classList.add('down');
+      } else {
+        trend.textContent = score === null ? '—' : 'Primera medición';
+      }
+    }
+
     function updateUI(d) {
       if (Array.isArray(d.past_eras)) {
         pastEras = d.past_eras;
       }
       // Badge de estado y fase
-      const isStopped = d.status === 'DETENIDO';
+      const isStopped = ['DETENIDO', 'COMPLETADO', 'ERROR_NAN', 'COLAPSO_DETECTADO', 'RECUPERACION_LISTA'].includes(d.status);
       stopped = isStopped;
       statusBadge.className = 'badge-live' + (isStopped ? ' badge-stopped' : '');
-      statusText.textContent = isStopped
-        ? `DETENIDO en época ${d.epoch}`
-        : (d.infinite_mode ? `Entrenando · Época ${d.epoch} (∞)` : `Entrenando · Época ${d.epoch}/${d.total_epochs}`);
+      statusText.textContent = d.status === 'ENTRENANDO'
+        ? (d.infinite_mode ? `Entrenando · Época ${d.epoch} (∞)` : `Entrenando · Época ${d.epoch}/${d.total_epochs}`)
+        : `${d.status || 'EN ESPERA'} · Época ${d.epoch ?? '—'}/${d.total_epochs ?? '—'}`;
 
       const isPhase2 = d.phase_id === 2 || (d.phase && d.phase.includes('8x12'));
       const phaseBadge = document.getElementById('phase-badge');
@@ -754,22 +909,18 @@
       setText('m-elapsed', fmtTime(d.elapsed_sec));
 
       const guidance = d.guidance || d.quality_guidance || null;
+      updateQualityHero(d, guidance);
       if (guidance) {
         const problem = guidance.primary_problem || guidance.problem || 'sin cuello de botella';
         const severity = String(guidance.severity || 'low').toUpperCase();
         const recommendation = guidance.recommended_action || 'CONTINUE';
-        const mode = guidance.enabled === false ? 'DESACTIVADO' : 'OBSERVACIONAL';
-        setText('m-qc-guide', `${mode} · ${problem} · ${severity} · ${recommendation}`);
-      } else {
-        setText('m-qc-guide', 'Sin datos');
+        const mode = guidance.enabled === false ? 'DESACTIVADO' : (guidance.training_modified === true ? 'AJUSTANDO' : 'OBSERVACIONAL');
+        const guideSummaryEl = document.getElementById('qc-guide-summary');
+        if (guideSummaryEl) guideSummaryEl.dataset.mode = mode;
       }
 
       // Métricas Quirúrgicas de Control de Calidad
       if (d.quality) {
-        setText('m-qc-score', (d.quality.score_total || 0).toFixed(1) + '%');
-        setText('m-qc-alpha', (d.quality.pureza_alfa || 0).toFixed(0) + '%');
-        setText('m-qc-pal', (d.quality.fidelidad_paleta || 0).toFixed(0) + '%');
-
         const bodyPrec = (d.quality.cuerpo_precision !== undefined) ? d.quality.cuerpo_precision.toFixed(1) + '%' : '—';
         const defCount = (d.quality.defectos_cuerpo !== undefined) ? `${d.quality.defectos_cuerpo} px` : '—';
         const colorsStr = (d.quality.colores_ia !== undefined && d.quality.colores_original !== undefined) ? `${d.quality.colores_ia} / ${d.quality.colores_original}` : '—';

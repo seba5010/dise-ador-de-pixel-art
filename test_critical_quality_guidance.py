@@ -32,8 +32,9 @@ def test_critical_audit_is_pure_and_feeds_quality_vector():
 
 def test_training_preview_never_calls_destructive_critical_elevation():
     source = inspect.getsource(train_supervised.generate_preview)
-    assert "Phase3CriticalReviewer.audit_frame" in source
-    assert "elevate_frame(" not in source
+    audit_source = inspect.getsource(train_supervised._audit_training_prediction)
+    assert "Phase3CriticalReviewer.audit_frame" in audit_source
+    assert "elevate_frame(" not in source + audit_source
 
 
 def test_quality_checkpoint_criterion_requires_coverage_and_critical_floors():

@@ -69,7 +69,7 @@ def test_status_persists_observational_guidance_and_epoch_history(monkeypatch, t
     assert status == persisted
     assert persisted["guidance"]["mode"] == "observational"
     assert persisted["guidance"]["action"] == "CONTINUE"
-    assert persisted["guidance"]["recommended_action"] == "REINFORCE"
+    assert persisted["guidance"]["recommended_action"] == "ROLLBACK"
     assert persisted["guidance"]["training_modified"] is False
     assert persisted["guidance"]["trend"]["by_category"]["face"] == "REGRESSION"
     assert persisted["quality_guidance"] == persisted["guidance"]
@@ -183,6 +183,54 @@ def test_frame_quality_batch_is_per_sample_and_detached_from_training_graph():
     assert measurements[0]["quality"] == 100.0
     assert measurements[1]["quality"] < measurements[0]["quality"]
     assert predictions.grad is None
+
+
+def test_dataset_target_audits_use_conservative_multi_character_score():
+    audits = [
+        {
+            "character_id": f"hero_{index}",
+            "frame_idx": index,
+            "metrics": {
+                "score_total": score,
+                "strict_face": score - 5,
+                "strict_anatomy": score - 3,
+                "strict_silhouette": 95,
+                "strict_visual_noise": score - 8,
+                "cuerpo_precision": score - 3,
+            },
+        }
+        for index, score in enumerate((40.0, 60.0, 80.0, 100.0))
+    ]
+
+    quality = train_supervised._aggregate_training_quality(audits)
+
+    assert quality["comparison_source"] == "dataset_targets"
+    assert quality["comparison_method"] == "percentil_25_conservador"
+    assert quality["evaluated_sample_count"] == 4
+    assert quality["score_total"] == 55.0
+    assert quality["quality_average"] == 70.0
+    assert quality["quality_worst"] == 40.0
+    assert [sample["character_id"] for sample in quality["evaluated_samples"]] == [
+        "hero_0", "hero_1", "hero_2", "hero_3"
+    ]
+
+
+def test_quality_sample_selection_rotates_characters_and_frames():
+    samples = [
+        {"char_id": character, "frame_idx": frame}
+        for character in ("a", "b", "c", "d", "e")
+        for frame in range(2)
+    ]
+
+    epoch_one = train_supervised._select_quality_sample_indices(samples, epoch_label=1, limit=4)
+    epoch_two = train_supervised._select_quality_sample_indices(samples, epoch_label=2, limit=4)
+
+    assert len(epoch_one) == len(epoch_two) == 4
+    assert {samples[index]["char_id"] for index in epoch_one} != {
+        samples[index]["char_id"] for index in epoch_two
+    }
+    assert all(samples[index]["frame_idx"] == 0 for index in epoch_one)
+    assert all(samples[index]["frame_idx"] == 1 for index in epoch_two)
 
 
 def test_active_sampling_plan_uses_weighted_sampler_and_is_persisted():
@@ -357,7 +405,27 @@ def test_monitor_reads_new_guidance_contract():
     assert "d.guidance || d.quality_guidance" in monitor
     assert "OBSERVACIONAL" in monitor
     assert "anatomía ${vector.anatomy" in monitor
+    assert 'id="qc-live-state-text"' in monitor
+    assert 'id="qc-comparison-source"' in monitor
+    assert "targets reales" in monitor
+    assert "AJUSTANDO" in monitor
+    assert "updateQualityHero(d, guidance)" in monitor
     assert "info.guidance || info.quality_guidance" in studio
+
+
+def test_terminal_quality_status_reports_when_training_is_adjusting(capsys):
+    train_supervised._print_quality_guidance({
+        "enabled": True,
+        "training_modified": True,
+        "quality_vector": {"global": 72.5},
+        "recommended_action": "REINFORCE",
+        "authorized_action": "ADJUST_SAMPLING",
+    })
+
+    output = capsys.readouterr().out
+    assert "Global: 72.5%" in output
+    assert "Acción autorizada: ADJUST_SAMPLING" in output
+    assert "MODO ACTUAL: AJUSTANDO" in output
 
 
 def test_cpu_smoke_training_completes_and_resumes_with_guidance(monkeypatch, tmp_path):

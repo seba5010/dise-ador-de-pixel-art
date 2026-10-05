@@ -33,6 +33,7 @@ from .models import PixelArtUNetGenerator
 from .anatomical_guidance import compute_anatomical_metrics
 from .phase3_critical_enhancer import Phase3CriticalReviewer
 from .quality_guidance import build_quality_vector, diagnose_quality_bottleneck
+from .strict_visual_quality import apply_strict_visual_metrics
 
 
 class QualityGate:
@@ -124,8 +125,11 @@ class QualityGate:
             palette=palette,
             target_img=target,
         )
-        raw_metrics.update(compute_anatomical_metrics(generated, target))
+        anatomy_metrics = compute_anatomical_metrics(generated, target)
+        anatomy_metrics["anatomy_geometry"] = anatomy_metrics.pop("cuerpo_precision", None)
+        raw_metrics.update(anatomy_metrics)
         raw_metrics.update(Phase3CriticalReviewer.audit_frame(generated, identity))
+        raw_metrics = apply_strict_visual_metrics(raw_metrics, generated, target)
         vector = build_quality_vector(raw_metrics)
         quality = vector.to_dict()
         diagnosis = diagnose_quality_bottleneck(vector)
@@ -146,12 +150,21 @@ class QualityGate:
         if diagnosis.get("primary_problem"):
             issues.append(str(diagnosis["primary_problem"]))
         issues.extend(str(item) for item in diagnosis.get("secondary_problems", []))
+        if float(raw_metrics.get("strict_face", 0.0) or 0.0) < 75.0:
+            issues.append("FACE_STRUCTURE_FAIL")
+        if float(raw_metrics.get("strict_anatomy", 0.0) or 0.0) < 75.0:
+            issues.append("BODY_STRUCTURE_FAIL")
+        if float(raw_metrics.get("strict_visual_noise", 0.0) or 0.0) < 80.0:
+            issues.append("VISUAL_NOISE_FAIL")
         issues = list(dict.fromkeys(issues))
 
-        critical = {"ALPHA_FAIL", "BORDER_TOUCH_TOP", "BORDER_TOUCH_BOTTOM", "BORDER_TOUCH_LEFT", "BORDER_TOUCH_RIGHT"}
+        critical = {
+            "ALPHA_FAIL", "BORDER_TOUCH_TOP", "BORDER_TOUCH_BOTTOM", "BORDER_TOUCH_LEFT", "BORDER_TOUCH_RIGHT",
+            "FACE_STRUCTURE_FAIL", "BODY_STRUCTURE_FAIL", "VISUAL_NOISE_FAIL",
+        }
         approved = bool(
             score_total is not None
-            and float(score_total) >= 70.0
+            and float(score_total) >= 85.0
             and not critical.intersection(issues)
             and diagnosis.get("severity") != "critical"
         )

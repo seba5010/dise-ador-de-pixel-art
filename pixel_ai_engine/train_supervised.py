@@ -38,6 +38,7 @@ from pixel_ai_engine.anatomical_guidance import (
     compute_anatomical_metrics,
     differentiable_silhouette_loss,
 )
+from pixel_ai_engine.strict_visual_quality import apply_strict_visual_metrics
 from pixel_ai_engine.quality_guidance import (
     BASE_LOSS_WEIGHTS,
     ENABLE_ADAPTIVE_LOSS,
@@ -311,6 +312,8 @@ def _print_quality_guidance(guidance: Any) -> None:
 
     primary = guidance.get("primary_problem") or "ninguno"
     secondary = ", ".join(guidance.get("secondary_problems") or []) or "ninguno"
+    mode = "AJUSTANDO" if guidance.get("training_modified") else "OBSERVANDO"
+    authorized_action = guidance.get("authorized_action", guidance.get("recommended_action", "CONTINUE"))
     print("\nQUALITY GUIDANCE", flush=True)
     print(
         f"  Global: {metric('global')} | Anatomía: {metric('anatomy')} | "
@@ -329,7 +332,7 @@ def _print_quality_guidance(guidance: Any) -> None:
     )
     print(
         f"  Acción recomendada: {guidance.get('recommended_action', 'CONTINUE')} | "
-        "MODO ACTUAL: OBSERVATIONAL_ONLY — no se modificó el entrenamiento.",
+        f"Acción autorizada: {authorized_action} | MODO ACTUAL: {mode}",
         flush=True,
     )
 
@@ -1205,10 +1208,94 @@ def _generate_all_frame_comparison(generator, samples, template_manager, output_
     return manifest
 
 
+def _audit_training_prediction(generated, target, palette):
+    """Compare one raw prediction with its exact dataset target."""
+    qc = PixelArtEnhancer.analyze_quality(generated, palette=palette, target_img=target)
+    anatomy_metrics = compute_anatomical_metrics(generated, target)
+    anatomy_metrics["anatomy_geometry"] = anatomy_metrics.pop("cuerpo_precision", None)
+    qc.update(anatomy_metrics)
+    qc.update(Phase3CriticalReviewer.audit_frame(generated))
+    return apply_strict_visual_metrics(qc, generated, target)
+
+
+def _aggregate_training_quality(audits):
+    """Use a conservative percentile and retain mean/worst evidence."""
+    valid = [item for item in audits if isinstance(item.get("metrics"), dict) and item["metrics"]]
+    if not valid:
+        return {}
+    metrics_list = [item["metrics"] for item in valid]
+    conservative_keys = {
+        "score_total", "cuerpo_precision", "silueta_iou_real", "silhouette_iou", "pose_alignment",
+        "nitidez_bordes", "pureza_alfa", "ruido_huerfano", "fidelidad_paleta", "micro_detalles",
+        "preservacion_tatuajes", "pelo_gorro", "gestos_ojos", "ropa_delantal", "tatuajes_brazos",
+        "objetos_utensilios", "zapatos_pies", "score_critico", "pureza_bordes", "definicion_tinta",
+        "profundidad_sombra", "riqueza_paleta", "detalle_facial", "anatomy_geometry",
+        "strict_global", "strict_anatomy", "strict_face", "strict_silhouette", "strict_visual_noise",
+        "strict_whole_structure",
+    }
+    count_keys = {"defectos_cuerpo", "total_px_cuerpo"}
+    aggregated = {}
+    for key in set().union(*(metrics.keys() for metrics in metrics_list)):
+        values = [
+            float(metrics[key]) for metrics in metrics_list
+            if isinstance(metrics.get(key), (int, float))
+            and not isinstance(metrics.get(key), bool)
+            and math.isfinite(float(metrics[key]))
+        ]
+        if not values:
+            continue
+        if key in conservative_keys:
+            aggregated[key] = round(float(np.percentile(values, 25)), 4)
+        elif key in count_keys:
+            aggregated[key] = int(sum(values))
+        else:
+            aggregated[key] = round(float(np.mean(values)), 4)
+
+    global_scores = [float(item["metrics"]["score_total"]) for item in valid if item["metrics"].get("score_total") is not None]
+    aggregated.update({
+        "comparison_source": "dataset_targets",
+        "comparison_method": "percentil_25_conservador",
+        "evaluated_sample_count": len(valid),
+        "quality_average": round(float(np.mean(global_scores)), 4) if global_scores else None,
+        "quality_worst": round(float(min(global_scores)), 4) if global_scores else None,
+        "evaluated_samples": [
+            {
+                "character_id": item["character_id"],
+                "frame_idx": int(item["frame_idx"]),
+                "score_total": item["metrics"].get("score_total"),
+                "face": item["metrics"].get("strict_face"),
+                "anatomy": item["metrics"].get("strict_anatomy"),
+                "silhouette": item["metrics"].get("strict_silhouette"),
+                "visual_noise": item["metrics"].get("strict_visual_noise"),
+            }
+            for item in valid
+        ],
+    })
+    aggregated["quality_guide"] = PixelArtEnhancer.build_quality_guide(aggregated)
+    return aggregated
+
+
+def _select_quality_sample_indices(samples, epoch_label=None, limit=4):
+    """Rotate characters and frames so repeated audits cover the full dataset."""
+    grouped = {}
+    for index, sample in enumerate(samples):
+        grouped.setdefault(str(sample.get("char_id", "unknown")), []).append(index)
+    if not grouped:
+        return []
+    character_ids = list(grouped)
+    cursor = max(0, int(epoch_label or 1) - 1)
+    selected = []
+    for offset in range(min(int(limit), len(character_ids))):
+        character_id = character_ids[(cursor * int(limit) + offset) % len(character_ids)]
+        character_samples = grouped[character_id]
+        selected.append(character_samples[cursor % len(character_samples)])
+    return selected
+
+
 def generate_preview(generator, dataset, epoch_label=None):
     generator.eval()
     with torch.no_grad():
-        sample_indices = [0, 96, 288, 384] if len(dataset) > 400 else list(range(min(4, len(dataset))))
+        sample_indices = _select_quality_sample_indices(dataset.samples, epoch_label=epoch_label, limit=4)
         from pixel_ai_engine.dataset import TemplateManager
         tmpl_path = PROJECT_ROOT / "dataset_moldes" / "plantilla de los spritesheets.png"
         if not tmpl_path.exists():
@@ -1216,9 +1303,7 @@ def generate_preview(generator, dataset, epoch_label=None):
         tm = TemplateManager(tmpl_path, MODEL_RESOLUTION, 12, 8, 1024, 1536)
 
         cards = []
-        first_raw = None
-        first_tgt = None
-        first_pal = None
+        quality_audits = []
 
         for s_idx in sample_indices:
             # Evaluar siempre sobre la muestra fija sin aumentos de datos aleatorios
@@ -1254,10 +1339,14 @@ def generate_preview(generator, dataset, epoch_label=None):
             target_image = _tensor_to_preview_image(target, has_alpha=True)
             tgt_pil = _fit_preview_cell(target_image)
 
-            if first_raw is None:
-                first_raw = raw_pred_pil
-                first_tgt = tgt_pil
-                first_pal = char_palette
+            try:
+                quality_audits.append({
+                    "character_id": char_id,
+                    "frame_idx": f_idx,
+                    "metrics": _audit_training_prediction(raw_pred_pil, tgt_pil, char_palette),
+                })
+            except Exception as audit_error:
+                print(f"[QC] Comparación omitida para {char_id}/frame_{int(f_idx):03d}: {audit_error}", flush=True)
 
             # Tira comparativa con 5 paneles: Frontal | Pose | IA Cruda | IA Remapeada | Ground Truth
             strip = Image.new("RGBA", (128 * 5 + 35, 128 + 20), (16, 18, 26, 255))
@@ -1285,22 +1374,8 @@ def generate_preview(generator, dataset, epoch_label=None):
         _generate_full_sheet_preview(generator, sheet_front, tm, sheet_palette)
         _generate_all_frame_comparison(generator, dataset.samples, tm, epoch_label=epoch_label)
 
-        # Auditoría clínica del cuerpo en la primera muestra (Ground Truth)
-        qc_metrics = {}
-        if first_raw is not None and first_tgt is not None:
-            try:
-                from pixel_ai_engine.enhancer import PixelArtEnhancer
-                qc = PixelArtEnhancer.analyze_quality(first_raw, palette=first_pal, target_img=first_tgt)
-                qc.update(compute_anatomical_metrics(first_raw, first_tgt))
-                # Audit only: never call Phase3CriticalReviewer.elevate_frame on
-                # predictions or ground truth in the training evaluation path.
-                qc.update(Phase3CriticalReviewer.audit_frame(first_raw))
-                qc["quality_guide"] = PixelArtEnhancer.build_quality_guide(qc)
-                qc_metrics = qc
-            except Exception:
-                pass
-
-        return qc_metrics
+        # Every percentage comes from prediction versus exact dataset target.
+        return _aggregate_training_quality(quality_audits)
 
 def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1.5e-4, mode: str = "resume", respawn_epoch: int = None):
     # Limpiar banderas anteriores
@@ -1516,8 +1591,10 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     print(f"  Muestras: {len(dataset)} pares Ground-Truth | Dispositivo: {DEVICE} | Mejor Loss Inicial: {best_loss:.4f}")
     print("=" * 70)
 
-    # Optimizadores 8-bit AdamW de Forge
+    # Optimizadores 8-bit AdamW de Forge (solo admiten tensores CUDA).
     try:
+        if DEVICE.type != "cuda":
+            raise RuntimeError("BitsAndBytes requiere CUDA")
         import bitsandbytes as bnb
         opt_g = bnb.optim.AdamW8bit(generator.parameters(), lr=effective_lr, betas=(0.5, 0.999), weight_decay=1e-4)
         opt_d = bnb.optim.AdamW8bit(discriminator.parameters(), lr=effective_lr * 0.5, betas=(0.5, 0.999), weight_decay=1e-4)
