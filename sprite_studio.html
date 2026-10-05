@@ -418,6 +418,130 @@
       font-family: var(--mono);
       font-weight: 600;
     }
+    .training-quality-card {
+      --training-qc-color: #6366f1;
+      --training-qc-score: 0;
+      flex: 0 0 auto;
+      min-height: 190px;
+      margin-bottom: 14px;
+      border: 1px solid color-mix(in srgb, var(--training-qc-color) 58%, transparent);
+      background: linear-gradient(115deg, rgba(17,20,31,.98), rgba(30,27,55,.94));
+      box-shadow: 0 0 24px color-mix(in srgb, var(--training-qc-color) 12%, transparent);
+      overflow: hidden;
+      position: relative;
+    }
+    .training-quality-card::after {
+      content: '';
+      position: absolute;
+      width: 240px;
+      height: 240px;
+      right: -100px;
+      bottom: -150px;
+      border-radius: 50%;
+      background: var(--training-qc-color);
+      opacity: .08;
+      pointer-events: none;
+    }
+    .training-quality-header,
+    .training-quality-body,
+    .training-quality-footer { position: relative; z-index: 1; }
+    .training-quality-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .training-quality-title { color: #fff; font-size: 14px; font-weight: 800; letter-spacing: .25px; }
+    .training-quality-source { margin-top: 3px; color: #94a3b8; font-size: 10px; }
+    .training-quality-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 10px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      color: #38bdf8;
+      background: rgba(56,189,248,.1);
+      font: 800 10px var(--mono);
+      letter-spacing: .6px;
+    }
+    .training-quality-state::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 9px currentColor;
+      animation: pulse-border 1.2s infinite ease-in-out;
+    }
+    .training-quality-state.adjusting { color: #fbbf24; background: rgba(251,191,36,.1); }
+    .training-quality-state.stable { color: #34d399; background: rgba(52,211,153,.1); }
+    .training-quality-state.warning { color: #fb7185; background: rgba(251,113,133,.1); }
+    .training-quality-body {
+      display: grid;
+      grid-template-columns: 132px minmax(210px, 1.3fr) minmax(420px, 2.7fr);
+      align-items: center;
+      gap: 18px;
+    }
+    .training-quality-ring {
+      width: 116px;
+      height: 116px;
+      padding: 9px;
+      border-radius: 50%;
+      background: conic-gradient(var(--training-qc-color) calc(var(--training-qc-score) * 1%), #252a3a 0);
+      box-shadow: 0 0 24px color-mix(in srgb, var(--training-qc-color) 28%, transparent);
+    }
+    .training-quality-ring-inner {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: #10131c;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    .training-quality-score { color: var(--training-qc-color); font: 900 29px var(--mono); line-height: 1; }
+    .training-quality-score-label { color: #94a3b8; font: 700 9px var(--mono); margin-top: 5px; letter-spacing: .8px; }
+    .training-quality-verdict { font-size: 16px; font-weight: 800; color: #fff; }
+    .training-quality-action { margin-top: 5px; color: var(--training-qc-color); font: 700 11px var(--mono); }
+    .training-quality-comparison { margin-top: 8px; color: #c4b5fd; font-size: 11px; line-height: 1.45; }
+    .training-quality-metrics {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(76px, 1fr));
+      gap: 8px;
+    }
+    .training-quality-metric {
+      padding: 10px;
+      border: 1px solid rgba(148,163,184,.16);
+      border-radius: 6px;
+      background: rgba(3,7,18,.34);
+      min-width: 0;
+    }
+    .training-quality-metric span { display: block; color: #94a3b8; font-size: 9px; text-transform: uppercase; }
+    .training-quality-metric strong { display: block; margin-top: 4px; color: #f8fafc; font: 800 17px var(--mono); }
+    .training-quality-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      color: #94a3b8;
+      font-size: 10px;
+      border-top: 1px solid rgba(148,163,184,.1);
+      padding-top: 8px;
+    }
+    #monQualityTrend.up { color: #34d399; }
+    #monQualityTrend.down { color: #fb7185; }
+    @media (max-width: 1180px) {
+      .training-quality-body { grid-template-columns: 120px 1fr; }
+      .training-quality-metrics { grid-column: 1 / -1; }
+    }
+    @media (max-width: 720px) {
+      .training-quality-body { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+      .training-quality-metrics { grid-template-columns: repeat(2, minmax(100px, 1fr)); width: 100%; }
+      .training-quality-footer { justify-content: center; }
+    }
   
     /* ==========================================================================
        ESTILOS EXCLUSIVOS DEL CONTROL DE CALIDAD EN VIVO (QUALITY GATE)
@@ -981,6 +1105,42 @@
             </div>
           </div>
           <div id="respawnFeedback" style="font-size:11px; margin-top:8px; color:#10b981; min-height:16px; font-weight:500;"></div>
+        </div>
+
+        <!-- CONTROL DE CALIDAD DENTRO DEL MONITOR DE ENTRENAMIENTO -->
+        <div class="monitor-card training-quality-card" id="monQualityCard" aria-label="Control de calidad del entrenamiento">
+          <div class="training-quality-header">
+            <div>
+              <div class="training-quality-title">🧪 Control de Calidad del Entrenamiento</div>
+              <div class="training-quality-source">Comparación directa: personaje generado vs. target original del dataset</div>
+            </div>
+            <div class="training-quality-state" id="monQualityState">ESPERANDO MEDICIÓN</div>
+          </div>
+          <div class="training-quality-body">
+            <div class="training-quality-ring" aria-label="Porcentaje global de calidad">
+              <div class="training-quality-ring-inner">
+                <span class="training-quality-score" id="monQualityScore">--</span>
+                <span class="training-quality-score-label">CALIDAD GLOBAL</span>
+              </div>
+            </div>
+            <div>
+              <div class="training-quality-verdict" id="monQualityProblem">Esperando la primera auditoría</div>
+              <div class="training-quality-action" id="monQualityAction">Sin acción recomendada</div>
+              <div class="training-quality-comparison" id="monQualityComparison">Aún no hay comparación contra targets disponible.</div>
+            </div>
+            <div class="training-quality-metrics">
+              <div class="training-quality-metric"><span>Rostro</span><strong id="monQualityFace">--</strong></div>
+              <div class="training-quality-metric"><span>Anatomía</span><strong id="monQualityAnatomy">--</strong></div>
+              <div class="training-quality-metric"><span>Silueta</span><strong id="monQualitySilhouette">--</strong></div>
+              <div class="training-quality-metric"><span>Ruido visual</span><strong id="monQualityNoise">--</strong></div>
+              <div class="training-quality-metric"><span>Paleta</span><strong id="monQualityPalette">--</strong></div>
+            </div>
+          </div>
+          <div class="training-quality-footer">
+            <span id="monQualityMethod">Método: target exacto por personaje y frame · percentil conservador</span>
+            <span id="monQualityLastCheck">Sin medición todavía</span>
+            <span id="monQualityTrend">--</span>
+          </div>
         </div>
 
         <div class="monitor-grid">
@@ -3665,6 +3825,128 @@
       }
     }
 
+    function trainingQualityNumber(...values) {
+      for (const value of values) {
+        if (value === null || value === undefined || value === '') continue;
+        const number = Number(value);
+        if (Number.isFinite(number)) return Math.max(0, Math.min(100, number));
+      }
+      return null;
+    }
+
+    function trainingQualityPercent(...values) {
+      const number = trainingQualityNumber(...values);
+      return number === null ? '--' : `${number.toFixed(1)}%`;
+    }
+
+    function updateTrainingQualityPanel(info) {
+      const card = document.getElementById('monQualityCard');
+      if (!card) return;
+      const quality = info.quality && typeof info.quality === 'object' ? info.quality : {};
+      const guide = info.guidance || info.quality_guidance || {};
+      const vector = guide.quality_vector && typeof guide.quality_vector === 'object' ? guide.quality_vector : {};
+      const score = trainingQualityNumber(vector.global, quality.strict_global, quality.score_total);
+      const face = trainingQualityNumber(vector.face, quality.strict_face, quality.detalle_facial, quality.gestos_ojos);
+      const anatomy = trainingQualityNumber(vector.anatomy, quality.strict_anatomy, quality.cuerpo_precision);
+      const silhouette = trainingQualityNumber(vector.silhouette, quality.strict_silhouette, quality.silueta_iou_real, quality.silhouette_iou);
+      const noise = trainingQualityNumber(quality.strict_visual_noise, quality.ruido_huerfano, quality.micro_detalles);
+      const palette = trainingQualityNumber(vector.palette, quality.fidelidad_paleta, quality.riqueza_paleta);
+      const severity = String(guide.severity || 'low').toUpperCase();
+      const problem = guide.primary_problem || guide.problem || (score === null ? 'Esperando la primera auditoría' : 'sin problema dominante');
+      const recommended = guide.recommended_action || 'CONTINUE';
+      const authorized = guide.authorized_action || guide.action || 'CONTINUE';
+      const modified = guide.training_modified === true || info.sampling?.active === true || info.adaptive_loss?.active === true;
+      const training = String(info.status || '').toUpperCase() === 'ENTRENANDO';
+      const critical = severity === 'CRITICAL' || recommended === 'ROLLBACK' || authorized === 'ROLLBACK';
+
+      let stateText = 'ESPERANDO MEDICIÓN';
+      let stateClass = '';
+      if (critical) {
+        stateText = 'CALIDAD CRÍTICA';
+        stateClass = 'warning';
+      } else if (modified) {
+        stateText = 'AJUSTANDO MODELO';
+        stateClass = 'adjusting';
+      } else if (training && score !== null) {
+        stateText = 'COMPARANDO AHORA';
+      } else if (score !== null && score >= 90) {
+        stateText = 'CALIDAD ESTABLE';
+        stateClass = 'stable';
+      } else if (score !== null) {
+        stateText = 'REQUIERE MEJORA';
+        stateClass = 'warning';
+      }
+
+      const color = critical || (score !== null && score < 75)
+        ? '#fb7185'
+        : score !== null && score >= 90
+          ? '#34d399'
+          : score !== null && score >= 85
+            ? '#38bdf8'
+            : '#fbbf24';
+      card.style.setProperty('--training-qc-score', score ?? 0);
+      card.style.setProperty('--training-qc-color', color);
+      const state = document.getElementById('monQualityState');
+      if (state) {
+        state.textContent = stateText;
+        state.className = `training-quality-state ${stateClass}`.trim();
+      }
+
+      const setQualityText = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+      };
+      setQualityText('monQualityScore', score === null ? '--' : `${score.toFixed(1)}%`);
+      setQualityText('monQualityProblem', score === null ? problem : `${problem} · severidad ${severity}`);
+      setQualityText('monQualityAction', `Recomendación: ${recommended} · acción activa: ${authorized}`);
+      setQualityText('monQualityFace', trainingQualityPercent(face));
+      setQualityText('monQualityAnatomy', trainingQualityPercent(anatomy));
+      setQualityText('monQualitySilhouette', trainingQualityPercent(silhouette));
+      setQualityText('monQualityNoise', trainingQualityPercent(noise));
+      setQualityText('monQualityPalette', trainingQualityPercent(palette));
+
+      const compared = Number(quality.evaluated_sample_count || 0);
+      const average = trainingQualityNumber(quality.quality_average);
+      const worst = trainingQualityNumber(quality.quality_worst);
+      const hasDatasetComparison = quality.comparison_source === 'dataset_targets' || compared > 0;
+      setQualityText(
+        'monQualityComparison',
+        hasDatasetComparison
+          ? `Comparación real con ${compared} targets · promedio ${trainingQualityPercent(average)} · peor caso ${trainingQualityPercent(worst)}`
+          : score === null
+            ? 'Aún no hay comparación contra targets disponible.'
+            : 'Lectura del proceso actual. La comparación estricta contra targets se activará al reiniciar o reanudar el entrenamiento.'
+      );
+      setQualityText(
+        'monQualityMethod',
+        hasDatasetComparison
+          ? 'Método: target exacto por personaje/frame · percentil 25 · penalización de ruido visual'
+          : 'Método pendiente: el proceso activo todavía usa el evaluador anterior'
+      );
+      setQualityText(
+        'monQualityLastCheck',
+        score === null ? 'Sin medición todavía' : `Último control: época ${info.epoch ?? '--'} · ${info.timestamp || 'ahora'}`
+      );
+
+      const historyScores = (Array.isArray(info.history) ? info.history : []).map(entry => {
+        const entryGuide = entry.guidance || entry.quality_guidance || {};
+        return trainingQualityNumber(entryGuide.quality_vector?.global, entry.quality?.strict_global, entry.quality?.score_total);
+      }).filter(value => value !== null);
+      const previous = historyScores.length > 1 ? historyScores[historyScores.length - 2] : null;
+      const trendElement = document.getElementById('monQualityTrend');
+      if (trendElement) {
+        trendElement.className = '';
+        if (score !== null && previous !== null) {
+          const delta = score - previous;
+          trendElement.textContent = Math.abs(delta) < 0.05 ? 'Tendencia: sin cambio' : `Tendencia: ${delta > 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)} puntos`;
+          if (delta > 0.05) trendElement.classList.add('up');
+          if (delta < -0.05) trendElement.classList.add('down');
+        } else {
+          trendElement.textContent = score === null ? '--' : 'Primera medición disponible';
+        }
+      }
+    }
+
     function updateMonitorTab(info) {
       if (!info || Object.keys(info).length === 0) return;
       const ep = info.epoch || '--';
@@ -3683,6 +3965,7 @@
       if (pBar) pBar.style.width = pct + '%';
       const bBadge = document.getElementById('monEpochBadge');
       if (bBadge) bBadge.textContent = pct + '% Progreso';
+      updateTrainingQualityPanel(info);
 
       function formatEta(seconds) {
         if (!seconds || isNaN(seconds) || seconds <= 0) return '--';

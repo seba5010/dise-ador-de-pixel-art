@@ -411,6 +411,12 @@ def test_monitor_reads_new_guidance_contract():
     assert "AJUSTANDO" in monitor
     assert "updateQualityHero(d, guidance)" in monitor
     assert "info.guidance || info.quality_guidance" in studio
+    assert 'id="monQualityCard"' in studio
+    assert 'id="monQualityScore"' in studio
+    assert 'id="monQualityState"' in studio
+    assert 'id="monQualityComparison"' in studio
+    assert "updateTrainingQualityPanel(info)" in studio
+    assert "quality.evaluated_sample_count" in studio
 
 
 def test_terminal_quality_status_reports_when_training_is_adjusting(capsys):
