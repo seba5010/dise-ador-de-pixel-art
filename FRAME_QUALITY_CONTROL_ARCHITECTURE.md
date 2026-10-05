@@ -1,193 +1,151 @@
 # Arquitectura de Control de Calidad por Frame
 
-Estado: Incremento 1 implementado y validado el 2026-10-04. Regeneración, refuerzo manual y acciones batch permanecen desactivados.
+Estado: Incrementos 1–5 implementados y validados el 2026-10-04.
 
-## Propósito
+## Invariantes
 
-El sistema separa tres objetos que nunca deben confundirse:
+- El frame generado y sus candidatos son evidencia de calidad; nunca son ground truth.
+- El único target entrenable es el archivo real resuelto desde el manifest para el mismo personaje, variante y frame.
+- Reevaluar no modifica imágenes, datasets, checkpoints, sampling ni pesos.
+- Regenerar sólo produce candidatos aislados. Aplicar es una acción explícita y recuperable.
+- Enviar a refuerzo no inicia entrenamiento; prepara el muestreo de una ejecución futura.
+- La UI transmite identificadores y acciones, no rutas arbitrarias.
 
-- **Generated frame**: salida del modelo. Es evidencia para revisión; nunca es ground truth.
-- **Target frame**: sprite correcto resuelto desde el dataset para el mismo personaje, variante y `frame_idx`.
-- **Reference front**: identidad frontal usada para medir paleta cuando existe. No sustituye al target de pose.
-
-La cola de revisión registra la evaluación automática y la decisión humana sin escribir en los datasets ni modificar pesos del modelo.
-
-## Flujo activo del Incremento 1
+## Flujo
 
 ```text
 run_id + frame_idx
         |
         v
-resolver output/<run>/enhanced_frames/frame_NNN.png
+FrameQualityReviewManager
+  resuelve generado + metadata + manifest + target + frontal
         |
         v
-leer metadata de la ejecución
+QualityGate.evaluate_single_frame
         |
         v
-resolver manifest de personaje + variante + slot (frame_idx + 1)
-        |
-        v
-QualityGate.evaluate_single_frame(generado, target, frontal)
-        |
-        v
-persistir/actualizar frame_review_queue.jsonl
-        |
-        +--> Reevaluar (mismo archivo, nuevas métricas)
-        +--> Aprobar (requiere target y auditoría válida)
-        +--> Rechazar (no inicia entrenamiento)
+frame_review_queue.jsonl
+   |          |                 |
+   |          |                 +--> aprobar / rechazar / reevaluar
+   |          |
+   |          +--> HardExampleQueue --> hard_examples.jsonl
+   |                   |
+   |                   +--> pesos 1.0..2.0 del próximo entrenamiento
+   |
+   +--> FrameRegenerationManager
+           genera y audita candidatos aislados
+           rankea mejoras sin regresión crítica
+           aplica explícitamente con backup
+
+InteractiveQualityControlService coordina acciones individuales, métricas y
+trabajos batch persistentes en qc_batch_jobs.json.
 ```
 
 ## Componentes
 
 ### `FrameQualityReviewManager`
 
-Responsable de:
-
-- validar el vocabulario de estados;
-- resolver el frame generado únicamente desde `run_id` y `frame_idx`;
-- derivar personaje y variante desde metadata/manifests, sin listas de nombres;
-- localizar target y frontal de identidad;
-- ejecutar la auditoría por frame;
-- materializar la cola JSONL mediante reemplazo atómico;
-- conservar historial, actores, timestamps y contadores;
-- consultar registros y resumen para UI/monitor.
-
-El bloqueo `RLock` serializa lecturas/modificaciones concurrentes dentro del proceso multihilo de Sprite Studio. Cada escritura usa un archivo temporal, `fsync` y `os.replace`, por lo que nunca queda un JSONL parcialmente reemplazado.
+Mantiene el registro materializado de cada review, valida estados, resuelve rutas bajo raíces permitidas, conserva historial y expone evaluación, reevaluación, aprobación, rechazo, regeneración y refuerzo. Las escrituras usan `RLock`, archivo temporal, `fsync` y `os.replace`.
 
 ### `QualityGate`
 
-`evaluate_single_frame` reutiliza:
+`evaluate_single_frame` combina análisis visual, métricas anatómicas, revisión crítica y el vector de calidad canónico. Si falta el target devuelve `audit_available=false`, score nulo y estado de error. Los fallos de alfa o contacto con bordes son explícitos y bloqueantes.
 
-- `PixelArtEnhancer.analyze_quality`;
-- `compute_anatomical_metrics`;
-- `Phase3CriticalReviewer.audit_frame`;
-- `build_quality_vector`;
-- `diagnose_quality_bottleneck`.
+### `FrameRegenerationManager`
 
-Devuelve un vector común con `global`, anatomía, silueta, pose, rostro, pelo, ropa, brazos/manos, pies, objetos, paleta, alfa, microdetalle y contorno. Además registra issues, severidad, diagnóstico, métricas crudas e `identity_confidence` sólo cuando existe una señal de identidad utilizable.
+`TorchFrameCandidateGenerator` deriva frontal, formato, molde y checkpoint desde metadata, carga el modelo una vez y genera entre 1 y 8 alternativas. Cada candidato se guarda bajo:
 
-Los controles estructurales añaden issues explícitos:
-
-- `ALPHA_FAIL` si existe alfa entre 1 y 254;
-- `BORDER_TOUCH_TOP`;
-- `BORDER_TOUCH_BOTTOM`;
-- `BORDER_TOUCH_LEFT`;
-- `BORDER_TOUCH_RIGHT`.
-
-Si falta target, la auditoría devuelve `audit_available=false`, `score_total=null` y `aprobado=false`. No se calcula ni inventa precisión anatómica o de silueta.
-
-`evaluate_generator_frame` acepta un generator ya cargado, `front_tensor`, `pose_tensor` y `target_tensor`. No reconstruye el modelo ni recarga checkpoint.
-
-## Registro persistido
-
-Cada línea de `frame_review_queue.jsonl` representa el estado materializado de un review. El historial completo permanece dentro del registro.
-
-Campos centrales:
-
-```json
-{
-  "review_id": "uuid",
-  "run_id": "alex_8x12_20261004_191852",
-  "character_id": "alex",
-  "variant": "rnormal",
-  "frame_idx": 0,
-  "row": 0,
-  "column": 0,
-  "pose": {},
-  "epoch": null,
-  "status": "NEEDS_REVIEW",
-  "generated_frame_path": "output/.../frame_000.png",
-  "target_frame_path": "dataset_frames_individuales/.../frame_001_r01_c01.png",
-  "reference_front_path": "dataset_frames_individuales/.../00_frontal_identidad.png",
-  "quality": {},
-  "score_total": 0,
-  "issues": [],
-  "severity": "high",
-  "identity_confidence": null,
-  "user_action": null,
-  "times_failed": 0,
-  "times_regenerated": 0,
-  "times_reevaluated": 0,
-  "sent_to_reinforcement": false,
-  "created_at": "...",
-  "updated_at": "...",
-  "history": []
-}
+```text
+output/<run>/regeneration/frame_NNN/<generation_id>/candidate_NN.png
 ```
 
-Estados permitidos: `OK`, `NEEDS_REVIEW`, `REEVALUATED`, `REGENERATED`, `SENT_TO_REINFORCEMENT`, `APPROVED`, `REJECTED`, `SUPERSEDED` y `ERROR`. Los estados futuros ya están reservados, pero sus acciones permanecen desactivadas.
+El ranking exige:
 
-## Resolución de identidad y target
+- auditoría disponible y score global válido;
+- mejora positiva del problema dominante; diagnósticos no comparables usan `global`;
+- pisos mínimos de anatomía, silueta, rostro, props, alfa y paleta;
+- ninguna regresión mayor a 5 puntos;
+- ningún fallo crítico de alfa o bordes.
 
-1. Se lee `output/<run_id>/metadata.json`.
-2. Personaje y variante salen de metadata; si falta la variante, se deriva del nombre del frontal mediante alias genéricos conocidos del esquema de dataset.
-3. Se busca un `manifest.json` cuyo personaje y variante normalizados coincidan.
-4. El target es la entrada cuyo `slot == frame_idx + 1`.
-5. Como compatibilidad, se consulta `dataset_supervisado/frames_png` con la convención normalizada.
-6. Si no existe un archivo real, el target queda ausente y se bloquea la aprobación.
+Aplicar vuelve a validar que el candidato pertenezca al directorio aislado, copia el original como backup, reemplaza el frame de forma atómica y parchea únicamente su celda en las hojas existentes. Descartar cambia estado pero conserva evidencia.
+
+### `HardExampleQueue`
+
+Antes de encolar, vuelve a resolver el manifest y exige coincidencia exacta de target, personaje, variante y frame. Deduplica por esa identidad y asigna prioridad entre 1.0 y 2.0. El path generado queda como evidencia; `target_verified=true` identifica el target real.
+
+`record_outcome` reduce la prioridad cuando hay mejora y resuelve el caso cuando supera el umbral o es aprobado.
+
+### `InteractiveQualityControlService`
+
+Coordina las acciones individuales y trabajos:
+
+- `REEVALUATE_ALL`;
+- `REGENERATE_DEFECTIVE`;
+- `REGENERATE_SELECTED`, usado internamente por la acción individual asíncrona;
+- `REINFORCE_SELECTED`.
+
+Los jobs conservan progreso, completados, fallos y errores. La cancelación es cooperativa; jobs `RUNNING` o `CANCELLING` encontrados durante un reinicio pasan a `INTERRUPTED`.
+
+### Integración con entrenamiento
+
+`load_manual_sampling_weights` lee sólo registros activos con target verificado. `HardExampleMiningPolicy` combina el peso manual y el automático mediante el máximo. `WeightedRandomSampler` aplica el plan desde el siguiente entrenamiento, con peso máximo 2.0 y sin sustituir samples ni targets del dataset.
+
+## Persistencia
+
+| Archivo | Propósito | Mutado por |
+|---|---|---|
+| `frame_review_queue.jsonl` | estado e historial por frame | review manager |
+| `hard_examples.jsonl` | prioridad manual validada | hard-example queue |
+| `qc_batch_jobs.json` | progreso y recuperación batch | servicio QC |
+
+Los tres son estado de ejecución local y están excluidos de Git.
 
 ## API
 
 Consultas:
 
-- `GET /api/qc/review-queue?status=<estado>&run_id=<run>`
+- `GET /api/qc/review-queue`
 - `GET /api/qc/frame/<review_id>`
+- `GET /api/qc/hard-examples`
+- `GET /api/qc/batches`
+- `GET /api/qc/batch/<job_id>`
 
-Acciones mutables (sólo `POST`):
+Acciones `POST`:
 
-- `POST /api/qc/frame/evaluate` con `run_id` y `frame_idx`;
-- `POST /api/qc/frame/<review_id>/reevaluate`;
-- `POST /api/qc/frame/<review_id>/approve`;
-- `POST /api/qc/frame/<review_id>/reject`.
+- `/api/qc/frame/evaluate`
+- `/api/qc/frame/<id>/reevaluate`
+- `/api/qc/frame/<id>/approve`
+- `/api/qc/frame/<id>/reject`
+- `/api/qc/frame/<id>/regenerate`
+- `/api/qc/frame/<id>/apply-best`
+- `/api/qc/frame/<id>/discard-regeneration`
+- `/api/qc/frame/<id>/reinforce`
+- `/api/qc/batch/start`
+- `/api/qc/batch/<job_id>/cancel`
 
-Las rutas históricas `/api/frame_review/*` se mantienen temporalmente por compatibilidad, pero la UI nueva consume `/api/qc/*` y no confía en métricas enviadas por el cliente al reevaluar.
+Regeneración y refuerzo batch requieren confirmación explícita. Las capacidades activas se publican con la cola para que la UI deshabilite controles cuando un flag esté apagado.
 
-## UI y monitor
+## Métricas
 
-La pestaña Control de Calidad permite seleccionar una celda y crear/actualizar su review. Cada tarjeta muestra:
+El resumen expone frames rechazados, regenerados, regeneraciones medidas/mejoradas, porcentaje de mejora, enviados a refuerzo, fallos recurrentes y tiempo medio hasta aprobación. El monitor muestra hard examples activos y porcentaje de regeneraciones mejores.
 
-- estado con texto y color;
-- generado y target;
-- score y métricas por categoría;
-- issues y severidad;
-- acciones Reevaluar, Aprobar y Rechazar;
-- diagnóstico e historial expandibles.
+## Seguridad del servidor
 
-El monitor muestra pendientes, aprobados y rechazados. Regenerados y enviados a refuerzo aparecen explícitamente en cero y desactivados para no prometer funciones de incrementos posteriores.
-
-## Seguridad e invariantes
-
-- Los identificadores rechazan separadores, `..` y caracteres fuera del vocabulario permitido.
-- El generado sólo se resuelve bajo `OUTPUT_DIR`.
-- Targets y referencias sólo se resuelven bajo raíces de dataset configuradas.
-- La UI nueva envía IDs, no paths.
-- La cola puede escribirse; datasets y frames evaluados se abren en modo lectura.
-- Aprobar requiere target existente y auditoría disponible.
-- `ALPHA_FAIL` bloquea aprobación.
-- Reevaluar no modifica imágenes, dataset, checkpoint, sampling ni pesos.
-- Rechazar no encola entrenamiento.
+Sprite Studio escucha en `127.0.0.1` por defecto. Para acceso deliberado desde la red se debe definir `SPRITE_STUDIO_HOST`. `end_headers` usa un path vacío seguro porque una petición HTTP malformada puede provocar una respuesta de error antes de que `SimpleHTTPRequestHandler` asigne `self.path`.
 
 ## Feature flags
 
 ```python
 ENABLE_FRAME_REVIEW = True
-ENABLE_FRAME_REGENERATION = False
-ENABLE_MANUAL_REINFORCEMENT = False
-ENABLE_BATCH_QC_ACTIONS = False
+ENABLE_FRAME_REGENERATION = True
+ENABLE_MANUAL_REINFORCEMENT = True
+ENABLE_BATCH_QC_ACTIONS = True
 ```
 
-## Evolución prevista (no implementada)
+Cada flag se puede desactivar con su variable `PIXEL_AI_ENABLE_*`. El backend aplica la restricción y la UI refleja las capacidades recibidas.
 
-- Incremento 2: candidatos de regeneración aislados, ranking seguro, backup y aplicación explícita.
-- Incremento 3: `hard_examples.jsonl`, validación fuerte del target y prioridad acotada/decay.
-- Incremento 4: reevaluación y operaciones batch con progreso/cancelación.
-- Incremento 5: integración controlada del feedback con sampling y ciclo de aprendizaje.
+## Verificación
 
-`hard_examples.jsonl` será una persistencia distinta. Incluso entonces, el generado defectuoso seguirá siendo evidencia; el entrenamiento utilizará exclusivamente el target correcto del dataset.
-
-## Verificación del Incremento 1
-
-- Suite automatizada: 91 pruebas PASS, 5 warnings deprecados de AMP ya existentes.
-- Pruebas dirigidas: estados, persistencia, resume, target lookup, target ausente, safe paths, reevaluación sin mutar imágenes, aprobación/rechazo y API HTTP.
-- Prueba real: el frame 0 de `alex_8x12_20261004_191852` resolvió `alex/rnormal` y su target de manifest.
-- QA visual: cola y tarjeta renderizadas en Sprite Studio; resumen renderizado en `monitor.html`; consola del navegador sin errores.
+- 105 pruebas pasan en la suite completa.
+- Las pruebas cubren safe paths, target ausente, persistencia, resume, ranking, regresión crítica, backups, descarte, deduplicación, decay, sampler, batch, cancelación, API y requests malformados.
+- QA visual de Sprite Studio y Monitor completada sin errores ni warnings de consola.
