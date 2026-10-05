@@ -696,6 +696,7 @@
     }
     .qc-mini-btn:hover { background: #22293d; color: #fff; border-color: #4b5563; }
     .qc-mini-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .qc-mini-btn:disabled { opacity: .42; cursor: not-allowed; filter: grayscale(.6); }
 
     .qc-viewport-box {
       flex: 1;
@@ -723,6 +724,27 @@
         linear-gradient(45deg, transparent 75%, #12151f 75%), 
         linear-gradient(-45deg, transparent 75%, #12151f 75%);
       background-size: 16px 16px;
+    }
+    .qc-selection-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 8px 10px;
+      border: 1px solid rgba(99,102,241,.28);
+      border-radius: 6px;
+      background: rgba(99,102,241,.07);
+    }
+    .qc-selection-help { color: var(--dim); font-size: 10px; line-height: 1.4; }
+    .qc-selection-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+    #qcSelectedCellBadge {
+      font: 700 10px var(--mono);
+      color: #c4b5fd;
+      padding: 4px 8px;
+      border: 1px solid rgba(167,139,250,.35);
+      border-radius: 999px;
+      background: rgba(139,92,246,.12);
     }
 
     .qc-filter-bar { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -835,6 +857,8 @@
       .fqr-metrics { grid-template-columns:1fr 1fr; }
       .fqr-toolbar-actions { width: 100%; margin-left: 0; justify-content: stretch; }
       .fqr-toolbar-actions .qc-mini-btn { flex: 1 1 180px; }
+      .qc-selection-actions { width: 100%; justify-content: stretch; }
+      .qc-selection-actions .qc-mini-btn { flex: 1 1 150px; }
     }
 
   </style>
@@ -1480,9 +1504,13 @@
                 <svg id="qcOverlaySvg" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:auto; overflow:visible;"></svg>
               </div>
             </div>
-            <div style="font-size:11px; color:var(--dim); display:flex; justify-content:space-between; align-items:center; padding:4px 8px;">
-              <span>💡 Pasa el ratón sobre cualquier celda para ver sus detalles o haz clic para inspeccionarla en el Editor.</span>
-              <span id="qcSelectedCellBadge" style="font-family:var(--mono); color:var(--accent);"></span>
+            <div class="qc-selection-bar">
+              <span class="qc-selection-help">💡 Haz clic en uno o varios frames. Quedarán marcados en violeta y vinculados automáticamente con la cola.</span>
+              <div class="qc-selection-actions">
+                <span id="qcSelectedCellBadge">0 frames seleccionados</span>
+                <button id="qcEvaluateSelectedTop" class="qc-mini-btn" onclick="evaluateSelectedQcFrame()" disabled>Evaluar seleccionados</button>
+                <button id="qcClearSelection" class="qc-mini-btn" onclick="clearQcSelection()" disabled>Limpiar selección</button>
+              </div>
             </div>
           </div>
 
@@ -1530,7 +1558,7 @@
               <div style="font-size:10px; color:var(--dim); margin-top:3px;">La regeneración crea candidatos aislados; el refuerzo se aplicará en un entrenamiento futuro y nunca usa el generado como target.</div>
             </div>
             <div class="fqr-toolbar-actions">
-              <button class="qc-mini-btn" onclick="evaluateSelectedQcFrame()">Evaluar frame seleccionado</button>
+              <button id="fqrEvaluateSelected" class="qc-mini-btn" onclick="evaluateSelectedQcFrame()" disabled>Evaluar seleccionados</button>
               <button class="qc-mini-btn" onclick="refreshFrameReviewQueue()">Actualizar cola</button>
               <button id="fqrReevaluateAll" class="qc-mini-btn" onclick="startQcBatch('REEVALUATE_ALL')">Reevaluar todos</button>
               <button id="fqrRegenerateDefective" class="qc-mini-btn" onclick="startQcBatch('REGENERATE_DEFECTIVE')">Regenerar defectuosos</button>
@@ -2285,6 +2313,9 @@
       lastAuditTimestamp: 0,
       isAuditing: false,
       selectedCell: null,
+      selectedCells: new Set(),
+      selectedReviewIds: new Set(),
+      selectionBusy: false,
       reviewQueue: [],
       reviewSummary: {},
       capabilities: {},
@@ -2320,6 +2351,84 @@
       return selected && selected !== 'auto' ? selected.replace(/\\/g, '/').split('/').pop() : '';
     }
 
+    function qcSelectedFrameList() {
+      return Array.from(qcState.selectedCells || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    }
+
+    function applyQcCellVisual(group) {
+      if (!group) return;
+      const rect = group.querySelector('rect');
+      if (!rect) return;
+      const frame = Number(group.getAttribute('data-frame'));
+      const selected = qcState.selectedCells.has(frame);
+      group.classList.toggle('qc-selected-frame', selected);
+      if (selected) {
+        rect.setAttribute('fill', 'rgba(124, 58, 237, 0.48)');
+        rect.setAttribute('stroke', '#c4b5fd');
+        rect.setAttribute('stroke-width', '4');
+      } else {
+        rect.setAttribute('fill', rect.dataset.baseFill || 'transparent');
+        rect.setAttribute('stroke', rect.dataset.baseStroke || 'transparent');
+        rect.setAttribute('stroke-width', rect.dataset.baseStrokeWidth || '1');
+      }
+    }
+
+    function refreshQcOverlaySelection() {
+      document.querySelectorAll('#qcOverlaySvg [data-frame]').forEach(applyQcCellVisual);
+    }
+
+    function updateQualitySelectionUi() {
+      const frames = qcSelectedFrameList();
+      const frameCount = frames.length;
+      const reviewCount = qcState.selectedReviewIds.size;
+      const badge = document.getElementById('qcSelectedCellBadge');
+      if (badge) {
+        const preview = frames.slice(0, 6).map(frame => `#${String(frame).padStart(3, '0')}`).join(', ');
+        badge.textContent = frameCount
+          ? `${frameCount} seleccionado${frameCount === 1 ? '' : 's'} · ${preview}${frameCount > 6 ? '…' : ''}`
+          : '0 frames seleccionados';
+      }
+      ['qcEvaluateSelectedTop', 'fqrEvaluateSelected', 'qcClearSelection'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = frameCount === 0 || qcState.selectionBusy;
+      });
+      const reinforce = document.getElementById('fqrReinforceSelected');
+      if (reinforce) {
+        reinforce.disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.manual_reinforcement || reviewCount === 0 || qcState.selectionBusy;
+        reinforce.textContent = reviewCount > 0 ? `Enviar ${reviewCount} seleccionado${reviewCount === 1 ? '' : 's'} a refuerzo` : 'Enviar seleccionados a refuerzo';
+      }
+      document.querySelectorAll('.fqr-select').forEach(input => {
+        input.checked = qcState.selectedReviewIds.has(input.value);
+      });
+    }
+
+    function toggleFrameReviewSelection(reviewId, frameIdx, checked) {
+      const frame = Number(frameIdx);
+      if (checked) {
+        qcState.selectedReviewIds.add(reviewId);
+        if (Number.isFinite(frame)) qcState.selectedCells.add(frame);
+        qcState.selectedCell = frame;
+      } else {
+        qcState.selectedReviewIds.delete(reviewId);
+        if (Number.isFinite(frame)) qcState.selectedCells.delete(frame);
+        if (qcState.selectedCell === frame) qcState.selectedCell = qcSelectedFrameList().at(-1) ?? null;
+      }
+      refreshQcOverlaySelection();
+      updateQualitySelectionUi();
+    }
+
+    function clearQcSelection(silent = false) {
+      qcState.selectedCell = null;
+      qcState.selectedCells.clear();
+      qcState.selectedReviewIds.clear();
+      refreshQcOverlaySelection();
+      updateQualitySelectionUi();
+      if (!silent) {
+        const message = document.getElementById('fqrMessage');
+        if (message) message.textContent = 'Selección limpiada. Haz clic en los frames que quieras revisar.';
+      }
+    }
+
     async function refreshFrameReviewQueue() {
       const message = document.getElementById('fqrMessage');
       const runId = fqrRunId();
@@ -2332,10 +2441,15 @@
         qcState.reviewQueue = payload.queue || [];
         qcState.reviewSummary = payload.summary || {};
         qcState.capabilities = payload.capabilities || {};
+        const validReviewIds = new Set(qcState.reviewQueue.map(review => String(review.review_id)));
+        qcState.selectedReviewIds = new Set(Array.from(qcState.selectedReviewIds).filter(id => validReviewIds.has(String(id))));
+        qcState.reviewQueue.forEach(review => {
+          if (qcState.selectedCells.has(Number(review.frame_idx))) qcState.selectedReviewIds.add(String(review.review_id));
+        });
         document.getElementById('fqrReevaluateAll').disabled = !qcState.capabilities.batch_actions;
         document.getElementById('fqrRegenerateDefective').disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.regeneration;
-        document.getElementById('fqrReinforceSelected').disabled = !qcState.capabilities.batch_actions || !qcState.capabilities.manual_reinforcement;
         renderFrameReviewQueue();
+        updateQualitySelectionUi();
         if (message) message.textContent = runId
           ? `Mostrando revisiones de ${runId}. Seleccionado: frame ${qcState.selectedCell ?? 'ninguno'}.`
           : 'Mostrando todas las revisiones persistidas.';
@@ -2371,6 +2485,8 @@
         const issues = (review.issues || []).map(fqrEscape).join(' · ') || 'Sin problemas críticos registrados';
         const diagnosis = fqrEscape(JSON.stringify(review.diagnosis || {}, null, 2));
         const id = fqrEscape(review.review_id);
+        const frameNumber = Number(review.frame_idx);
+        const isSelected = qcState.selectedReviewIds.has(String(review.review_id));
         const regeneration = review.regeneration || {};
         const ranking = regeneration.ranking || {};
         const candidates = (ranking.candidates || []).map(candidate => {
@@ -2392,7 +2508,7 @@
           <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'discard-regeneration')" ${qcState.capabilities.regeneration ? '' : 'disabled'}>Descartar regeneración</button>` : '';
         return `<article class="fqr-card ${fqrEscape(review.status)}">
           <div class="fqr-card-head">
-            <strong><input type="checkbox" class="fqr-select" value="${id}" aria-label="Seleccionar frame ${Number(review.frame_idx)}"> Frame ${String(Number(review.frame_idx)).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
+            <strong><input type="checkbox" class="fqr-select" value="${id}" data-frame="${frameNumber}" aria-label="Seleccionar frame ${frameNumber}" onchange="toggleFrameReviewSelection(this.value, this.dataset.frame, this.checked)" ${isSelected ? 'checked' : ''}> Frame ${String(frameNumber).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
             <span class="fqr-status">${fqrEscape(review.status)}</span>
           </div>
           <div style="font:10px var(--mono);color:var(--dim)">${fqrEscape(review.variant || 'sin variante')} · score ${review.score_total ?? 'N/D'} · severidad ${fqrEscape(review.severity || 'N/D')}</div>
@@ -2419,22 +2535,40 @@
     async function evaluateSelectedQcFrame() {
       const message = document.getElementById('fqrMessage');
       const runId = fqrRunId();
-      if (qcState.selectedCell === null || !runId) {
-        if (message) message.textContent = 'Selecciona una celda y una ejecución válida antes de evaluar.';
+      const frames = qcSelectedFrameList();
+      if (frames.length === 0 || !runId) {
+        if (message) message.textContent = 'Selecciona uno o varios frames y una ejecución válida antes de evaluar.';
         return;
       }
-      if (message) message.textContent = `Evaluando frame ${qcState.selectedCell}...`;
+      qcState.selectionBusy = true;
+      updateQualitySelectionUi();
+      if (message) message.textContent = `Evaluando ${frames.length} frame${frames.length === 1 ? '' : 's'} seleccionado${frames.length === 1 ? '' : 's'}...`;
+      const evaluated = [];
+      const failures = [];
       try {
-        const response = await fetch('/api/qc/frame/evaluate', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ run_id: runId, frame_idx: qcState.selectedCell, user: 'studio_user' })
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Evaluación fallida');
+        for (const frame of frames) {
+          try {
+            const response = await fetch('/api/qc/frame/evaluate', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ run_id: runId, frame_idx: frame, user: 'studio_user' })
+            });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || 'Evaluación fallida');
+            evaluated.push(frame);
+            if (payload.review?.review_id) qcState.selectedReviewIds.add(String(payload.review.review_id));
+          } catch (error) {
+            failures.push(`#${frame}: ${error.message}`);
+          }
+        }
         await refreshFrameReviewQueue();
-        if (message) message.textContent = `Frame ${qcState.selectedCell} evaluado y persistido.`;
-      } catch (error) {
-        if (message) message.textContent = `No se pudo evaluar: ${error.message}`;
+        if (message) {
+          message.textContent = failures.length
+            ? `Evaluados ${evaluated.length}/${frames.length}. Fallos: ${failures.join(' · ')}`
+            : `${evaluated.length} frame${evaluated.length === 1 ? '' : 's'} evaluado${evaluated.length === 1 ? '' : 's'} y seleccionado${evaluated.length === 1 ? '' : 's'} en la cola.`;
+        }
+      } finally {
+        qcState.selectionBusy = false;
+        updateQualitySelectionUi();
       }
     }
 
@@ -2487,7 +2621,8 @@
     }
 
     async function startQcBatch(action) {
-      const selected = Array.from(document.querySelectorAll('.fqr-select:checked')).map(input => input.value);
+      document.querySelectorAll('.fqr-select:checked').forEach(input => qcState.selectedReviewIds.add(input.value));
+      const selected = Array.from(qcState.selectedReviewIds);
       if (action === 'REINFORCE_SELECTED' && selected.length === 0) {
         document.getElementById('fqrMessage').textContent = 'Selecciona al menos un frame para enviarlo a refuerzo.';
         return;
@@ -2561,6 +2696,7 @@
     async function onQcRunSelectChange() {
       const sel = document.getElementById('qcRunSelect');
       qcState.selectedRunPath = sel.value;
+      clearQcSelection(true);
       await triggerManualAudit();
       await refreshFrameReviewQueue();
     }
@@ -2571,6 +2707,7 @@
 
     function checkLiveQualityAudit(activeJob) {
       if (!qcState.autoAudit) return;
+      if (qcState.selectionBusy || qcState.selectedCells.size > 0) return;
       const now = Date.now();
       const isJobRunning = activeJob && activeJob.status === "running";
       const interval = isJobRunning ? 2500 : 5000;
@@ -2818,7 +2955,16 @@
           const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
           g.setAttribute('data-frame', fIdx);
           g.style.cursor = 'pointer';
-          g.onclick = () => selectQcCell(fIdx);
+          g.onpointerdown = event => {
+            if (event.button !== undefined && event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            selectQcCell(fIdx);
+          };
+          g.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+          };
 
           // Rectangulo base transparente para hover
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -2875,13 +3021,16 @@
             rect.setAttribute('stroke', '#4ecdc4');
             rect.setAttribute('stroke-width', '1.5');
           }
+          rect.dataset.baseFill = rect.getAttribute('fill') || 'transparent';
+          rect.dataset.baseStroke = rect.getAttribute('stroke') || 'transparent';
+          rect.dataset.baseStrokeWidth = rect.getAttribute('stroke-width') || '1';
 
           // Hover dinámico
           g.onmouseenter = () => {
             rect.setAttribute('fill', 'rgba(99, 102, 241, 0.4)');
             rect.setAttribute('stroke', '#818cf8');
             const badge = document.getElementById('qcSelectedCellBadge');
-            if (badge) {
+            if (badge && qcState.selectedCells.size === 0) {
               let tag = `Frame #${fIdx}`;
               if (hasBorderIssue) tag += ` (⚠️ Sangrado en bordes)`;
               else if (isEmpty) tag += ` (⚠️ Celda vacía)`;
@@ -2890,25 +3039,16 @@
             }
           };
           g.onmouseleave = () => {
-            if (hasBorderIssue) {
-              rect.setAttribute('fill', 'rgba(239, 68, 68, 0.28)');
-              rect.setAttribute('stroke', '#ef4444');
-            } else if (isEmpty) {
-              rect.setAttribute('fill', 'rgba(245, 158, 11, 0.2)');
-              rect.setAttribute('stroke', '#f59e0b');
-            } else if (isBlurry) {
-              rect.setAttribute('fill', 'rgba(78, 205, 196, 0.2)');
-              rect.setAttribute('stroke', '#4ecdc4');
-            } else {
-              rect.setAttribute('fill', 'transparent');
-              rect.setAttribute('stroke', 'transparent');
-            }
+            applyQcCellVisual(g);
+            updateQualitySelectionUi();
           };
 
           g.appendChild(rect);
           svg.appendChild(g);
+          applyQcCellVisual(g);
         }
       }
+      updateQualitySelectionUi();
     }
 
     function renderIncidentsList(data) {
@@ -3006,14 +3146,34 @@
     }
 
     function selectQcCell(frameIdx) {
-      qcState.selectedCell = frameIdx;
-      const badge = document.getElementById('qcSelectedCellBadge');
-      if (badge) badge.textContent = `Celda Seleccionada: Frame #${frameIdx}`;
+      const frame = Number(frameIdx);
+      if (!Number.isFinite(frame)) return;
+      const wasSelected = qcState.selectedCells.has(frame);
+      if (wasSelected) {
+        qcState.selectedCells.delete(frame);
+      } else {
+        qcState.selectedCells.add(frame);
+      }
+      const matchingReview = qcState.reviewQueue.find(review => Number(review.frame_idx) === frame);
+      if (matchingReview?.review_id) {
+        if (wasSelected) qcState.selectedReviewIds.delete(String(matchingReview.review_id));
+        else qcState.selectedReviewIds.add(String(matchingReview.review_id));
+      }
+      qcState.selectedCell = wasSelected ? (qcSelectedFrameList().at(-1) ?? null) : frame;
+      refreshQcOverlaySelection();
+      updateQualitySelectionUi();
       const message = document.getElementById('fqrMessage');
-      if (message) message.textContent = `Frame ${frameIdx} seleccionado. Pulsa “Evaluar frame seleccionado” para añadirlo o actualizarlo.`;
+      if (message) {
+        const count = qcState.selectedCells.size;
+        message.textContent = wasSelected
+          ? `Frame ${frame} quitado de la selección. Quedan ${count}.`
+          : matchingReview
+            ? `Frame ${frame} seleccionado y vinculado con su revisión. Ya puedes ejecutar acciones.`
+            : `Frame ${frame} seleccionado. Pulsa “Evaluar seleccionados” para habilitar regeneración o refuerzo.`;
+      }
 
       // Resaltar elemento en lista de incidencias
-      const targetItem = document.getElementById(`qcIncidentItem_${frameIdx}`);
+      const targetItem = document.getElementById(`qcIncidentItem_${frame}`);
       if (targetItem) {
         targetItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         targetItem.style.background = '#293247';
