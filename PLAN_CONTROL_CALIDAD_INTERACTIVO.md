@@ -3,7 +3,8 @@
 Fecha de inicio: 2026-10-04  
 Metodología: desarrollo incremental con Scrum dentro de cada incremento  
 Alcance autorizado actual: Incremento 1 solamente  
-Progreso real: 8% (auditoría y plan maestro completados; implementación pendiente)
+Progreso real del roadmap: 20% (Incremento 1 completado; 4 incrementos posteriores bloqueados)
+Progreso real del Incremento 1: 100%
 
 ## Estado auditado
 
@@ -26,7 +27,7 @@ Progreso real: 8% (auditoría y plan maestro completados; implementación pendie
 - metadata de cada ejecución, `frame_map` y manifests de dataset.
 - servidor/API y pestaña de Control de Calidad existentes.
 
-### Faltantes confirmados
+### Faltantes confirmados al inicio (resueltos en este incremento)
 
 - registro estable por frame y vocabulario cerrado;
 - persistencia JSONL atómica con historial;
@@ -39,7 +40,7 @@ Progreso real: 8% (auditoría y plan maestro completados; implementación pendie
 
 ## Roadmap
 
-- [ ] Incremento 1 — Review Queue
+- [x] Incremento 1 — Review Queue
 - [ ] Incremento 2 — Regeneración Individual (bloqueado hasta aprobación del Incremento 1)
 - [ ] Incremento 3 — Manual Reinforcement (bloqueado)
 - [ ] Incremento 4 — Batch QC (bloqueado)
@@ -55,14 +56,14 @@ Sprint Goal: crear un registro seguro y reanudable por frame.
 
 Backlog:
 
-- [ ] Definir `FrameReviewStatus` con vocabulario estable.
-- [ ] Crear `FrameQualityReviewManager` separado del servidor.
-- [ ] Implementar JSONL con escritura atómica y bloqueo de proceso.
-- [ ] Registrar identidad, variante, frame, pose, paths, scores, issues y timestamps.
-- [ ] Conservar historial append-only dentro de cada registro materializado.
-- [ ] Resolver rutas exclusivamente desde `run_id` y metadata confiable.
-- [ ] Rechazar traversal y rutas fuera de `OUTPUT_DIR`/dataset permitido.
-- [ ] Tests unitarios de estados, JSONL, persistencia, resume y safe paths.
+- [x] Definir `FrameReviewStatus` con vocabulario estable.
+- [x] Crear `FrameQualityReviewManager` separado del servidor.
+- [x] Implementar JSONL con escritura atómica y bloqueo de escritura multihilo.
+- [x] Registrar identidad, variante, frame, pose, paths, scores, issues y timestamps.
+- [x] Conservar historial append-only dentro de cada registro materializado.
+- [x] Resolver rutas exclusivamente desde `run_id` y metadata confiable.
+- [x] Rechazar traversal y rutas fuera de `OUTPUT_DIR`/dataset permitido.
+- [x] Tests unitarios de estados, JSONL, persistencia, resume y safe paths.
 
 Archivos previstos:
 
@@ -71,7 +72,7 @@ Archivos previstos:
 
 Funciones previstas:
 
-- `create_or_update_review`
+- `evaluate_frame`
 - `get_review`
 - `list_reviews`
 - `approve_frame`
@@ -87,11 +88,11 @@ Riesgos:
 
 Criterios de aceptación / Definition of Done:
 
-- [ ] strings de estado arbitrarios son rechazados;
-- [ ] un reinicio reconstruye el mismo estado;
-- [ ] no se puede resolver una ruta fuera de raíces permitidas;
-- [ ] tests dirigidos y regresiones PASS;
-- [ ] evidencia y commit registrados.
+- [x] strings de estado arbitrarios son rechazados;
+- [x] un reinicio reconstruye el mismo estado;
+- [x] no se puede resolver una ruta fuera de raíces permitidas;
+- [x] tests dirigidos y regresiones PASS;
+- [x] evidencia y commit registrados (`f2c044e18`).
 
 ### Sprint 2 — QualityGate por frame
 
@@ -99,14 +100,14 @@ Sprint Goal: evaluar o reevaluar un frame sin recargar un checkpoint ni generar 
 
 Backlog:
 
-- [ ] Implementar `QualityGate.evaluate_single_frame`.
-- [ ] Combinar Enhancer, anatomía, detalle crítico y QualityVector.
-- [ ] Reportar `audit_available=false`, score `null` y no aprobado sin target.
-- [ ] Incluir controles de alfa y bordes.
-- [ ] Eliminar aprobación por defecto cuando falta referencia.
-- [ ] Retirar selección por nombres hardcodeados del camino moderno.
-- [ ] Integrar evaluación con el manager e historial.
-- [ ] Tests de reevaluación, target lookup y target ausente.
+- [x] Implementar `QualityGate.evaluate_single_frame`.
+- [x] Combinar Enhancer, anatomía, detalle crítico y QualityVector.
+- [x] Reportar `audit_available=false`, score `null` y no aprobado sin target.
+- [x] Incluir controles de alfa y bordes.
+- [x] Eliminar aprobación por defecto cuando falta referencia.
+- [x] Retirar selección por nombres hardcodeados del camino moderno.
+- [x] Integrar evaluación con el manager e historial.
+- [x] Tests de reevaluación, target lookup y target ausente.
 
 Archivos previstos:
 
@@ -122,11 +123,11 @@ Riesgos:
 
 Criterios de aceptación / Definition of Done:
 
-- [ ] reevaluar no modifica imagen, dataset ni pesos;
-- [ ] silhouette es `null` si falta target;
-- [ ] `identity_confidence` es `null` sin métrica válida;
-- [ ] diagnóstico contiene vector e issues explicables;
-- [ ] tests y commit registrados.
+- [x] reevaluar no modifica imagen, dataset ni pesos;
+- [x] silhouette no se calcula si falta target y la auditoría queda no disponible;
+- [x] `identity_confidence` es `null` sin métrica válida;
+- [x] diagnóstico contiene vector e issues explicables;
+- [x] tests y commit registrados (`f2c044e18`).
 
 ### Sprint 3 — API y UI
 
@@ -134,24 +135,24 @@ Sprint Goal: exponer la revisión por frame en Sprite Studio.
 
 Backlog:
 
-- [ ] `GET /api/qc/review-queue`.
-- [ ] `GET /api/qc/frame/<review_id>`.
-- [ ] `POST /api/qc/frame/evaluate` para alta controlada.
-- [ ] `POST /api/qc/frame/<review_id>/reevaluate`.
-- [ ] `POST /api/qc/frame/<review_id>/approve`.
-- [ ] `POST /api/qc/frame/<review_id>/reject`.
-- [ ] Tarjetas por frame con estado, score, issues y acciones.
-- [ ] Diagnóstico detallado con target/generado.
-- [ ] Semáforo accesible por color y texto.
-- [ ] Panel de conteos en `monitor.html`.
-- [ ] Tests HTTP, validación de método y regresiones.
+- [x] `GET /api/qc/review-queue`.
+- [x] `GET /api/qc/frame/<review_id>`.
+- [x] `POST /api/qc/frame/evaluate` para alta controlada.
+- [x] `POST /api/qc/frame/<review_id>/reevaluate`.
+- [x] `POST /api/qc/frame/<review_id>/approve`.
+- [x] `POST /api/qc/frame/<review_id>/reject`.
+- [x] Tarjetas por frame con estado, score, issues y acciones.
+- [x] Diagnóstico detallado con target/generado.
+- [x] Semáforo accesible por color y texto.
+- [x] Panel de conteos en `monitor.html`.
+- [x] Tests HTTP, validación de método y regresiones.
 
 Archivos previstos:
 
 - `sprite_studio.py`
 - `sprite_studio.html`
 - `monitor.html`
-- `test_frame_quality_review_api.py`
+- `test_frame_quality_review.py`
 
 Riesgos:
 
@@ -161,11 +162,11 @@ Riesgos:
 
 Criterios de aceptación / Definition of Done:
 
-- [ ] acciones mutables sólo aceptan POST;
-- [ ] UI actualiza sin recargar y muestra texto además de color;
-- [ ] aprobar/rechazar persiste usuario y fecha;
-- [ ] panel refleja pendientes/aprobados/rechazados;
-- [ ] suite completa PASS e Increment Review aprobado.
+- [x] acciones mutables sólo aceptan POST;
+- [x] UI actualiza sin recargar y muestra texto además de color;
+- [x] aprobar/rechazar persiste usuario y fecha;
+- [x] panel refleja pendientes/aprobados/rechazados;
+- [x] suite completa PASS e Increment Review aprobado.
 
 ## Restricciones activas
 
@@ -191,16 +192,16 @@ ENABLE_BATCH_QC_ACTIONS = False
 
 | ID | Requisito | Estado | Archivo | Test | Commit |
 |---|---|---|---|---|---|
-| FQC-001 | Review queue | EN DESARROLLO | `frame_quality_review.py` | pendiente | pendiente |
-| FQC-002 | Reevaluar | PENDIENTE | - | - | - |
+| FQC-001 | Review queue | COMPLETADO | `frame_quality_review.py` | `test_frame_quality_review.py` | `f2c044e18` |
+| FQC-002 | Reevaluar | COMPLETADO | `frame_quality_review.py`, `quality_gate.py` | `test_reevaluate_updates_metrics_without_modifying_images` | `f2c044e18` |
 | FQC-003 | Regenerar | BLOQUEADO (Inc. 2) | - | - | - |
-| FQC-004 | Aprobar | PENDIENTE | - | - | - |
-| FQC-005 | Rechazar | PENDIENTE | - | - | - |
+| FQC-004 | Aprobar | COMPLETADO | `frame_quality_review.py`, `sprite_studio.py` | `test_approve_and_reject_are_persisted_with_actor` | `f2c044e18` |
+| FQC-005 | Rechazar | COMPLETADO | `frame_quality_review.py`, `sprite_studio.py` | `test_approve_and_reject_are_persisted_with_actor` | `f2c044e18` |
 | FQC-006 | Enviar a refuerzo | BLOQUEADO (Inc. 3) | - | - | - |
 | FQC-007 | Hard examples | BLOQUEADO (Inc. 3) | - | - | - |
-| FQC-008 | API segura | PENDIENTE | - | - | - |
-| FQC-009 | UI por frame | PENDIENTE | - | - | - |
-| FQC-010 | Historial y resume | PENDIENTE | - | - | - |
+| FQC-008 | API segura | COMPLETADO | `sprite_studio.py` | `test_frame_review_rest_endpoints_validate_and_persist` | `f2c044e18` |
+| FQC-009 | UI por frame | COMPLETADO | `sprite_studio.html`, `monitor.html` | QA Chrome sin errores | `36f36d6fc` |
+| FQC-010 | Historial y resume | COMPLETADO | `frame_quality_review.py` | persistencia/resume | `f2c044e18` |
 
 ## Registro de decisiones
 
@@ -215,7 +216,21 @@ ENABLE_BATCH_QC_ACTIONS = False
 | Fecha | Sprint | Pruebas | Resultado | Commit |
 |---|---|---|---|---|
 | 2026-10-04 | Baseline previo | `python -m pytest -q` | 87 PASS, 5 warnings AMP | `2402d42cc` y anteriores |
+| 2026-10-04 | Sprint 1-2 | `python -m pytest -q test_frame_quality_review.py` | 10 PASS | `f2c044e18` |
+| 2026-10-04 | Sprint 3 / regresión | `python -m pytest -q` | 91 PASS, 5 warnings AMP heredados | `f2c044e18`, `36f36d6fc` |
+| 2026-10-04 | QA visual | Chrome sobre Sprite Studio y Monitor | cola, target, métricas y resumen visibles; 0 errores de consola | `36f36d6fc` |
+| 2026-10-04 | Arquitectura | revisión documental | flujo, API, seguridad y límites documentados | `ee8c95c8e` |
 
 ## Increment Review 1
 
-Estado: PENDIENTE. No autoriza Incremento 2 hasta completar los tres Sprint Reviews, documentación, suite completa y verificación manual de UI/API.
+Estado: COMPLETADO Y VERIFICADO.
+
+Evidencia de cierre:
+
+- 91 tests PASS; 0 FAIL; 5 warnings deprecados de AMP preexistentes.
+- evaluación real del frame 0 de `alex_8x12_20261004_191852`: target resuelto desde manifest, score 87.8 y trazabilidad persistida;
+- UI verificada en Chrome: tarjeta por frame, generado/target, métricas, diagnóstico y acciones;
+- monitor verificado con 1 review pendiente y contadores de estados;
+- regeneración, refuerzo, cambios de sampling, entrenamiento y batch permanecen desactivados.
+
+El trabajo se detiene aquí según la regla del Incremento 1. El Incremento 2 sólo debe comenzar tras una nueva aprobación explícita del usuario.
