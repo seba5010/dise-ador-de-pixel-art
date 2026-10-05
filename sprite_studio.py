@@ -1174,6 +1174,45 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             self.send_json(record)
             return
 
+        elif path == "/api/qc/review-queue":
+            status = query.get("status", [None])[0]
+            run_id = query.get("run_id", [None])[0]
+            try:
+                rows = FRAME_REVIEW_MANAGER.list_reviews(status=status or None, run_id=run_id or None)
+                summary = FRAME_REVIEW_MANAGER.summary(run_id=run_id or None)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            self.send_json({
+                "queue": rows,
+                "count": len(rows),
+                "summary": summary,
+                "valid_statuses": list(VALID_REVIEW_STATUSES),
+                "capabilities": {
+                    "frame_review": True,
+                    "regeneration": False,
+                    "manual_reinforcement": False,
+                    "batch_actions": False,
+                },
+            })
+            return
+
+        elif path.startswith("/api/qc/frame/"):
+            review_id = urllib.parse.unquote(path[len("/api/qc/frame/"):]).strip("/")
+            if not review_id or "/" in review_id:
+                self.send_json({"error": "review_id inválido"}, status=400)
+                return
+            try:
+                record = FRAME_REVIEW_MANAGER.get_review(review_id)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            if record is None:
+                self.send_json({"error": "Review no encontrado"}, status=404)
+                return
+            self.send_json(record)
+            return
+
         elif path == "/api/runs":
             runs = []
             if OUTPUT_DIR.exists():
@@ -1304,6 +1343,64 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             section_name = section_names.get(section_id, "Seccion desconocida")
             self.audit_access("NAVEGACION", section_name, f"seccion={section_id}")
             self.send_json({"status": "recorded"})
+            return
+
+        qc_path = urllib.parse.unquote(parsed.path).rstrip("/")
+        if qc_path == "/api/qc/frame/evaluate":
+            run_id = body.get("run_id")
+            frame_idx = body.get("frame_idx")
+            if run_id is None or frame_idx is None:
+                self.send_json({"error": "run_id y frame_idx son obligatorios"}, status=400)
+                return
+            try:
+                review = FRAME_REVIEW_MANAGER.evaluate_frame(
+                    str(run_id),
+                    int(frame_idx),
+                    epoch=body.get("epoch"),
+                    actor=str(body.get("user") or "studio_user"),
+                )
+            except (TypeError, ValueError) as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            except FileNotFoundError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+                return
+            self.send_json({"status": "evaluated", "review": review})
+            return
+
+        if qc_path.startswith("/api/qc/frame/"):
+            suffix = qc_path[len("/api/qc/frame/"):]
+            parts = suffix.split("/")
+            if len(parts) != 2 or parts[1] not in {"reevaluate", "approve", "reject"}:
+                self.send_json({"error": "Acción QC no encontrada"}, status=404)
+                return
+            review_id, action = parts
+            try:
+                if action == "reevaluate":
+                    review = FRAME_REVIEW_MANAGER.reevaluate_frame(
+                        review_id,
+                        actor=str(body.get("user") or "studio_user"),
+                    )
+                elif action == "approve":
+                    review = FRAME_REVIEW_MANAGER.approve_frame(
+                        review_id,
+                        actor=str(body.get("user") or "studio_user"),
+                        reason=body.get("reason") or body.get("comment"),
+                    )
+                else:
+                    review = FRAME_REVIEW_MANAGER.reject_frame(
+                        review_id,
+                        actor=str(body.get("user") or "studio_user"),
+                        reason=body.get("reason"),
+                    )
+            except KeyError:
+                self.send_json({"error": "Review no encontrado"}, status=404)
+                return
+            except (TypeError, ValueError) as exc:
+                self.send_json({"error": str(exc)}, status=409 if action == "approve" else 400)
+                return
+            response_status = {"reevaluate": "reevaluated", "approve": "approved", "reject": "rejected"}[action]
+            self.send_json({"status": response_status, "review": review})
             return
 
         action_names = {

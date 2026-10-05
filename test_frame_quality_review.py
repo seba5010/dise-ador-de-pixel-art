@@ -1,133 +1,289 @@
 import json
-from pathlib import Path
+import threading
+import urllib.error
+import urllib.request
 
 import pytest
+from PIL import Image
 
+from pixel_ai_engine.frame_quality_review import FrameQualityReviewManager, FrameReviewStatus
 from pixel_ai_engine.quality_gate import QualityGate
-from pixel_ai_engine.frame_quality_review import FrameQualityReviewManager, VALID_REVIEW_STATUSES
 
 
-def test_quality_gate_evaluate_single_frame_requires_reference_data(tmp_path):
+def _png(path, alpha=255):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (16, 16), (120, 80, 40, alpha)).save(path)
+
+
+def _fixture_tree(tmp_path, *, include_target=True):
+    output = tmp_path / "output"
+    run = output / "run_001"
+    generated = run / "enhanced_frames" / "frame_003.png"
+    _png(generated)
+    (run / "metadata.json").write_text(
+        json.dumps({
+            "character": "Ada Lovelace",
+            "variant": "rnormal",
+            "front_image": "personajes/ada_lovelace/ada_lovelace_rnormal.png",
+            "format": "8x12",
+        }),
+        encoding="utf-8",
+    )
+
+    dataset = tmp_path / "dataset_frames_individuales"
+    variant_dir = dataset / "ADA LOVELACE" / "ada_lovelace_ropa_normal"
+    variant_dir.mkdir(parents=True)
+    frame_file = variant_dir / "frame_004_r01_c04.png"
+    if include_target:
+        _png(frame_file)
+    _png(variant_dir / "00_frontal_identidad.png")
+    (variant_dir / "manifest.json").write_text(
+        json.dumps({
+            "character": "Ada Lovelace",
+            "variant": "rnormal",
+            "variant_name": "ropa_normal",
+            "frames": [{"slot": 4, "row": 1, "column": 4, "file": frame_file.name}],
+        }),
+        encoding="utf-8",
+    )
+    supervised = tmp_path / "dataset_supervisado"
+    supervised.mkdir()
+    return output, dataset, supervised, generated, frame_file
+
+
+def _audit(_generated, target, reference_front=None, frame_idx=None, metadata=None):
+    available = target is not None and target.is_file()
+    return {
+        "audit_available": available,
+        "aprobado": available,
+        "score_total": 88.0 if available else None,
+        "quality": {"global": 88.0, "face": 81.0, "alpha": 100.0} if available else {"global": None},
+        "issues": [],
+        "severity": "low",
+        "diagnosis": {"primary_problem": None},
+        "identity_confidence": None,
+    }
+
+
+def _manager(tmp_path, *, include_target=True, evaluator=_audit):
+    output, dataset, supervised, generated, target = _fixture_tree(tmp_path, include_target=include_target)
+    manager = FrameQualityReviewManager(
+        tmp_path / "frame_review_queue.jsonl",
+        project_root=tmp_path,
+        output_root=output,
+        dataset_frames_root=dataset,
+        supervised_root=supervised,
+        evaluator=evaluator,
+    )
+    return manager, generated, target
+
+
+def test_review_status_vocabulary_rejects_arbitrary_values():
+    assert FrameQualityReviewManager.validate_status(FrameReviewStatus.APPROVED) == "APPROVED"
+    with pytest.raises(ValueError, match="Unsupported"):
+        FrameQualityReviewManager.validate_status("LOOKS_FINE")
+
+
+def test_evaluate_persists_exact_target_identity_and_history(tmp_path):
+    manager, generated, target = _manager(tmp_path)
+    review = manager.evaluate_frame("run_001", 3, epoch=12, actor="tester")
+
+    assert review["status"] == "OK"
+    assert review["character_id"] == "Ada Lovelace"
+    assert review["variant"] == "rnormal"
+    assert review["frame_idx"] == 3
+    assert review["row"] == 0 and review["column"] == 3
+    assert review["generated_frame_path"] == generated.relative_to(tmp_path).as_posix()
+    assert review["target_frame_path"] == target.relative_to(tmp_path).as_posix()
+    assert review["history"][-1]["action"] == "evaluated"
+
+    resumed = FrameQualityReviewManager(
+        manager.queue_path,
+        project_root=tmp_path,
+        output_root=manager.output_root,
+        dataset_frames_root=manager.dataset_frames_root,
+        supervised_root=manager.supervised_root,
+        evaluator=_audit,
+    )
+    assert resumed.get_review(review["review_id"]) == review
+    assert resumed.summary()["total"] == 1
+    assert resumed.summary()["pending"] == 1
+
+
+def test_reevaluate_updates_metrics_without_modifying_images(tmp_path):
+    calls = {"count": 0}
+
+    def evaluator(*args, **kwargs):
+        calls["count"] += 1
+        result = _audit(*args, **kwargs)
+        result["score_total"] = 70.0 + calls["count"]
+        result["quality"]["global"] = result["score_total"]
+        result["aprobado"] = False
+        result["issues"] = ["face"]
+        result["severity"] = "medium"
+        return result
+
+    manager, generated, target = _manager(tmp_path, evaluator=evaluator)
+    generated_before = generated.read_bytes()
+    target_before = target.read_bytes()
+    created = manager.evaluate_frame("run_001", 3)
+    reviewed = manager.reevaluate_frame(created["review_id"], actor="human")
+
+    assert reviewed["status"] == "REEVALUATED"
+    assert reviewed["score_total"] == 72.0
+    assert reviewed["times_reevaluated"] == 1
+    assert [event["action"] for event in reviewed["history"]] == ["evaluated", "reevaluated"]
+    assert generated.read_bytes() == generated_before
+    assert target.read_bytes() == target_before
+
+
+def test_approve_and_reject_are_persisted_with_actor(tmp_path):
+    manager, _, _ = _manager(tmp_path)
+    review = manager.evaluate_frame("run_001", 3)
+    approved = manager.approve_frame(review["review_id"], actor="qa-user", reason="verified")
+    rejected = manager.reject_frame(review["review_id"], actor="qa-user", reason="visual defect")
+
+    assert approved["status"] == "APPROVED"
+    assert approved["approved_by"] == "qa-user"
+    assert rejected["status"] == "REJECTED"
+    assert rejected["times_failed"] == 1
+    assert rejected["history"][-1]["action"] == "rejected"
+    assert manager.summary()["rejected"] == 1
+
+
+def test_missing_target_is_error_and_cannot_be_approved(tmp_path):
+    manager, _, _ = _manager(tmp_path, include_target=False)
+    review = manager.evaluate_frame("run_001", 3)
+
+    assert review["status"] == "ERROR"
+    assert review["audit_available"] is False
+    assert review["score_total"] is None
+    with pytest.raises(ValueError, match="missing_target"):
+        manager.approve_frame(review["review_id"])
+
+
+def test_path_traversal_and_unknown_run_are_rejected(tmp_path):
+    manager, _, _ = _manager(tmp_path)
+    with pytest.raises(ValueError, match="Invalid run_id"):
+        manager.resolve_run_frame("../outside", 3)
+    with pytest.raises(FileNotFoundError, match="Run not found"):
+        manager.resolve_run_frame("unknown", 3)
+
+
+def test_evaluate_is_idempotent_per_run_and_frame(tmp_path):
+    manager, _, _ = _manager(tmp_path)
+    first = manager.evaluate_frame("run_001", 3)
+    second = manager.evaluate_frame("run_001", 3)
+
+    assert first["review_id"] == second["review_id"]
+    assert len(manager.list_reviews()) == 1
+    assert len(second["history"]) == 2
+
+
+def test_quality_gate_uses_real_target_metrics_and_rejects_fractional_alpha(tmp_path):
+    generated = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+    target = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+    for image in (generated, target):
+        for x in range(6, 18):
+            for y in range(4, 21):
+                image.putpixel((x, y), (80, 120, 160, 255))
+    generated.putpixel((10, 10), (80, 120, 160, 128))
+    generated_path = tmp_path / "generated.png"
+    target_path = tmp_path / "target.png"
+    generated.save(generated_path)
+    target.save(target_path)
+
+    result = QualityGate.evaluate_single_frame(generated_path, target_path, frame_idx=2)
+
+    assert result["audit_available"] is True
+    assert result["quality"]["silhouette"] is not None
+    assert "ALPHA_FAIL" in result["issues"]
+    assert result["aprobado"] is False
+    assert result["raw_metrics"]["silueta_iou_real"] > 99.0
+
+
+def test_quality_gate_never_approves_without_target(tmp_path):
     generated = tmp_path / "generated.png"
-    generated.write_bytes(b"fake")
+    _png(generated)
 
-    result = QualityGate.evaluate_single_frame(generated, None, metadata={"character_id": "ALEX", "frame_idx": 5})
+    result = QualityGate.evaluate_single_frame(generated, None)
 
     assert result["audit_available"] is False
     assert result["aprobado"] is False
     assert result["score_total"] is None
-    assert result["issues"] == []
+    assert result["diagnosis"]["reason"] == "target_not_found"
 
 
-def test_frame_quality_review_manager_registers_and_reevaluates_frame(tmp_path):
-    queue_path = tmp_path / "frame_review_queue.jsonl"
-    manager = FrameQualityReviewManager(base_dir=tmp_path, queue_path=queue_path)
-
-    generated = tmp_path / "generated.png"
-    target = tmp_path / "target.png"
-    generated.write_bytes(b"generated")
-    target.write_bytes(b"target")
-
-    review = manager.register_frame(
-        character_id="ALEX",
-        variant="chef_white",
-        frame_idx=12,
-        generated_frame_path=str(generated),
-        target_frame_path=str(target),
-        metadata={"row": 1, "column": 2, "epoch": 5},
+def _json_request(url, *, method="GET", payload=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"},
     )
-
-    assert review["status"] == "NEEDS_REVIEW"
-    assert review["review_id"]
-    assert queue_path.exists()
-
-    reevaluated = manager.reevaluate_frame(
-        review["review_id"],
-        quality={
-            "global": 58.0,
-            "anatomy": 78.0,
-            "silhouette": 70.0,
-            "face": 49.0,
-            "clothing": 92.0,
-            "props": 55.0,
-            "palette": 92.0,
-            "alpha": 100.0,
-            "micro_detail": 63.0,
-        },
-        issues=["face", "props", "micro_detail"],
-    )
-
-    assert reevaluated["status"] == "REEVALUATED"
-    assert reevaluated["quality"]["global"] == 58.0
-    assert reevaluated["times_reevaluated"] == 1
-    assert len(reevaluated["history"]) >= 2
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
 
 
-def test_frame_quality_review_manager_approve_and_reject_are_persisted(tmp_path):
-    manager = FrameQualityReviewManager(base_dir=tmp_path)
-    review = manager.register_frame(
-        character_id="ALEX",
-        variant="chef_white",
-        frame_idx=3,
-        generated_frame_path=str(tmp_path / "a.png"),
-        target_frame_path=str(tmp_path / "b.png"),
-    )
+def test_frame_review_rest_endpoints_validate_and_persist(tmp_path, monkeypatch):
+    import sprite_studio
 
-    approved = manager.approve_frame(review["review_id"], user="qa")
-    assert approved["status"] == "APPROVED"
+    manager, _, _ = _manager(tmp_path)
+    monkeypatch.setattr(sprite_studio, "FRAME_REVIEW_MANAGER", manager)
+    server = sprite_studio.ThreadingHTTPServer(("127.0.0.1", 0), sprite_studio.SpriteStudioHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, evaluated = _json_request(
+            base + "/api/qc/frame/evaluate",
+            method="POST",
+            payload={"run_id": "run_001", "frame_idx": 3, "user": "qa"},
+        )
+        assert status == 200
+        review_id = evaluated["review"]["review_id"]
 
-    other = manager.register_frame(
-        character_id="AMARO",
-        variant="urban",
-        frame_idx=9,
-        generated_frame_path=str(tmp_path / "c.png"),
-        target_frame_path=str(tmp_path / "d.png"),
-    )
+        status, queue = _json_request(base + "/api/qc/review-queue?run_id=run_001")
+        assert status == 200
+        assert queue["count"] == 1
+        assert queue["capabilities"]["regeneration"] is False
 
-    rejected = manager.reject_frame(other["review_id"], reason="bad face")
-    assert rejected["status"] == "REJECTED"
-    assert rejected["user_action"] == "REJECTED"
+        status, record = _json_request(base + f"/api/qc/frame/{review_id}")
+        assert status == 200
+        assert record["target_frame_path"].endswith("frame_004_r01_c04.png")
 
-    pending = manager.get_queue(status="APPROVED")
-    assert len(pending) == 1
-    assert pending[0]["review_id"] == approved["review_id"]
+        status, approved = _json_request(
+            base + f"/api/qc/frame/{review_id}/approve",
+            method="POST",
+            payload={"user": "qa", "reason": "visual check"},
+        )
+        assert status == 200
+        assert approved["review"]["status"] == "APPROVED"
 
+        status, rejected = _json_request(
+            base + f"/api/qc/frame/{review_id}/reject",
+            method="POST",
+            payload={"user": "qa", "reason": "changed decision"},
+        )
+        assert status == 200
+        assert rejected["review"]["status"] == "REJECTED"
 
-def test_review_statuses_are_restricted_to_valid_vocab(tmp_path):
-    assert set(VALID_REVIEW_STATUSES) >= {"OK", "NEEDS_REVIEW", "REEVALUATED", "APPROVED", "REJECTED"}
-    assert "INVALID_STATUS" not in VALID_REVIEW_STATUSES
+        status, error = _json_request(
+            base + "/api/qc/frame/evaluate",
+            method="POST",
+            payload={"frame_idx": 3},
+        )
+        assert status == 400
+        assert "obligatorios" in error["error"]
 
-
-def test_manager_resolves_safe_paths_and_keeps_history(tmp_path):
-    manager = FrameQualityReviewManager(base_dir=tmp_path)
-    safe_target = tmp_path / "safe_target.png"
-    safe_target.write_bytes(b"target")
-
-    review = manager.register_frame(
-        character_id="CONNY",
-        variant="variant",
-        frame_idx=21,
-        generated_frame_path=str(tmp_path / "generated.png"),
-        target_frame_path=str(safe_target),
-    )
-
-    assert review["target_frame_path"] == str(safe_target)
-    assert review["history"][-1]["action"] == "registered"
-    assert manager.resolve_target_path("CONNY", "variant", 21) == str(safe_target)
-
-    escape_path = tmp_path / ".." / "outside.png"
-    assert manager._ensure_safe_path(str(escape_path)) is None
-
-
-def test_frame_quality_review_manager_exposes_record_lookup_and_queue_listing(tmp_path):
-    manager = FrameQualityReviewManager(base_dir=tmp_path)
-    review = manager.register_frame(
-        character_id="ALEX",
-        variant="chef_white",
-        frame_idx=7,
-        generated_frame_path=str(tmp_path / "gen.png"),
-        target_frame_path=str(tmp_path / "target.png"),
-    )
-
-    assert manager.get_record(review["review_id"])["review_id"] == review["review_id"]
-    assert [item["review_id"] for item in manager.list_queue(status="NEEDS_REVIEW")] == [review["review_id"]]
+        status, error = _json_request(base + f"/api/qc/frame/{review_id}/approve")
+        assert status == 400
+        assert "inválido" in error["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

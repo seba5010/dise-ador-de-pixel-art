@@ -30,6 +30,9 @@ from .dataset import TemplateManager, isolate_character, pad_to_square
 from .train import tensor_to_pil
 from .enhancer import PixelArtEnhancer
 from .models import PixelArtUNetGenerator
+from .anatomical_guidance import compute_anatomical_metrics
+from .phase3_critical_enhancer import Phase3CriticalReviewer
+from .quality_guidance import build_quality_vector, diagnose_quality_bottleneck
 
 
 class QualityGate:
@@ -46,7 +49,7 @@ class QualityGate:
         frame_idx=None,
         metadata=None,
     ) -> Dict[str, Any]:
-        """Evaluación de un único frame sin depender de un checkpoint completo."""
+        """Audit one generated frame without loading or mutating a checkpoint."""
         if generated_frame is None:
             return {
                 "audit_available": False,
@@ -55,6 +58,9 @@ class QualityGate:
                 "quality": {},
                 "issues": [],
                 "diagnostico": "No hay frame generado para evaluar",
+                "diagnosis": {"primary_problem": None, "reason": "generated_frame_missing"},
+                "severity": "unknown",
+                "identity_confidence": None,
                 "status": "ERROR",
             }
 
@@ -66,19 +72,35 @@ class QualityGate:
                 "quality": {},
                 "issues": [],
                 "diagnostico": "No hay target válido para evaluar el frame",
+                "diagnosis": {"primary_problem": None, "reason": "target_not_found"},
+                "severity": "unknown",
+                "identity_confidence": None,
                 "status": "ERROR",
             }
 
         try:
             if isinstance(generated_frame, (str, Path)):
-                generated = Image.open(generated_frame).convert("RGBA")
+                generated_path = Path(generated_frame)
+                if not generated_path.is_file():
+                    raise FileNotFoundError(generated_path)
+                generated = Image.open(generated_path).convert("RGBA")
             else:
                 generated = generated_frame.convert("RGBA")
             if isinstance(target_frame, (str, Path)):
-                target = Image.open(target_frame).convert("RGBA")
+                target_path = Path(target_frame)
+                if not target_path.is_file():
+                    raise FileNotFoundError(target_path)
+                target = Image.open(target_path).convert("RGBA")
             else:
                 target = target_frame.convert("RGBA")
-        except Exception:
+            if reference_front is None:
+                identity = None
+            elif isinstance(reference_front, (str, Path)):
+                identity_path = Path(reference_front)
+                identity = Image.open(identity_path).convert("RGBA") if identity_path.is_file() else None
+            else:
+                identity = reference_front.convert("RGBA")
+        except (OSError, ValueError, AttributeError):
             return {
                 "audit_available": False,
                 "aprobado": False,
@@ -86,57 +108,104 @@ class QualityGate:
                 "quality": {},
                 "issues": [],
                 "diagnostico": "No se pudo abrir el frame generado o el target",
+                "diagnosis": {"primary_problem": None, "reason": "invalid_image"},
+                "severity": "unknown",
+                "identity_confidence": None,
                 "status": "ERROR",
             }
 
         if generated.size != target.size:
-            target = target.resize(generated.size, Image.Resampling.BILINEAR)
+            target = target.resize(generated.size, Image.Resampling.NEAREST)
 
-        generated_arr = np.asarray(generated, dtype=np.float32) / 255.0
-        target_arr = np.asarray(target, dtype=np.float32) / 255.0
-        diff = np.abs(generated_arr - target_arr)
-        global_score = max(0.0, min(100.0, 100.0 - float(np.mean(diff)) * 100.0))
-        alpha_score = max(0.0, min(100.0, 100.0 - float(np.mean(np.abs(generated_arr[:, :, 3] - target_arr[:, :, 3]))) * 100.0))
-        silhouette = max(0.0, min(100.0, float(np.mean((generated_arr[:, :, 3] > 0.05) == (target_arr[:, :, 3] > 0.05))) * 100.0))
-        anatomy = max(0.0, min(100.0, global_score * 0.7 + silhouette * 0.3))
-        face = max(0.0, min(100.0, global_score * 0.75 + silhouette * 0.25))
-        props = max(0.0, min(100.0, global_score * 0.8))
-        palette = max(0.0, min(100.0, 100.0 - float(np.mean(np.abs(generated_arr[:, :, :3] - target_arr[:, :, :3]))) * 100.0))
-        micro_detail = max(0.0, min(100.0, silhouette * 0.65 + palette * 0.35))
+        palette = PixelArtEnhancer.extract_palette(identity, max_colors=40) if identity is not None else None
+        raw_metrics = PixelArtEnhancer.analyze_quality(
+            generated,
+            identity_img=identity,
+            palette=palette,
+            target_img=target,
+        )
+        raw_metrics.update(compute_anatomical_metrics(generated, target))
+        raw_metrics.update(Phase3CriticalReviewer.audit_frame(generated, identity))
+        vector = build_quality_vector(raw_metrics)
+        quality = vector.to_dict()
+        diagnosis = diagnose_quality_bottleneck(vector)
+        score_total = quality.get("global")
 
-        quality = {
-            "global": round(float(global_score), 2),
-            "anatomy": round(float(anatomy), 2),
-            "silhouette": round(float(silhouette), 2),
-            "face": round(float(face), 2),
-            "clothing": round(float(global_score * 0.9), 2),
-            "arms_hands": round(float(anatomy * 0.9), 2),
-            "props": round(float(props), 2),
-            "feet": round(float(global_score * 0.85), 2),
-            "palette": round(float(palette), 2),
-            "alpha": round(float(alpha_score), 2),
-            "micro_detail": round(float(micro_detail), 2),
-        }
-
+        alpha = np.asarray(generated, dtype=np.uint8)[..., 3]
+        foreground = alpha > 0
         issues: List[str] = []
-        for key, threshold in {"face": 60.0, "props": 65.0, "micro_detail": 70.0, "silhouette": 75.0}.items():
-            if float(quality.get(key, 100.0)) < threshold:
-                issues.append(key)
+        if np.any((alpha > 0) & (alpha < 255)):
+            issues.append("ALPHA_FAIL")
+        edges = (
+            ("BORDER_TOUCH_TOP", foreground[0, :]),
+            ("BORDER_TOUCH_BOTTOM", foreground[-1, :]),
+            ("BORDER_TOUCH_LEFT", foreground[:, 0]),
+            ("BORDER_TOUCH_RIGHT", foreground[:, -1]),
+        )
+        issues.extend(name for name, edge in edges if np.any(edge))
+        if diagnosis.get("primary_problem"):
+            issues.append(str(diagnosis["primary_problem"]))
+        issues.extend(str(item) for item in diagnosis.get("secondary_problems", []))
+        issues = list(dict.fromkeys(issues))
 
-        score_total = round(float(np.mean(list(quality.values()))), 2)
+        critical = {"ALPHA_FAIL", "BORDER_TOUCH_TOP", "BORDER_TOUCH_BOTTOM", "BORDER_TOUCH_LEFT", "BORDER_TOUCH_RIGHT"}
+        approved = bool(
+            score_total is not None
+            and float(score_total) >= 70.0
+            and not critical.intersection(issues)
+            and diagnosis.get("severity") != "critical"
+        )
         return {
             "audit_available": True,
-            "aprobado": bool(score_total >= 70.0),
+            "aprobado": approved,
             "score_total": score_total,
             "quality": quality,
             "issues": issues,
-            "diagnostico": "Auditoría por frame ejecutada con referencia disponible",
+            "severity": diagnosis.get("severity", "unknown"),
+            "diagnosis": diagnosis,
+            "diagnostico": "Auditoría por frame ejecutada con target válido",
+            "identity_confidence": quality.get("palette") if identity is not None else None,
+            "raw_metrics": raw_metrics,
             "status": "REEVALUATED",
             "target_frame_path": str(target_frame),
             "generated_frame_path": str(generated_frame),
             "metadata": metadata,
             "frame_idx": frame_idx,
         }
+
+    @classmethod
+    def evaluate_generator_frame(
+        cls,
+        generator,
+        front_tensor: torch.Tensor,
+        pose_tensor: torch.Tensor,
+        target_tensor: torch.Tensor,
+        *,
+        reference_front=None,
+        frame_idx=None,
+        metadata=None,
+    ) -> Dict[str, Any]:
+        """Evaluate an already-loaded generator without reconstructing its model."""
+        if generator is None or target_tensor is None:
+            return cls.evaluate_single_frame(None, None, frame_idx=frame_idx, metadata=metadata)
+        if front_tensor.ndim != pose_tensor.ndim or front_tensor.ndim not in {3, 4}:
+            raise ValueError("front_tensor and pose_tensor must be compatible CHW or NCHW tensors")
+        channel_dimension = 0 if front_tensor.ndim == 3 else 1
+        condition = torch.cat([front_tensor, pose_tensor], dim=channel_dimension)
+        if condition.ndim == 3:
+            condition = condition.unsqueeze(0)
+        with torch.no_grad():
+            generated_tensor = generator(condition)
+        if generated_tensor.ndim == 4:
+            generated_tensor = generated_tensor[0]
+        target = target_tensor[0] if target_tensor.ndim == 4 else target_tensor
+        return cls.evaluate_single_frame(
+            tensor_to_pil(generated_tensor),
+            tensor_to_pil(target),
+            reference_front=reference_front,
+            frame_idx=frame_idx,
+            metadata=metadata,
+        )
 
     @classmethod
     def evaluate_model_critical(cls,
@@ -183,36 +252,24 @@ class QualityGate:
                 resolved_img_path = cand_p
 
         if resolved_img_path is None:
-            if phase == "1":
-                # Conny o Dana
-                candidates = [
-                    PERSONAJES_DIR / "conny" / "conny ropa blanca chef.png",
-                    PERSONAJES_DIR / "conny" / "conny_rbchef.png",
-                    PERSONAJES_DIR / "conny" / "conny_rnormal.png"
-                ]
-            else:
-                # Alex o Amaro
-                candidates = [
-                    PERSONAJES_DIR / "alex" / "alex_rbchef.png",
-                    PERSONAJES_DIR / "alex" / "alex_rnormal.png",
-                    PERSONAJES_DIR / "amaro" / "amaro_rbchef.png"
-                ]
-
-            for c in candidates:
-                if c.exists():
-                    resolved_img_path = c
-                    break
-
-            if not resolved_img_path:
-                all_pngs = list(PERSONAJES_DIR.glob("*/*.png"))
-                resolved_img_path = all_pngs[0] if all_pngs else None
+            all_images = sorted(
+                path for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp")
+                for path in PERSONAJES_DIR.rglob(pattern)
+                if path.is_file()
+            )
+            preferred = [
+                path for path in all_images
+                if any(token in path.stem.casefold() for token in ("front", "frontal", "rnormal", "rbchef", "rnchef"))
+            ]
+            resolved_img_path = (preferred or all_images or [None])[0]
 
         if not resolved_img_path:
             return {
-                "aprobado": True,
-                "score_total": 99.5,
-                "diagnostico": "Sin personaje de referencia local, aprobado por defecto.",
-                "fallas": []
+                "audit_available": False,
+                "aprobado": False,
+                "score_total": None,
+                "diagnostico": "Sin personaje de referencia local; auditoría no disponible.",
+                "fallas": ["Referencia de identidad no encontrada"]
             }
 
         sample_img_path = resolved_img_path
@@ -238,11 +295,15 @@ class QualityGate:
         torso_pixels = arr_front_np[mask_torso, :3] if np.any(mask_torso) else np.zeros((1, 3))
         torso_mean_rgb = np.mean(torso_pixels, axis=0)
         white_ratio = float(np.mean((torso_pixels[:, 0] > 150) & (torso_pixels[:, 1] > 150) & (torso_pixels[:, 2] > 150)))
-        is_chef_white = bool(white_ratio >= 0.35) and not ("tori" in str(sample_img_path).lower() or "rnormal" in str(sample_img_path).lower())
+        is_chef_white = bool(white_ratio >= 0.35)
 
         # ── 2. CARGAR GROUND TRUTH EXACTO CORRESPONDIENTE A LA VARIANTE ACTUAL ──
         gt_samples_map = {}
-        sample_char_id = "TORI" if "tori" in str(sample_img_path).lower() else ("ALEX" if "alex" in str(sample_img_path).lower() else ("AMARO" if "amaro" in str(sample_img_path).lower() else ("CONNY" if "conny" in str(sample_img_path).lower() else "DANA")))
+        sample_char_id = sample_img_path.parent.name
+
+        def normalize_identity(value: Any) -> str:
+            return "".join(character for character in str(value).casefold() if character.isalnum())
+
         try:
             from .dataset import PixelArtDataset
             dataset_ref = PixelArtDataset(phase_cfg=cfg)
@@ -256,7 +317,7 @@ class QualityGate:
             for b_idx in range(n_blocks):
                 block = all_samples[b_idx * total_frames : (b_idx + 1) * total_frames]
                 b_char = block[0].get("char_id", "")
-                if b_char == sample_char_id:
+                if normalize_identity(b_char) == normalize_identity(sample_char_id):
                     diff = float(torch.mean(torch.abs(front_cpu - block[0]["front_tensor"])).item())
                     if diff < best_diff:
                         best_diff = diff
