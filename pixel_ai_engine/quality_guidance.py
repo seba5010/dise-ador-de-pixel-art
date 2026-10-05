@@ -321,24 +321,42 @@ class HardExampleMiningPolicy:
         *,
         enabled: bool,
         recommendation: str = "REINFORCE",
+        manual_weights: Optional[Mapping[str, Any]] = None,
     ) -> SamplingPlan:
         records = frame_quality if isinstance(frame_quality, Mapping) else {}
+        manual = manual_weights if isinstance(manual_weights, Mapping) else {}
         keys: List[str] = []
         weights: List[float] = []
         eligible = 0
         hard = 0
+        manual_hard = 0
         for sample in samples:
             key = frame_quality_key(sample.get("char_id", "unknown"), sample.get("frame_idx", -1))
             weight, is_eligible = self._weight_for(records.get(key))
+            manual_weight = normalize_quality_score(manual.get(key))
+            if manual_weight is not None:
+                # Manual weights use a 1..2 scale, not a percentage scale.
+                try:
+                    manual_weight = min(self.max_weight, max(1.0, float(manual.get(key))))
+                except (TypeError, ValueError):
+                    manual_weight = 1.0
+            else:
+                manual_weight = 1.0
+            if manual_weight > 1.0:
+                manual_hard += 1
+                is_eligible = True
+                weight = max(weight, manual_weight)
             keys.append(key)
             weights.append(weight)
             eligible += int(is_eligible)
             hard += int(is_eligible and weight > 1.0)
 
         intervention_allowed = recommendation in {"REINFORCE", "ADJUST_SAMPLING"}
-        active = bool(enabled and intervention_allowed and eligible > 0 and hard > 0)
+        active = bool(enabled and (intervention_allowed or manual_hard > 0) and eligible > 0 and hard > 0)
         if not enabled:
             reason = "feature_disabled"
+        elif manual_hard > 0:
+            reason = "manual_hard_examples_active"
         elif not intervention_allowed:
             reason = "guidance_did_not_request_sampling"
         elif eligible == 0:

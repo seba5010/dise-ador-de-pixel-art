@@ -40,3 +40,8 @@ stable-diffusion-webui-forge-main/
 
 # Backups temporales
 *.bak
+
+# Estado mutable de control de calidad interactivo
+frame_review_queue.jsonl
+hard_examples.jsonl
+qc_batch_jobs.json

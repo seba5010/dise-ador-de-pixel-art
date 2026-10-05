@@ -29,9 +29,9 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 ENABLE_FRAME_REVIEW = _env_flag("PIXEL_AI_ENABLE_FRAME_REVIEW", True)
-ENABLE_FRAME_REGENERATION = _env_flag("PIXEL_AI_ENABLE_FRAME_REGENERATION", False)
-ENABLE_MANUAL_REINFORCEMENT = _env_flag("PIXEL_AI_ENABLE_MANUAL_REINFORCEMENT", False)
-ENABLE_BATCH_QC_ACTIONS = _env_flag("PIXEL_AI_ENABLE_BATCH_QC_ACTIONS", False)
+ENABLE_FRAME_REGENERATION = _env_flag("PIXEL_AI_ENABLE_FRAME_REGENERATION", True)
+ENABLE_MANUAL_REINFORCEMENT = _env_flag("PIXEL_AI_ENABLE_MANUAL_REINFORCEMENT", True)
+ENABLE_BATCH_QC_ACTIONS = _env_flag("PIXEL_AI_ENABLE_BATCH_QC_ACTIONS", True)
 
 FRAME_REVIEW_QUEUE_FILE = PROJECT_ROOT / "frame_review_queue.jsonl"
 DATASET_FRAMES_ROOT = PROJECT_ROOT / "dataset_frames_individuales"
@@ -636,6 +636,137 @@ class FrameQualityReviewManager:
             record["times_failed"] = int(record.get("times_failed", 0)) + 1
             history = list(record.get("history", []))
             history.append(self._history_event("rejected", record, actor=actor, reason=reason, score=record.get("score_total")))
+            record["history"] = history
+            return record
+
+        return self._mutate(self._validate_identifier(review_id, "review_id"), update)
+
+    def record_regeneration(
+        self,
+        review_id: str,
+        *,
+        generation_id: str,
+        candidate_dir: str,
+        ranking: Mapping[str, Any],
+        actor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Attach isolated candidate evidence without replacing the active frame."""
+        def update(record: Dict[str, Any]) -> Dict[str, Any]:
+            previous_status = str(record.get("status") or FrameReviewStatus.NEEDS_REVIEW.value)
+            previous_regeneration = record.get("regeneration")
+            if isinstance(previous_regeneration, Mapping):
+                regeneration_history = list(record.get("regeneration_history", []))
+                regeneration_history.append(_json_safe(previous_regeneration))
+                record["regeneration_history"] = regeneration_history
+            record["status"] = FrameReviewStatus.REGENERATED.value
+            record["user_action"] = "REGENERATE"
+            record["times_regenerated"] = int(record.get("times_regenerated", 0)) + 1
+            record["regeneration"] = {
+                "generation_id": self._validate_identifier(generation_id, "generation_id"),
+                "candidate_dir": str(candidate_dir),
+                "ranking": _json_safe(ranking),
+                "state": "READY",
+                "pre_regeneration_status": previous_status,
+                "created_at": _now(),
+            }
+            history = list(record.get("history", []))
+            history.append(self._history_event(
+                "regenerated",
+                record,
+                actor=actor,
+                generation_id=generation_id,
+                best_candidate=ranking.get("best_candidate"),
+                reason=ranking.get("reason"),
+                candidate_count=len(ranking.get("candidates", [])),
+            ))
+            record["history"] = history
+            return record
+
+        return self._mutate(self._validate_identifier(review_id, "review_id"), update)
+
+    def record_candidate_applied(
+        self,
+        review_id: str,
+        *,
+        candidate_id: str,
+        original_path: str,
+        replacement_path: str,
+        actor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        def update(record: Dict[str, Any]) -> Dict[str, Any]:
+            regeneration = dict(record.get("regeneration") or {})
+            regeneration.update({
+                "state": "APPLIED",
+                "applied_candidate": candidate_id,
+                "original_generated_frame": original_path,
+                "replacement_frame": replacement_path,
+                "applied_at": _now(),
+            })
+            record["regeneration"] = regeneration
+            record["status"] = FrameReviewStatus.REGENERATED.value
+            record["user_action"] = "APPLY_CANDIDATE"
+            history = list(record.get("history", []))
+            history.append(self._history_event(
+                "candidate_applied",
+                record,
+                actor=actor,
+                candidate_id=candidate_id,
+                original_generated_frame=original_path,
+                replacement_frame=replacement_path,
+            ))
+            record["history"] = history
+            return record
+
+        return self._mutate(self._validate_identifier(review_id, "review_id"), update)
+
+    def discard_regeneration(self, review_id: str, *, actor: Optional[str] = None) -> Dict[str, Any]:
+        def update(record: Dict[str, Any]) -> Dict[str, Any]:
+            regeneration = dict(record.get("regeneration") or {})
+            if not regeneration:
+                raise ValueError("regeneration_not_found")
+            if regeneration.get("state") != "READY":
+                raise ValueError("regeneration_not_discardable")
+            regeneration["state"] = "DISCARDED"
+            regeneration["discarded_at"] = _now()
+            ranking = dict(regeneration.get("ranking") or {})
+            candidates = []
+            for candidate in ranking.get("candidates", []):
+                item = dict(candidate)
+                item["state"] = "DISCARDED"
+                candidates.append(item)
+            ranking["candidates"] = candidates
+            regeneration["ranking"] = ranking
+            record["regeneration"] = regeneration
+            previous = regeneration.get("pre_regeneration_status")
+            record["status"] = self.validate_status(previous or FrameReviewStatus.NEEDS_REVIEW.value)
+            record["user_action"] = "DISCARD_REGENERATION"
+            history = list(record.get("history", []))
+            history.append(self._history_event("regeneration_discarded", record, actor=actor))
+            record["history"] = history
+            return record
+
+        return self._mutate(self._validate_identifier(review_id, "review_id"), update)
+
+    def mark_for_reinforcement(
+        self,
+        review_id: str,
+        *,
+        hard_example: Mapping[str, Any],
+        actor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        def update(record: Dict[str, Any]) -> Dict[str, Any]:
+            record["status"] = FrameReviewStatus.SENT_TO_REINFORCEMENT.value
+            record["user_action"] = "SEND_TO_REINFORCEMENT"
+            record["sent_to_reinforcement"] = True
+            record["reinforcement"] = _json_safe(hard_example)
+            history = list(record.get("history", []))
+            history.append(self._history_event(
+                "sent_to_reinforcement",
+                record,
+                actor=actor,
+                priority=hard_example.get("priority"),
+                target_frame_path=hard_example.get("target_frame_path"),
+            ))
             record["history"] = history
             return record
 

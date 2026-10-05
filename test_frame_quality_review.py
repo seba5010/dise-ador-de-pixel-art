@@ -231,9 +231,19 @@ def _json_request(url, *, method="GET", payload=None):
 
 def test_frame_review_rest_endpoints_validate_and_persist(tmp_path, monkeypatch):
     import sprite_studio
+    from pixel_ai_engine.hard_examples import HardExampleQueue
+    from pixel_ai_engine.interactive_qc import InteractiveQualityControlService
 
     manager, _, _ = _manager(tmp_path)
+    hard_examples = HardExampleQueue(manager, tmp_path / "hard_examples.jsonl")
+    service = InteractiveQualityControlService(
+        manager,
+        hard_examples=hard_examples,
+        batch_path=tmp_path / "qc_batch_jobs.json",
+    )
     monkeypatch.setattr(sprite_studio, "FRAME_REVIEW_MANAGER", manager)
+    monkeypatch.setattr(sprite_studio, "HARD_EXAMPLE_QUEUE", hard_examples)
+    monkeypatch.setattr(sprite_studio, "QC_SERVICE", service)
     server = sprite_studio.ThreadingHTTPServer(("127.0.0.1", 0), sprite_studio.SpriteStudioHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -250,7 +260,7 @@ def test_frame_review_rest_endpoints_validate_and_persist(tmp_path, monkeypatch)
         status, queue = _json_request(base + "/api/qc/review-queue?run_id=run_001")
         assert status == 200
         assert queue["count"] == 1
-        assert queue["capabilities"]["regeneration"] is False
+        assert queue["capabilities"]["regeneration"] is True
 
         status, record = _json_request(base + f"/api/qc/frame/{review_id}")
         assert status == 200

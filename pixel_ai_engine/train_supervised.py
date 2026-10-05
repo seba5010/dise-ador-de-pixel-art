@@ -136,11 +136,14 @@ def _build_sampling_plan(
     recommendation = "CONTINUE"
     if isinstance(guidance, dict):
         recommendation = str(guidance.get("authorized_action", guidance.get("recommended_action", "CONTINUE")))
+    from pixel_ai_engine.hard_examples import load_manual_sampling_weights
+
     return HardExampleMiningPolicy().build_plan(
         _dataset_sample_descriptors(dataset),
         frame_quality,
         enabled=bool(ENABLE_QUALITY_GUIDANCE and ENABLE_SMART_SAMPLING),
         recommendation=recommendation,
+        manual_weights=load_manual_sampling_weights(),
     )
 
 
