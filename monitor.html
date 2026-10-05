@@ -399,6 +399,16 @@
         </div>
       </div>
 
+      <div class="card" id="frame-qc-card">
+        <h3>🧪 Control de Calidad por Frame</h3>
+        <div class="info-row"><span class="info-key">Pendientes</span><span class="info-val" id="fqc-pending" style="color:var(--warn)">—</span></div>
+        <div class="info-row"><span class="info-key">Aprobados</span><span class="info-val" id="fqc-approved" style="color:var(--accent2)">—</span></div>
+        <div class="info-row"><span class="info-key">Rechazados</span><span class="info-val" id="fqc-rejected" style="color:var(--danger)">—</span></div>
+        <div class="info-row"><span class="info-key">Regenerados</span><span class="info-val" id="fqc-regenerated">0 (desactivado)</span></div>
+        <div class="info-row"><span class="info-key">Enviados a refuerzo</span><span class="info-val" id="fqc-reinforced">0 (desactivado)</span></div>
+        <div style="font-size:10px;color:var(--dim);margin-top:9px">La revisión humana es persistente. Regeneración y refuerzo pertenecen a incrementos posteriores.</div>
+      </div>
+
       <!-- Log de épocas recientes -->
       <div class="card" style="flex:1">
         <h3>📋 Log Reciente</h3>
@@ -586,6 +596,23 @@
         statusText.textContent = window.location.protocol === 'file:'
           ? 'Abriendo monitor en http://localhost:8080/monitor.html...'
           : 'Esperando entrenamiento...';
+      }
+    }
+
+    async function fetchFrameReviewSummary() {
+      try {
+        const base = window.location.protocol === 'file:' ? 'http://localhost:8080' : '';
+        const response = await fetch(`${base}/api/qc/review-queue?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('frame qc unavailable');
+        const payload = await response.json();
+        const summary = payload.summary || {};
+        document.getElementById('fqc-pending').textContent = summary.pending ?? 0;
+        document.getElementById('fqc-approved').textContent = summary.approved ?? 0;
+        document.getElementById('fqc-rejected').textContent = summary.rejected ?? 0;
+        document.getElementById('fqc-regenerated').textContent = `${summary.regenerated ?? 0} (desactivado)`;
+        document.getElementById('fqc-reinforced').textContent = `${summary.sent_to_reinforcement ?? 0} (desactivado)`;
+      } catch (_) {
+        document.getElementById('fqc-pending').textContent = 'Sin conexión';
       }
     }
 
@@ -1135,6 +1162,7 @@
       if (tickerVal <= 0) {
         tickerVal = RELOAD_INTERVAL_S;
         fetchStatus();
+        fetchFrameReviewSummary();
         if (!stopped) reloadPreview();
       }
     }, 1000);
@@ -1166,6 +1194,7 @@
 
     // Carga inicial
     fetchStatus();
+    fetchFrameReviewSummary();
     reloadPreview();
   </script>
 </body>

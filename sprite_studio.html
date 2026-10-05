@@ -657,6 +657,39 @@
     .qc-tag.warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); }
     .qc-tag.info { background: rgba(78, 205, 196, 0.2); color: #4ecdc4; border: 1px solid rgba(78, 205, 196, 0.35); }
 
+    .fqr-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .fqr-summary { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; }
+    .fqr-summary-item { background:#10141e; border:1px solid #252d40; border-radius:6px; padding:9px 12px; }
+    .fqr-summary-item strong { display:block; font:700 18px var(--mono); color:#fff; }
+    .fqr-summary-item span { font-size:10px; color:var(--dim); text-transform:uppercase; }
+    .fqr-list { display:grid; grid-template-columns:repeat(auto-fit, minmax(330px, 1fr)); gap:10px; }
+    .fqr-card { background:#0f131c; border:1px solid #283044; border-left:4px solid #f59e0b; border-radius:7px; padding:12px; display:flex; flex-direction:column; gap:9px; }
+    .fqr-card.OK, .fqr-card.APPROVED { border-left-color:#10b981; }
+    .fqr-card.REJECTED, .fqr-card.ERROR { border-left-color:#ef4444; }
+    .fqr-card.REEVALUATED { border-left-color:#f97316; }
+    .fqr-card-head, .fqr-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+    .fqr-status { font:700 10px var(--mono); padding:3px 8px; border:1px solid currentColor; border-radius:12px; }
+    .fqr-images { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .fqr-image { background:#090b10; border:1px solid #202739; border-radius:5px; padding:6px; text-align:center; color:var(--dim); font-size:9px; }
+    .fqr-image img { display:block; width:100%; max-height:180px; object-fit:contain; image-rendering:pixelated; margin-bottom:4px; }
+    .fqr-metrics { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
+    .fqr-metric { padding:5px; background:#151a26; border-radius:4px; text-align:center; font:600 10px var(--mono); }
+    .fqr-issues { color:#fbbf24; font-size:10px; min-height:14px; }
+    .fqr-diagnosis { white-space:pre-wrap; max-height:170px; overflow:auto; font:10px var(--mono); color:#aeb9cc; }
+    @media (max-width: 768px) {
+      .fqr-summary { grid-template-columns:1fr 1fr; }
+      .fqr-list { grid-template-columns:1fr; }
+      .fqr-metrics { grid-template-columns:1fr 1fr; }
+    }
+
   </style>
 </head>
 <body>
@@ -1306,6 +1339,27 @@
             </div>
           </div>
         </div>
+
+        <section class="fqr-panel" aria-labelledby="fqrTitle">
+          <div class="qc-panel-header">
+            <div>
+              <div id="fqrTitle" style="font-size:12px; font-weight:700; text-transform:uppercase;">Control de calidad interactivo por frame</div>
+              <div style="font-size:10px; color:var(--dim); margin-top:3px;">Selecciona una celda, evalúala y decide. Estas acciones no regeneran ni entrenan.</div>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="qc-mini-btn" onclick="evaluateSelectedQcFrame()">Evaluar frame seleccionado</button>
+              <button class="qc-mini-btn" onclick="refreshFrameReviewQueue()">Actualizar cola</button>
+            </div>
+          </div>
+          <div class="fqr-summary" aria-label="Resumen de cola de revisión">
+            <div class="fqr-summary-item"><strong id="fqrPending">0</strong><span>Pendientes</span></div>
+            <div class="fqr-summary-item"><strong id="fqrApproved">0</strong><span>Aprobados</span></div>
+            <div class="fqr-summary-item"><strong id="fqrRejected">0</strong><span>Rechazados</span></div>
+            <div class="fqr-summary-item"><strong id="fqrTotal">0</strong><span>Total evaluados</span></div>
+          </div>
+          <div id="fqrMessage" style="font-size:11px; color:var(--dim);" role="status">Cola lista para cargar.</div>
+          <div id="fqrList" class="fqr-list"></div>
+        </section>
 
       </div>
     </div>
@@ -2041,12 +2095,146 @@
       autoAudit: true,
       lastAuditTimestamp: 0,
       isAuditing: false,
-      selectedCell: null
+      selectedCell: null,
+      reviewQueue: [],
+      reviewSummary: {}
     };
 
     async function initQualityTab() {
       await refreshQualityRunsList();
       await triggerManualAudit();
+      await refreshFrameReviewQueue();
+    }
+
+    function fqrEscape(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      })[char]);
+    }
+
+    function fqrAssetUrl(path) {
+      if (!path) return '';
+      const normalized = String(path).replace(/\\/g, '/');
+      const roots = ['output/', 'dataset_frames_individuales/', 'dataset_supervisado/', 'personajes/'];
+      for (const root of roots) {
+        const index = normalized.indexOf(root);
+        if (index >= 0) return encodeURI('/' + normalized.substring(index));
+      }
+      return normalized.startsWith('/') ? encodeURI(normalized) : '';
+    }
+
+    function fqrRunId() {
+      if (qcState.currentAuditData?.run_id) return qcState.currentAuditData.run_id;
+      const selected = document.getElementById('qcRunSelect')?.value || '';
+      return selected && selected !== 'auto' ? selected.replace(/\\/g, '/').split('/').pop() : '';
+    }
+
+    async function refreshFrameReviewQueue() {
+      const message = document.getElementById('fqrMessage');
+      const runId = fqrRunId();
+      if (message) message.textContent = 'Actualizando cola de revisión...';
+      try {
+        const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+        const response = await fetch('/api/qc/review-queue' + suffix, { cache: 'no-store' });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'No se pudo cargar la cola');
+        qcState.reviewQueue = payload.queue || [];
+        qcState.reviewSummary = payload.summary || {};
+        renderFrameReviewQueue();
+        if (message) message.textContent = runId
+          ? `Mostrando revisiones de ${runId}. Seleccionado: frame ${qcState.selectedCell ?? 'ninguno'}.`
+          : 'Mostrando todas las revisiones persistidas.';
+      } catch (error) {
+        if (message) message.textContent = `Error de cola: ${error.message}`;
+      }
+    }
+
+    function renderFrameReviewQueue() {
+      const summary = qcState.reviewSummary || {};
+      document.getElementById('fqrPending').textContent = summary.pending ?? 0;
+      document.getElementById('fqrApproved').textContent = summary.approved ?? 0;
+      document.getElementById('fqrRejected').textContent = summary.rejected ?? 0;
+      document.getElementById('fqrTotal').textContent = summary.total ?? 0;
+      const container = document.getElementById('fqrList');
+      if (!container) return;
+      if (!qcState.reviewQueue.length) {
+        container.innerHTML = '<div style="color:var(--dim); font-size:11px; padding:12px;">No hay frames evaluados para esta ejecución.</div>';
+        return;
+      }
+      container.innerHTML = qcState.reviewQueue.map(review => {
+        const quality = review.quality || {};
+        const metricNames = ['global', 'anatomy', 'silhouette', 'face', 'props', 'alpha', 'micro_detail', 'outline'];
+        const metrics = metricNames.map(name => {
+          const value = quality[name];
+          const shown = value === null || value === undefined ? 'N/D' : `${Number(value).toFixed(1)}%`;
+          return `<div class="fqr-metric"><span style="color:var(--dim)">${fqrEscape(name)}</span><br>${fqrEscape(shown)}</div>`;
+        }).join('');
+        const generatedUrl = fqrAssetUrl(review.generated_frame_path);
+        const targetUrl = fqrAssetUrl(review.target_frame_path);
+        const generated = generatedUrl ? `<img src="${fqrEscape(generatedUrl)}" alt="Frame generado ${Number(review.frame_idx)}">` : '';
+        const target = targetUrl ? `<img src="${fqrEscape(targetUrl)}" alt="Target ${Number(review.frame_idx)}">` : '<div style="padding:30px 0;color:#ef4444">TARGET NO DISPONIBLE</div>';
+        const issues = (review.issues || []).map(fqrEscape).join(' · ') || 'Sin problemas críticos registrados';
+        const diagnosis = fqrEscape(JSON.stringify(review.diagnosis || {}, null, 2));
+        const id = fqrEscape(review.review_id);
+        return `<article class="fqr-card ${fqrEscape(review.status)}">
+          <div class="fqr-card-head">
+            <strong>Frame ${String(Number(review.frame_idx)).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
+            <span class="fqr-status">${fqrEscape(review.status)}</span>
+          </div>
+          <div style="font:10px var(--mono);color:var(--dim)">${fqrEscape(review.variant || 'sin variante')} · score ${review.score_total ?? 'N/D'} · severidad ${fqrEscape(review.severity || 'N/D')}</div>
+          <div class="fqr-images">
+            <div class="fqr-image">${generated}<span>GENERADO</span></div>
+            <div class="fqr-image">${target}<span>TARGET DEL DATASET</span></div>
+          </div>
+          <div class="fqr-metrics">${metrics}</div>
+          <div class="fqr-issues">${issues}</div>
+          <div class="fqr-actions">
+            <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reevaluate')">Reevaluar</button>
+            <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'approve')" ${review.audit_available ? '' : 'disabled'}>Aprobar</button>
+            <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reject')">Rechazar</button>
+          </div>
+          <details><summary style="cursor:pointer;font-size:10px;color:var(--accent)">Ver diagnóstico e historial</summary><pre class="fqr-diagnosis">${diagnosis}\n\n${fqrEscape(JSON.stringify(review.history || [], null, 2))}</pre></details>
+        </article>`;
+      }).join('');
+    }
+
+    async function evaluateSelectedQcFrame() {
+      const message = document.getElementById('fqrMessage');
+      const runId = fqrRunId();
+      if (qcState.selectedCell === null || !runId) {
+        if (message) message.textContent = 'Selecciona una celda y una ejecución válida antes de evaluar.';
+        return;
+      }
+      if (message) message.textContent = `Evaluando frame ${qcState.selectedCell}...`;
+      try {
+        const response = await fetch('/api/qc/frame/evaluate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_id: runId, frame_idx: qcState.selectedCell, user: 'studio_user' })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Evaluación fallida');
+        await refreshFrameReviewQueue();
+        if (message) message.textContent = `Frame ${qcState.selectedCell} evaluado y persistido.`;
+      } catch (error) {
+        if (message) message.textContent = `No se pudo evaluar: ${error.message}`;
+      }
+    }
+
+    async function frameReviewAction(reviewId, action) {
+      const message = document.getElementById('fqrMessage');
+      if (message) message.textContent = `Aplicando ${action}...`;
+      try {
+        const response = await fetch(`/api/qc/frame/${encodeURIComponent(reviewId)}/${action}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user: 'studio_user' })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Acción ${action} fallida`);
+        await refreshFrameReviewQueue();
+        if (message) message.textContent = `Frame actualizado: ${payload.review.status}.`;
+      } catch (error) {
+        if (message) message.textContent = `Acción bloqueada: ${error.message}`;
+      }
     }
 
     async function refreshQualityRunsList() {
@@ -2096,10 +2284,11 @@
       }
     }
 
-    function onQcRunSelectChange() {
+    async function onQcRunSelectChange() {
       const sel = document.getElementById('qcRunSelect');
       qcState.selectedRunPath = sel.value;
-      triggerManualAudit();
+      await triggerManualAudit();
+      await refreshFrameReviewQueue();
     }
 
     function toggleAutoAudit(checked) {
@@ -2546,6 +2735,8 @@
       qcState.selectedCell = frameIdx;
       const badge = document.getElementById('qcSelectedCellBadge');
       if (badge) badge.textContent = `Celda Seleccionada: Frame #${frameIdx}`;
+      const message = document.getElementById('fqrMessage');
+      if (message) message.textContent = `Frame ${frameIdx} seleccionado. Pulsa “Evaluar frame seleccionado” para añadirlo o actualizarlo.`;
 
       // Resaltar elemento en lista de incidencias
       const targetItem = document.getElementById(`qcIncidentItem_${frameIdx}`);
