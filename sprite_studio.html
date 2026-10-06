@@ -1359,7 +1359,7 @@
               <span id="timelineErasBadge" class="stat-badge" style="color:#38bdf8; background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25);">0 eras archivadas</span>
             </div>
             <div style="font-size:11px; color:var(--dim);">
-              Registro comparativo de convergencia, mejor pérdida y evolución entre sesiones de entrenamiento.
+              Registro comparativo de convergencia, mejor pérdida, control de calidad (QC) y evolución entre sesiones de entrenamiento.
             </div>
           </div>
           <div id="timelineErasTableContainer" style="overflow-x:auto;">
@@ -4282,6 +4282,62 @@
       ctx.restore();
     }
 
+    function extractEraQualityMetrics(eraObj, isCurrent, mainInfo) {
+      let maxQc = null;
+      let lastQc = null;
+      let maxAnat = null;
+      let lastAnat = null;
+
+      if (eraObj && typeof eraObj === 'object') {
+        if (typeof eraObj.best_quality_score === 'number') maxQc = eraObj.best_quality_score;
+        if (typeof eraObj.best_quality === 'number') maxQc = eraObj.best_quality;
+        if (eraObj.quality_checkpoint && typeof eraObj.quality_checkpoint.score === 'number') {
+          maxQc = maxQc === null ? eraObj.quality_checkpoint.score : Math.max(maxQc, eraObj.quality_checkpoint.score);
+        }
+
+        const history = Array.isArray(eraObj.history) ? eraObj.history : [];
+        for (let i = 0; i < history.length; i++) {
+          const step = history[i];
+          if (!step || typeof step !== 'object') continue;
+          const q = step.quality || {};
+          const g = step.guidance || {};
+          const qv = g.quality_vector || {};
+          const score = step.quality_score ?? g.quality_score ?? q.score_total ?? q.score;
+          if (score !== undefined && score !== null && !isNaN(Number(score))) {
+            const sNum = Number(score);
+            if (maxQc === null || sNum > maxQc) maxQc = sNum;
+            lastQc = sNum;
+          }
+          const anat = qv.anatomy ?? q.cuerpo_precision ?? q.anatomy;
+          if (anat !== undefined && anat !== null && !isNaN(Number(anat))) {
+            const aNum = Number(anat);
+            if (maxAnat === null || aNum > maxAnat) maxAnat = aNum;
+            lastAnat = aNum;
+          }
+        }
+      }
+
+      if (isCurrent && mainInfo && typeof mainInfo === 'object') {
+        if (typeof mainInfo.best_quality_score === 'number') {
+          maxQc = maxQc === null ? mainInfo.best_quality_score : Math.max(maxQc, mainInfo.best_quality_score);
+        }
+        if (mainInfo.quality_checkpoint && typeof mainInfo.quality_checkpoint.score === 'number') {
+          maxQc = maxQc === null ? mainInfo.quality_checkpoint.score : Math.max(maxQc, mainInfo.quality_checkpoint.score);
+        }
+        const currGuideScore = mainInfo.guidance?.quality_score ?? mainInfo.quality?.score_total;
+        if (currGuideScore !== undefined && currGuideScore !== null && !isNaN(Number(currGuideScore))) {
+          lastQc = Number(currGuideScore);
+        }
+        const currAnat = mainInfo.guidance?.quality_vector?.anatomy ?? mainInfo.quality?.cuerpo_precision;
+        if (currAnat !== undefined && currAnat !== null && !isNaN(Number(currAnat))) {
+          lastAnat = Number(currAnat);
+          if (maxAnat === null || lastAnat > maxAnat) maxAnat = lastAnat;
+        }
+      }
+
+      return { maxQc, lastQc, maxAnat, lastAnat };
+    }
+
     function renderTimelineErasTable(info) {
       const container = document.getElementById('timelineErasTableContainer');
       const badge = document.getElementById('timelineErasBadge');
@@ -4309,6 +4365,7 @@
               <th style="padding:6px 8px; text-align:center;">Épocas</th>
               <th style="padding:6px 8px; text-align:right;">Pérdida Inicial</th>
               <th style="padding:6px 8px; text-align:right;">Mejor Pérdida (Min)</th>
+              <th style="padding:6px 8px; text-align:center;">Control Calidad (QC)</th>
               <th style="padding:6px 8px; text-align:center;">Evolución Relativa</th>
               <th style="padding:6px 8px; text-align:right;">Hora / Fecha</th>
               <th style="padding:6px 8px; text-align:center;">Estado</th>
@@ -4317,11 +4374,76 @@
           <tbody>
       `;
 
+      function renderQcBadge(metrics, isCurrent) {
+        if (!metrics || metrics.maxQc === null) {
+          return '<span style="color:#64748b; font-size:10px; font-family:var(--mono);">-- <span style="font-size:9px; color:#475569;">(Sin QC)</span></span>';
+        }
+        const score = metrics.maxQc;
+        let scoreColor = '#38bdf8';
+        if (score >= 80) scoreColor = '#10b981';
+        else if (score >= 75) scoreColor = '#38bdf8';
+        else if (score >= 70) scoreColor = '#fbbf24';
+        else scoreColor = '#f43f5e';
+
+        const barPct = Math.min(100, Math.max(0, score));
+        const subDetails = [];
+        if (metrics.lastQc !== null) {
+          subDetails.push(`${isCurrent ? 'Act' : 'Últ'}: ${metrics.lastQc.toFixed(1)}%`);
+        }
+        if (metrics.maxAnat !== null) {
+          subDetails.push(`Anat: ${metrics.maxAnat.toFixed(0)}%`);
+        }
+        const subText = subDetails.join(' · ');
+
+        return `
+          <div style="display:inline-flex; flex-direction:column; align-items:center; min-width:96px; gap:2px;">
+            <div style="display:flex; align-items:baseline; gap:4px;">
+              <span style="font-family:var(--mono); font-weight:${isCurrent ? '800' : '700'}; font-size:${isCurrent ? '12px' : '11.5px'}; color:${scoreColor}; ${isCurrent ? 'text-shadow:0 0 8px rgba(16,185,129,0.35);' : ''}">${score.toFixed(1)}%</span>
+              <span style="font-size:8.5px; ${isCurrent ? 'padding:1px 4px; border-radius:3px; background:rgba(16,185,129,0.18); color:#10b981; font-weight:700;' : 'color:#64748b;'}">${isCurrent ? 'RÉCORD' : 'pico'}</span>
+            </div>
+            <div style="width:100%; height:3px; background:rgba(255,255,255,0.08); border-radius:2px; overflow:hidden;">
+              <div style="width:${barPct}%; height:100%; background:linear-gradient(90deg, #38bdf8, ${scoreColor}); border-radius:2px;"></div>
+            </div>
+            ${subText ? `<span style="font-size:8.5px; color:${isCurrent ? '#a7f3d0' : '#94a3b8'}; white-space:nowrap;">${subText}</span>` : ''}
+          </div>
+        `;
+      }
+
+      let prevQc = null;
+      let prevLoss = null;
+
       pastEras.forEach((era, idx) => {
         const color = eraColors[idx % eraColors.length];
         const initL = typeof era.initial_loss === 'number' ? era.initial_loss.toFixed(4) : (era.history && era.history[0]?.loss ? Number(era.history[0].loss).toFixed(4) : '--');
-        const bestL = typeof era.best_loss === 'number' ? era.best_loss.toFixed(4) : '--';
+        const bestL = typeof era.best_loss === 'number' ? era.best_loss : null;
+        const bestLStr = bestL !== null ? bestL.toFixed(4) : '--';
         const epCount = era.epochs || (era.history ? era.history.length : '--');
+        const metrics = extractEraQualityMetrics(era, false, null);
+
+        let evoHtml = '<span style="color:#94a3b8; font-size:10px;">Base histórica</span>';
+        if (metrics.maxQc !== null) {
+          if (prevQc === null) {
+            evoHtml = '<span style="font-size:10px; color:#38bdf8; font-weight:600;">Base inicial QC</span>';
+          } else {
+            const diffQc = metrics.maxQc - prevQc;
+            if (diffQc > 0) {
+              evoHtml = `<strong style="font-size:10px; color:#10b981;">🟢 +${diffQc.toFixed(1)}% QC</strong>`;
+            } else if (diffQc < 0) {
+              evoHtml = `<span style="font-size:10px; color:#f43f5e;">🔻 ${diffQc.toFixed(1)}% QC</span>`;
+            } else {
+              evoHtml = `<span style="font-size:10px; color:#94a3b8;">= Sin cambio QC</span>`;
+            }
+          }
+          prevQc = metrics.maxQc;
+        } else if (idx > 0 && bestL !== null && prevLoss !== null) {
+          const diffLoss = ((bestL - prevLoss) / prevLoss) * 100;
+          if (diffLoss < 0) {
+            evoHtml = `<span style="font-size:10px; color:#10b981;">${Math.abs(diffLoss).toFixed(1)}% mejor pérdida</span>`;
+          } else if (diffLoss > 0) {
+            evoHtml = `<span style="font-size:10px; color:#f59e0b;">+${diffLoss.toFixed(1)}% pérdida</span>`;
+          }
+        }
+        if (bestL !== null) prevLoss = bestL;
 
         html += `
           <tr style="border-bottom:1px solid rgba(255,255,255,0.05); color:#cbd5e1;">
@@ -4331,8 +4453,9 @@
             </td>
             <td style="padding:6px 8px; text-align:center;">${epCount} épocas</td>
             <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${initL}</td>
-            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:${color}; font-weight:600;">${bestL}</td>
-            <td style="padding:6px 8px; text-align:center; font-size:10px; color:#94a3b8;">Base histórica</td>
+            <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:${color}; font-weight:600;">${bestLStr}</td>
+            <td style="padding:6px 8px; text-align:center;">${renderQcBadge(metrics, false)}</td>
+            <td style="padding:6px 8px; text-align:center;">${evoHtml}</td>
             <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#64748b;">${era.timestamp || '--'}</td>
             <td style="padding:6px 8px; text-align:center;">
               <span style="font-size:9px; padding:2px 7px; border-radius:3px; background:rgba(56,189,248,0.12); color:#38bdf8; border:1px solid rgba(56,189,248,0.25);">Archivada</span>
@@ -4346,18 +4469,38 @@
         const currInit = typeof info.initial_loss === 'number' ? info.initial_loss.toFixed(4) : (info.history && info.history[0]?.loss ? Number(info.history[0].loss).toFixed(4) : '--');
         const currEp = info.epoch || (info.history ? info.history.length : 1);
         const totEp = info.total_epochs || 25;
+        const currMetrics = extractEraQualityMetrics(info, true, info);
 
-        let compText = '<span style="color:#60a5fa;">Calibrando</span>';
+        let qEvoText = '';
+        if (currMetrics.maxQc !== null && prevQc !== null) {
+          const diffQc = currMetrics.maxQc - prevQc;
+          if (diffQc > 0) {
+            qEvoText = `<strong style="color:#10b981; font-size:10.5px;">🟢 +${diffQc.toFixed(1)}% QC (Récord)</strong>`;
+          } else if (diffQc < 0) {
+            qEvoText = `<span style="color:#f43f5e; font-size:10.5px;">🔻 ${diffQc.toFixed(1)}% QC</span>`;
+          } else {
+            qEvoText = `<span style="color:#94a3b8; font-size:10px;">= Mismo nivel QC</span>`;
+          }
+        }
+
+        let lossCompText = '<span style="color:#60a5fa;">Calibrando</span>';
         if (pastEras.length > 0 && typeof info.best_loss === 'number' && typeof pastEras[0].best_loss === 'number') {
           const diffPct = (((info.best_loss - pastEras[0].best_loss) / pastEras[0].best_loss) * 100);
           if (diffPct < 0) {
-            compText = `<strong style="color:#10b981;">🟢 ${Math.abs(diffPct).toFixed(1)}% mejor convergencia</strong>`;
+            lossCompText = `<span style="color:#38bdf8; font-size:9.5px;">${Math.abs(diffPct).toFixed(1)}% mejor conv.</span>`;
           } else if (diffPct > 0) {
-            compText = `<span style="color:#f59e0b;">+${diffPct.toFixed(1)}%</span>`;
+            lossCompText = `<span style="color:#f59e0b; font-size:9.5px;">+${diffPct.toFixed(1)}%</span>`;
           } else {
-            compText = `<span style="color:#94a3b8;">Sin variación</span>`;
+            lossCompText = `<span style="color:#94a3b8; font-size:9.5px;">Sin variación</span>`;
           }
         }
+
+        const evoCombined = qEvoText ? `
+          <div style="display:flex; flex-direction:column; align-items:center; gap:2px;">
+            ${qEvoText}
+            ${lossCompText}
+          </div>
+        ` : lossCompText;
 
         const isRunning = (info.status || '').toUpperCase() === 'ENTRENANDO';
         const statusColor = isRunning ? '#10b981' : ((info.status || '').toUpperCase() === 'COMPLETADO' ? '#6366f1' : '#f59e0b');
@@ -4371,7 +4514,8 @@
             <td style="padding:6px 8px; text-align:center;">${currEp} / ${totEp} épocas</td>
             <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${currInit}</td>
             <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#10b981; font-weight:700;">${currBest}</td>
-            <td style="padding:6px 8px; text-align:center; font-size:10px;">${compText}</td>
+            <td style="padding:6px 8px; text-align:center;">${renderQcBadge(currMetrics, true)}</td>
+            <td style="padding:6px 8px; text-align:center; font-size:10px;">${evoCombined}</td>
             <td style="padding:6px 8px; text-align:right; font-family:var(--mono); color:#94a3b8;">${info.timestamp || '--'}</td>
             <td style="padding:6px 8px; text-align:center;">
               <span style="font-size:9px; padding:2px 7px; border-radius:3px; background:${statusColor}22; color:${statusColor}; border:1px solid ${statusColor}44; font-weight:600;">
