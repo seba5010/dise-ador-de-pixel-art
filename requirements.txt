@@ -1,0 +1,22 @@
+# Pixel AI Engine & Sprite Studio - Dependencias del Proyecto
+# Compatible con entornos locales (Windows / Linux) y Google Colab
+
+# Framework de Deep Learning y Visión por Computadora
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Pérdidas espaciales avanzadas y filtrado Sobel en GPU
+kornia>=0.6.7
+
+# Optimizadores cuantizados 8-bit para bajo consumo de VRAM
+bitsandbytes>=0.41.0
+
+# Procesamiento de imágenes y matrices
+pillow>=9.5.0
+numpy>=1.24.0
+scipy>=1.10.0
+opencv-python>=4.8.0
+
+# Métricas del sistema y monitoreo de hardware
+psutil>=5.9.0
+requests>=2.28.0
