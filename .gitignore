@@ -45,3 +45,6 @@ stable-diffusion-webui-forge-main/
 frame_review_queue.jsonl
 hard_examples.jsonl
 qc_batch_jobs.json
+
+checkpoints/sessions/
+

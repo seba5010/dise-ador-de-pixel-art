@@ -7,6 +7,20 @@
 
 ---
 
+## Actualización 6 de Octubre de 2026: Blindaje Numérico de GradScaler AMP, Despeckle Cromático Quirúrgico y Recuperación Post-Pausa QC
+
+Durante el entrenamiento avanzado de 8x12 (épocas 54 a 100), se detectaron y resolvieron tres fenómenos técnicos:
+
+1. **Ciclo de Pasos AMP Omitidos (GradScaler)**: Al omitir manualmente la llamada a `scaler.step(opt)` cuando `clip_grad_norm_` detectaba valores no finitos, el motor `GradScaler` de PyTorch no registraba el estado de inf/NaN y, en consecuencia, `scaler.update()` no reducía el factor de escala (`scale backoff`), estancando la escala en 65536.0 y provocando 25 pasos omitidos consecutivos por época.  
+   *Solución:* Invocación estándar de `scaler.step(opt)` (que omite la actualización del optimizador internamente si hay NaNs) seguida de `scaler.update()`, garantizando la reducción automática de escala a 32768/16384 ante desbordes en FP16.
+
+2. **Ruido Cromático Extremo / Artefacto de Confeti (Salt-and-Pepper Glitch)**: En perspectivas traseras o poses con ambigüedad de identidad, gradientes saturados generaban píxeles aislados de confeti (rojos/azules puros) en cabezas o prendas. El snapping previo los perdonaba por superar `tolerance=35.0` y el filtro morfológico sólo actuaba en el fondo transparente.  
+   *Solución:* Implementación de `despeckle_chromatic_noise()` (moda local de 8 vecinos en tiempo $<1\,\text{ms}$) e incorporación de `outlier_ceiling=85.0` en `remap_image_to_palette()`, forzando el reemplazo de píxeles estocásticos aberrantes por la paleta o el vecindario.
+
+3. **Intervención y Recuperación tras `PAUSADO_QC`**: El sistema de Quality Guidance frenó el entrenamiento en la época 100 ante una degradación crítica recurrente (`repeated_quality_collapse`). Se adaptó `repair_current_training_state()` para reconocer dicho estado, seleccionando atómicamente el último checkpoint saludable (Época 98) con un Learning Rate adaptado de $3.5 \times 10^{-5}$ para afinar sin colapsar.
+
+---
+
 ## Actualización 3 de Octubre de 2026: Reanudación 8x12 en época 86
 
 Se confirmó una falla de continuidad distinta a un `NaN`: la reconstrucción se degradó de forma sostenida (`Color_L1: 0.0069 → 0.0308`) y la pérdida total subió (`G_Loss: 0.0500 → 0.3015`). El centinela detuvo la época 86, pero el flujo anterior ya había guardado esos pesos en `latest_checkpoint.pt` y luego caía al bloque final que publicaba falsamente `COMPLETADO 135/135`.

@@ -95,18 +95,15 @@ def copy_checkpoint_atomic(source: Path, destination: Path) -> None:
 
 
 def retain_checkpoint_atomic(source: Path, destination: Path) -> None:
-    """Retain an immutable checkpoint cheaply, with a copy fallback across volumes."""
+    """Retain an independent checkpoint copy atomically, never sharing hardlinks."""
     source = Path(source)
     destination = Path(destination)
-    if source == destination:
+    if source.resolve() == destination.resolve():
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_file = _unique_temporary_path(destination)
     try:
-        try:
-            os.link(source, temporary_file)
-        except OSError:
-            shutil.copy2(source, temporary_file)
+        shutil.copy2(source, temporary_file)
         _replace_with_retry(temporary_file, destination)
     finally:
         if temporary_file.exists():
@@ -114,6 +111,223 @@ def retain_checkpoint_atomic(source: Path, destination: Path) -> None:
                 temporary_file.unlink()
             except OSError:
                 pass
+
+
+def generate_session_id(prefix: str = "session_") -> str:
+    """Generate a unique timestamped session ID."""
+    return f"{prefix}{time.strftime('%Y%m%d_%H%M%S')}"
+
+
+def get_session_dir(session_id: str, base_dir: Optional[Path] = None) -> Path:
+    """Resolve session directory under base checkpoints dir."""
+    root = Path(base_dir) if base_dir is not None else Path("checkpoints")
+    return root / "sessions" / session_id
+
+
+def load_session_manifest(session_dir: Path) -> Dict[str, Any]:
+    """Safely load session.json manifest."""
+    manifest_file = session_dir / "session.json"
+    if not manifest_file.exists():
+        return {}
+    try:
+        with open(manifest_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_session_manifest(session_dir: Path, data: Dict[str, Any]) -> None:
+    """Atomically save session.json manifest."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+    manifest_file = session_dir / "session.json"
+    temporary_file = _unique_temporary_path(manifest_file)
+    try:
+        with open(temporary_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        _replace_with_retry(temporary_file, manifest_file)
+    finally:
+        if temporary_file.exists():
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
+
+
+def init_session(
+    session_dir: Path,
+    session_id: str,
+    start_epoch: int,
+    target_epochs: int,
+    mode: str = "resume",
+    source_checkpoint: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Initialize a new session manifest in session_dir."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+    existing = load_session_manifest(session_dir)
+    if existing and existing.get("session_id") == session_id:
+        return existing
+    manifest = {
+        "session_id": session_id,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "start_epoch": int(start_epoch),
+        "target_epochs": int(target_epochs),
+        "mode": str(mode),
+        "source_checkpoint": str(source_checkpoint) if source_checkpoint else None,
+        "latest_epoch": None,
+        "latest_healthy_epoch": None,
+        "checkpoints": [],
+        "metadata": metadata or {},
+    }
+    save_session_manifest(session_dir, manifest)
+    return manifest
+
+
+def record_session_checkpoint(
+    session_dir: Path,
+    epoch: int,
+    session_epoch: int,
+    checkpoint_filename: str,
+    metrics: Optional[Dict[str, Any]] = None,
+    qc_result: Optional[Dict[str, Any]] = None,
+    is_healthy: bool = True,
+    max_kept_healthy: int = 10,
+    max_kept_rejected: int = 2,
+) -> Dict[str, Any]:
+    """
+    Record an epoch checkpoint in session.json and enforce ring buffer retention:
+    Keep only the last max_kept_healthy (default 10) approved checkpoints of this session,
+    automatically pruning older checkpoints to save disk space while preserving history.
+    """
+    manifest = load_session_manifest(session_dir)
+    if not manifest:
+        manifest = {
+            "session_id": session_dir.name,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "start_epoch": int(epoch),
+            "target_epochs": int(epoch),
+            "mode": "unknown",
+            "source_checkpoint": None,
+            "checkpoints": [],
+            "metadata": {},
+        }
+
+    metrics = metrics or {}
+    qc_result = qc_result or {}
+    checkpoints = list(manifest.get("checkpoints", []))
+
+    entry_index = next((i for i, c in enumerate(checkpoints) if int(c.get("epoch", -1)) == int(epoch)), None)
+    entry_data = {
+        "epoch": int(epoch),
+        "session_epoch": int(session_epoch),
+        "filename": checkpoint_filename,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "g_loss": metrics.get("g_loss"),
+        "l1_loss": metrics.get("l1_loss"),
+        "d_loss": metrics.get("d_loss"),
+        "edge_loss": metrics.get("edge_loss"),
+        "lr": metrics.get("lr"),
+        "qc_status": qc_result.get("status", "APPROVED" if is_healthy else "REJECTED"),
+        "qc_severity": qc_result.get("severity", "low" if is_healthy else "critical"),
+        "is_healthy": bool(is_healthy),
+        "pruned": False,
+    }
+    if entry_index is not None:
+        checkpoints[entry_index] = entry_data
+    else:
+        checkpoints.append(entry_data)
+
+    checkpoints.sort(key=lambda c: int(c.get("epoch", 0)))
+
+    # Ring buffer cleanup: keep only last max_kept_healthy approved/healthy files
+    healthy_unpruned = [c for c in checkpoints if c.get("is_healthy") and not c.get("pruned")]
+    if len(healthy_unpruned) > max_kept_healthy:
+        to_prune = healthy_unpruned[:-max_kept_healthy]
+        for c in to_prune:
+            target = session_dir / c["filename"]
+            if target.is_file():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+            c["pruned"] = True
+
+    # Ring buffer cleanup: keep only last max_kept_rejected rejected files
+    rejected_unpruned = [c for c in checkpoints if not c.get("is_healthy") and not c.get("pruned")]
+    if len(rejected_unpruned) > max_kept_rejected:
+        to_prune = rejected_unpruned[:-max_kept_rejected]
+        for c in to_prune:
+            target = session_dir / c["filename"]
+            if target.is_file():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+            c["pruned"] = True
+
+    manifest["checkpoints"] = checkpoints
+    manifest["latest_epoch"] = int(epoch)
+    healthy_remaining = [c for c in checkpoints if c.get("is_healthy") and not c.get("pruned")]
+    if healthy_remaining:
+        manifest["latest_healthy_epoch"] = int(healthy_remaining[-1]["epoch"])
+    elif is_healthy:
+        manifest["latest_healthy_epoch"] = int(epoch)
+
+    save_session_manifest(session_dir, manifest)
+    return manifest
+
+
+def find_session_recovery_checkpoint(
+    session_dir: Path,
+    failed_epoch: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Find the highest approved, healthy, unpruned checkpoint within the given session
+    strictly before failed_epoch.
+    """
+    manifest = load_session_manifest(session_dir)
+    if not manifest:
+        candidates = []
+        for ckpt in session_dir.glob("epoch_*.pt"):
+            try:
+                ep = int(ckpt.stem.replace("epoch_", ""))
+                if ep < int(failed_epoch):
+                    candidates.append((ep, ckpt))
+            except ValueError:
+                pass
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        best_ep, best_path = candidates[-1]
+        return {
+            "epoch": best_ep,
+            "path": best_path,
+            "selection": "session_healthy_checkpoint",
+            "session_id": session_dir.name,
+        }
+
+    checkpoints = manifest.get("checkpoints", [])
+    eligible = [
+        c for c in checkpoints
+        if int(c.get("epoch", 0)) < int(failed_epoch)
+        and c.get("is_healthy")
+        and not c.get("pruned")
+        and (session_dir / c.get("filename", "")).is_file()
+    ]
+    if not eligible:
+        return None
+    eligible.sort(key=lambda c: int(c.get("epoch", 0)))
+    selected = eligible[-1]
+    return {
+        "epoch": int(selected["epoch"]),
+        "path": session_dir / selected["filename"],
+        "selection": "session_healthy_checkpoint",
+        "session_id": manifest.get("session_id", session_dir.name),
+        "metrics": selected,
+    }
 
 
 def _history_points(history: Iterable[Dict[str, Any]]) -> List[Dict[str, float]]:
@@ -231,7 +445,17 @@ def choose_recovery_snapshot(
     history: Iterable[Dict[str, Any]],
     snapshots_dir: Path,
     failed_epoch: int,
+    session_dir: Optional[Path] = None,
+    allow_snapshots_fallback: bool = True,
 ) -> Optional[Dict[str, Any]]:
+    # Priorizar checkpoints saludables de la sesion actual si esta disponible
+    if session_dir is not None and session_dir.exists():
+        session_recovery = find_session_recovery_checkpoint(session_dir, failed_epoch)
+        if session_recovery is not None:
+            return session_recovery
+        if not allow_snapshots_fallback:
+            return None
+
     history_entries = [entry for entry in history if isinstance(entry, dict)]
     points = [point for point in _history_points(history_entries) if point["epoch"] < int(failed_epoch)]
     quality_health: Dict[int, bool] = {}

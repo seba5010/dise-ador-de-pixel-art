@@ -584,22 +584,30 @@ def scan_checkpoints() -> Dict[str, List[Dict[str, Any]]]:
         PROJECT_ROOT / "checkpoints" / "snapshots",
         PROJECT_ROOT / "checkpoints" / "supervised",
         SCRIPT_DIR / "checkpoints",
-        PROJECT_ROOT.parent / "checkpoints"
+        PROJECT_ROOT.parent / "checkpoints",
     ]
+    sessions_root = PROJECT_ROOT / "checkpoints" / "sessions"
+    if sessions_root.exists() and sessions_root.is_dir():
+        for session_dir in sorted(sessions_root.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if session_dir.is_dir():
+                dirs.append(session_dir)
+
     for d in dirs:
         if d.exists() and d.is_dir():
             for f in sorted(list(d.glob("*.pt")), key=lambda x: x.stat().st_mtime, reverse=True):
                 if "cache" in f.name.lower():
                     continue
-                if f.name in seen:
+                resolved_key = str(f.resolve())
+                if resolved_key in seen:
                     continue
-                seen.add(f.name)
+                seen.add(resolved_key)
                 sz_mb = round(f.stat().st_size / (1024 * 1024), 1)
+                display_name = f"{f.parent.name}/{f.name}" if f.parent.name.startswith("session_") else f.name
                 entry = {
-                    "filename": f.name,
+                    "filename": display_name,
                     "path": str(f),
                     "size_mb": sz_mb,
-                    "is_best": "best" in f.name.lower() or "latest" in f.name.lower()
+                    "is_best": "best" in f.name.lower() or "latest" in f.name.lower(),
                 }
                 if "16x4" in f.name.lower():
                     ckpts["16x4"].append(entry)
@@ -1501,23 +1509,53 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             return
 
         elif path == "/api/train/snapshots":
-            snaps_dir = PROJECT_ROOT / "checkpoints" / "snapshots"
             snaps = []
+            seen_epochs = set()
             max_valid_epoch = get_valid_snapshot_max_epoch()
+
+            # Include current/recent session checkpoints
+            sessions_root = PROJECT_ROOT / "checkpoints" / "sessions"
+            if sessions_root.exists() and sessions_root.is_dir():
+                for sdir in sorted(sessions_root.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                    if sdir.is_dir():
+                        for p in sorted(sdir.glob("epoch_*.pt")):
+                            try:
+                                ep = int(p.stem.replace("epoch_", ""))
+                                if max_valid_epoch is not None and ep > max_valid_epoch:
+                                    continue
+                                if ep in seen_epochs:
+                                    continue
+                                seen_epochs.add(ep)
+                                snaps.append({
+                                    "epoch": ep,
+                                    "file": f"{sdir.name}/{p.name}",
+                                    "session_id": sdir.name,
+                                    "size_mb": round(p.stat().st_size / (1024 * 1024), 2),
+                                    "preview_url": f"/training_samples/audit_history/preview_epoch_{ep:03d}.png",
+                                })
+                            except Exception:
+                                pass
+
+            # Include historical respawn snapshots
+            snaps_dir = PROJECT_ROOT / "checkpoints" / "snapshots"
             if snaps_dir.exists():
                 for p in sorted(snaps_dir.glob("checkpoint_epoch_*.pt")):
                     try:
                         ep = int(p.stem.replace("checkpoint_epoch_", ""))
                         if max_valid_epoch is not None and ep > max_valid_epoch:
                             continue
+                        if ep in seen_epochs:
+                            continue
+                        seen_epochs.add(ep)
                         snaps.append({
                             "epoch": ep,
                             "file": p.name,
                             "size_mb": round(p.stat().st_size / (1024 * 1024), 2),
-                            "preview_url": f"/training_samples/audit_history/preview_epoch_{ep:03d}.png"
+                            "preview_url": f"/training_samples/audit_history/preview_epoch_{ep:03d}.png",
                         })
                     except Exception:
                         pass
+            snaps.sort(key=lambda x: x["epoch"])
             self.send_json(snaps)
             return
 
@@ -2290,9 +2328,17 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 }, status=409)
                 return
             
-            snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch:03d}.pt"
-            if not snap_file.exists():
-                snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch}.pt"
+            snap_file = None
+            sessions_root = PROJECT_ROOT / "checkpoints" / "sessions"
+            if sessions_root.exists() and sessions_root.is_dir():
+                for sdir in sorted(sessions_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                    if sdir.is_dir() and (sdir / f"epoch_{target_epoch:03d}.pt").exists():
+                        snap_file = sdir / f"epoch_{target_epoch:03d}.pt"
+                        break
+            if snap_file is None:
+                snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch:03d}.pt"
+                if not snap_file.exists():
+                    snap_file = PROJECT_ROOT / "checkpoints" / "snapshots" / f"checkpoint_epoch_{target_epoch}.pt"
             if not snap_file.exists():
                 self.send_json({"error": f"No se encontró el snapshot para la época {target_epoch}."}, status=404)
                 return

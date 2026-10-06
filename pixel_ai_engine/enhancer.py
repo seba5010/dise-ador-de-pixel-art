@@ -78,10 +78,12 @@ class PixelArtEnhancer:
         return unique_full.astype(np.uint8)
 
     @staticmethod
-    def snap_to_palette(frame_img: Image.Image, palette: np.ndarray, tolerance: float = 35.0) -> Image.Image:
+    def snap_to_palette(frame_img: Image.Image, palette: np.ndarray, tolerance: float = 35.0, outlier_ceiling: float = 85.0) -> Image.Image:
         """
         Alinea los colores del frame generado con la paleta de identidad para eliminar
         colores 'sucios', gradientes borrosos o tonos que no pertenecen al personaje.
+        - Píxeles con dist <= tolerance se encajan a la paleta.
+        - Píxeles con dist > outlier_ceiling (confeti / ruido extremo) se fuerzan a la paleta.
         """
         arr = np.array(frame_img.convert("RGBA"))
         alpha = arr[:, :, 3]
@@ -99,10 +101,10 @@ class PixelArtEnhancer:
         min_indices = np.argmin(dists, axis=-1)
         min_dists = np.take_along_axis(dists, min_indices[:, None], axis=-1).squeeze(-1)
 
-        # Solo encajar si la distancia es menor a la tolerancia (para no destruir colores únicos)
-        close_enough = min_dists <= tolerance
+        # Encajar si está dentro de la tolerancia o si es un outlier cromático severo
+        snap_mask = (min_dists <= tolerance) | (min_dists > outlier_ceiling)
         snapped_pixels = fg_pixels.copy()
-        snapped_pixels[close_enough] = pal_float[min_indices[close_enough]]
+        snapped_pixels[snap_mask] = pal_float[min_indices[snap_mask]]
 
         out_arr = arr.copy()
         out_arr[fg_mask, :3] = snapped_pixels.astype(np.uint8)
@@ -237,6 +239,11 @@ class PixelArtEnhancer:
 
         if remove_noise:
             enhanced = cls.remove_orphan_pixels(enhanced, min_connected_size=3)
+            try:
+                from pixel_ai_engine.palette_remap import despeckle_chromatic_noise
+                enhanced = despeckle_chromatic_noise(enhanced)
+            except Exception:
+                pass
 
         if binarize:
             enhanced = cls.binarize_alpha(enhanced, threshold=60)

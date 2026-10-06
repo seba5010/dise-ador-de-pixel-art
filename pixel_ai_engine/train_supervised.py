@@ -55,14 +55,25 @@ from pixel_ai_engine.quality_guidance import (
     compare_sampling_ab,
     compare_loss_ab,
 )
-from pixel_ai_engine.palette_remap import extract_character_palette, remap_image_to_palette, clean_orphan_pixels
+from pixel_ai_engine.palette_remap import (
+    extract_character_palette,
+    remap_image_to_palette,
+    clean_orphan_pixels,
+    despeckle_chromatic_noise,
+)
 from pixel_ai_engine.training_recovery import (
     activate_recovery_status,
     choose_recovery_snapshot,
     copy_checkpoint_atomic,
     detect_training_instability,
+    find_session_recovery_checkpoint,
     finite_positive,
+    generate_session_id,
+    get_session_dir,
+    init_session,
+    load_session_manifest,
     load_status_file,
+    record_session_checkpoint,
     retain_checkpoint_atomic,
     write_status_file,
 )
@@ -70,6 +81,8 @@ from pixel_ai_engine.training_recovery import (
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR = CHECKPOINT_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+SESSIONS_DIR = CHECKPOINT_DIR / "sessions"
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 TRAIN_SAMPLES_DIR = PROJECT_ROOT / "training_samples"
 TRAIN_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -493,8 +506,20 @@ def _active_recovery_checkpoint(status_data: Dict[str, Any]) -> Optional[Path]:
 def _last_quality_healthy_checkpoint(
     history: Any,
     failed_epoch: int,
+    session_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return the exact latest epoch accepted by QC, when its full state was retained."""
+    """Return the exact latest epoch accepted by QC, prioritizing current session."""
+    if session_dir is not None and session_dir.exists():
+        session_plan = find_session_recovery_checkpoint(session_dir, failed_epoch)
+        if session_plan is not None:
+            try:
+                ckpt = torch.load(session_plan["path"], map_location="cpu")
+                if _checkpoint_is_complete(ckpt):
+                    session_plan["checkpoint"] = ckpt
+                    return session_plan
+            except Exception:
+                pass
+
     checkpoint_file = CHECKPOINT_DIR / "last_quality_healthy_checkpoint.pt"
     if not checkpoint_file.is_file():
         return None
@@ -612,9 +637,31 @@ def _materialize_recovery_route(
     rejected_metrics: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     failed_epoch = int(reason.get("failed_epoch", status_data.get("epoch", 0)))
-    recovery_plan = _last_quality_healthy_checkpoint(status_data.get("history", []), failed_epoch)
+    session_dir = None
+    session_dir_raw = status_data.get("session_dir")
+    if session_dir_raw:
+        cand = Path(session_dir_raw)
+        if not cand.is_absolute():
+            cand = PROJECT_ROOT / cand
+        if cand.exists():
+            session_dir = cand
+    elif status_data.get("session_id"):
+        cand = get_session_dir(status_data["session_id"], CHECKPOINT_DIR)
+        if cand.exists():
+            session_dir = cand
+
+    is_start_mode = str(status_data.get("mode", "")).lower() == "start"
+    allow_snapshots_fallback = not is_start_mode
+
+    recovery_plan = _last_quality_healthy_checkpoint(status_data.get("history", []), failed_epoch, session_dir=session_dir)
     if recovery_plan is None:
-        recovery_plan = choose_recovery_snapshot(status_data.get("history", []), SNAPSHOTS_DIR, failed_epoch)
+        recovery_plan = choose_recovery_snapshot(
+            status_data.get("history", []),
+            SNAPSHOTS_DIR,
+            failed_epoch,
+            session_dir=session_dir,
+            allow_snapshots_fallback=allow_snapshots_fallback,
+        )
     if recovery_plan is None:
         return None
 
@@ -660,6 +707,12 @@ def _materialize_recovery_route(
         },
         status_name=status_name,
     )
+    if "session_id" in status_data:
+        repaired_status["session_id"] = status_data.get("session_id")
+    if "session_dir" in status_data:
+        repaired_status["session_dir"] = status_data.get("session_dir")
+    if "session_start_epoch" in status_data:
+        repaired_status["session_start_epoch"] = status_data.get("session_start_epoch")
     write_status_file(STATUS_FILE, repaired_status)
     backup_path = _repair_best_checkpoint(source_checkpoint, source_epoch, source_loss)
     latest_backup_path = _replace_latest_with_recovery(source_epoch, source_loss)
@@ -696,6 +749,15 @@ def repair_current_training_state(status_name: str = "RECUPERACION_LISTA") -> Op
         }
 
     reason = detect_training_instability(status_data.get("history", []), quality=status_data.get("quality"))
+    if reason is None and status_data.get("status") == "PAUSADO_QC":
+        reason = {
+            "code": "quality_control_paused",
+            "message": status_data.get("error_details", {}).get("error", "Pausado por Control de Calidad."),
+            "failed_epoch": int(status_data.get("epoch", 100)),
+            "g_loss": status_data.get("g_loss"),
+            "l1_loss": status_data.get("l1_loss"),
+            "quality": status_data.get("quality"),
+        }
     if reason is None:
         return None
     return _materialize_recovery_route(status_data, reason, status_name)
@@ -928,6 +990,23 @@ def get_available_snapshots():
     max_valid_epoch = None
     if status_data.get("recovery_events"):
         max_valid_epoch = int(status_data.get("epoch", 0))
+    seen_epochs = set()
+    session_dir_raw = status_data.get("session_dir")
+    if session_dir_raw:
+        sdir = Path(session_dir_raw)
+        if not sdir.is_absolute():
+            sdir = PROJECT_ROOT / sdir
+        if sdir.exists():
+            for p in sorted(sdir.glob("epoch_*.pt")):
+                try:
+                    ep = int(p.stem.replace("epoch_", ""))
+                    if max_valid_epoch is not None and ep > max_valid_epoch:
+                        continue
+                    seen_epochs.add(ep)
+                    img_url = f"/training_samples/audit_history/preview_epoch_{ep:03d}.png"
+                    snaps.append({"epoch": ep, "file": f"{sdir.name}/{p.name}", "preview_url": img_url, "session_id": sdir.name})
+                except Exception:
+                    pass
     if SNAPSHOTS_DIR.exists():
         for p in sorted(SNAPSHOTS_DIR.glob("checkpoint_epoch_*.pt")):
             name = p.stem
@@ -935,13 +1014,16 @@ def get_available_snapshots():
                 ep = int(name.replace("checkpoint_epoch_", ""))
                 if max_valid_epoch is not None and ep > max_valid_epoch:
                     continue
+                if ep in seen_epochs:
+                    continue
                 img_url = f"/training_samples/audit_history/preview_epoch_{ep:03d}.png"
                 snaps.append({"epoch": ep, "file": p.name, "preview_url": img_url})
             except Exception:
                 pass
+    snaps.sort(key=lambda x: x["epoch"])
     return snaps
 
-def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None, guidance_runtime=None, reevaluate_guidance=True):
+def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_val, start_time, lr_val=1.5e-4, error_details=None, skipped_amp=0, epoch_duration=None, quality=None, guidance_runtime=None, reevaluate_guidance=True, session_id=None, session_dir=None, session_start_epoch=None):
     elapsed = round(time.time() - start_time, 1)
     history = []
     past_eras = []
@@ -977,6 +1059,12 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                 previous_total_frames = prev.get("total_frames", previous_total_frames)
                 best_quality_score = prev.get("best_quality_score")
                 quality_checkpoint = prev.get("quality_checkpoint")
+                if session_id is None:
+                    session_id = prev.get("session_id")
+                if session_dir is None:
+                    session_dir = prev.get("session_dir")
+                if session_start_epoch is None:
+                    session_start_epoch = prev.get("session_start_epoch")
                 # Solo aceptar numeros finitos estrictamente positivos (evita 0.0 heredado)
                 if raw_best is not None and isinstance(raw_best, (int, float)) and math.isfinite(float(raw_best)) and float(raw_best) > 0.0:
                     best_loss = float(raw_best)
@@ -1176,6 +1264,9 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
         "dataset_layout": dataset_layout,
         "best_quality_score": best_quality_score,
         "quality_checkpoint": quality_checkpoint,
+        "session_id": session_id,
+        "session_dir": session_dir,
+        "session_start_epoch": session_start_epoch,
     }
     write_status_file(STATUS_FILE, status_data)
     return status_data
@@ -1184,7 +1275,9 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
                     generator: nn.Module, discriminator: nn.Module,
                     opt_g: Any = None, opt_d: Any = None, scaler_g: Any = None, scaler_d: Any = None,
                     sched_g: Any = None, sched_d: Any = None, is_best_model: bool = False,
-                    guidance_state: Optional[Dict[str, Any]] = None):
+                    guidance_state: Optional[Dict[str, Any]] = None,
+                    session_id: Optional[str] = None, session_epoch: Optional[int] = None,
+                    source_checkpoint: Optional[str] = None, qc_result: Optional[Dict[str, Any]] = None):
     """Guarda un checkpoint completo con formato unificado y preservacion estricta de metricas y estados."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else None
@@ -1200,8 +1293,12 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
             "loss": f_loss,
             "best_loss": f_best,
             "guidance_state": guidance_state,
+            "session_id": session_id,
+            "session_epoch": session_epoch,
         }
-        torch.save(state, file_path)
+        temporary = file_path.with_suffix(file_path.suffix + ".tmp")
+        torch.save(state, temporary)
+        os.replace(temporary, file_path)
         return
     state = {
         "epoch": int(epoch),
@@ -1218,8 +1315,14 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "rng_state": torch.get_rng_state().cpu(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         "guidance_state": guidance_state,
+        "session_id": session_id,
+        "session_epoch": session_epoch,
+        "source_checkpoint": source_checkpoint,
+        "qc_result": qc_result,
     }
-    torch.save(state, file_path)
+    temporary = file_path.with_suffix(file_path.suffix + ".tmp")
+    torch.save(state, temporary)
+    os.replace(temporary, file_path)
 
 
 def _maybe_save_quality_checkpoint(
@@ -1302,6 +1405,7 @@ def _generate_full_sheet_preview(generator, front, template_manager, character_p
                 tolerance=35.0,
                 binarize_alpha=True,
             )
+            remapped = despeckle_chromatic_noise(remapped)
             cleaned = clean_orphan_pixels(remapped, min_connected_size=3, binarize=True)
             cells.append(_fit_preview_cell(cleaned))
 
@@ -1376,6 +1480,7 @@ def _generate_all_frame_comparison(generator, samples, template_manager, output_
                 raw_cell = _fit_preview_cell(_tensor_to_preview_image(prediction, has_alpha=True))
                 palette = extract_character_palette(front_cell, include_props=True)
                 remapped = remap_image_to_palette(raw_cell, palette, tolerance=35.0, binarize_alpha=True)
+                remapped = despeckle_chromatic_noise(remapped)
                 remapped = clean_orphan_pixels(remapped, min_connected_size=3, binarize=True)
                 target_cell = _fit_preview_cell(_tensor_to_preview_image(sample["target_tensor"], has_alpha=True))
                 label = f"{sample['char_id']} / frame {int(sample['frame_idx']):03d}"
@@ -1720,6 +1825,7 @@ def generate_preview(generator, dataset, epoch_label=None, *, full_certification
             # 4. Predicción IA con Remapeo de Paleta + Filtro Morfológico Anti-Hollín + Alfa Puro
             char_palette = extract_character_palette(f_pil, include_props=True)
             snapped_pil = remap_image_to_palette(raw_pred_pil, char_palette, tolerance=35.0, binarize_alpha=True)
+            snapped_pil = despeckle_chromatic_noise(snapped_pil)
             pred_pil = clean_orphan_pixels(snapped_pil, min_connected_size=3, binarize=True)
 
             # 5. Ground Truth Real
@@ -1821,17 +1927,24 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
     # Logica de Respawn o Reanudacion
     if respawn_epoch is not None and respawn_epoch > 0:
-        respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch:03d}.pt"
-        if not respawn_candidate.exists():
-            respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch}.pt"
-        if respawn_candidate.exists():
+        respawn_candidate = None
+        if SESSIONS_DIR.exists():
+            for sdir in sorted(SESSIONS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if sdir.is_dir() and (sdir / f"epoch_{respawn_epoch:03d}.pt").exists():
+                    respawn_candidate = sdir / f"epoch_{respawn_epoch:03d}.pt"
+                    break
+        if respawn_candidate is None:
+            respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch:03d}.pt"
+            if not respawn_candidate.exists():
+                respawn_candidate = SNAPSHOTS_DIR / f"checkpoint_epoch_{respawn_epoch}.pt"
+        if respawn_candidate and respawn_candidate.exists():
             loaded_ckpt = torch.load(respawn_candidate, map_location=DEVICE)
             generator.load_state_dict(loaded_ckpt["generator"])
             if "discriminator" in loaded_ckpt:
                 discriminator.load_state_dict(loaded_ckpt["discriminator"])
             start_epoch = respawn_epoch + 1
             best_loss = loaded_ckpt.get("best_loss", loaded_ckpt.get("loss", None))
-            print(f"\n[RESPAWN] == RESPAWN EXITOSO: Regresando al punto de guardado EPOCA {respawn_epoch} ==\n")
+            print(f"\n[RESPAWN] == RESPAWN EXITOSO: Regresando al punto de guardado EPOCA {respawn_epoch} ({respawn_candidate.name}) ==\n")
         else:
             print(f"[!] Aviso: No se encontro snapshot para epoca {respawn_epoch}. Iniciando estandar.")
     elif mode == "resume":
@@ -1916,6 +2029,63 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 print(f"[!] Aviso: No se pudo cargar warm start: {e}. Iniciando desde inicializacion normal.")
         best_loss = 999.0
         print("[NUEVA ERA] La métrica best_loss se reinicia; los pesos previos se usan sólo como base visual.")
+
+    # -------------------------------------------------------------
+    # GESTION AISLADA DE SESION (Checkpoints por carpeta de sesion)
+    # -------------------------------------------------------------
+    current_session_id = None
+    current_session_dir = None
+    session_start_epoch = start_epoch
+    if mode == "start":
+        current_session_id = generate_session_id()
+        current_session_dir = get_session_dir(current_session_id, CHECKPOINT_DIR)
+        warm_ckpt_str = None
+        if warm_ckpt and hasattr(warm_ckpt, "exists") and warm_ckpt.exists():
+            try:
+                warm_ckpt_str = str(warm_ckpt.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            except ValueError:
+                warm_ckpt_str = str(warm_ckpt).replace("\\", "/")
+        init_session(
+            current_session_dir,
+            current_session_id,
+            start_epoch=1,
+            target_epochs=epochs,
+            mode="start",
+            source_checkpoint=warm_ckpt_str,
+        )
+        print(f"[SESIÓN] Nueva sesión iniciada: {current_session_id} en {current_session_dir.name}")
+    elif mode == "resume":
+        prev_session_id = status_at_start.get("session_id")
+        if (
+            prev_session_id
+            and get_session_dir(prev_session_id, CHECKPOINT_DIR).exists()
+            and respawn_epoch is None
+            and not automatic_recovery
+        ):
+            current_session_id = prev_session_id
+            current_session_dir = get_session_dir(current_session_id, CHECKPOINT_DIR)
+            session_start_epoch = int(status_at_start.get("session_start_epoch", start_epoch))
+        else:
+            current_session_id = generate_session_id()
+            current_session_dir = get_session_dir(current_session_id, CHECKPOINT_DIR)
+            session_start_epoch = start_epoch
+            source_ckpt_str = None
+            if ckpt_candidate and hasattr(ckpt_candidate, "exists") and ckpt_candidate.exists():
+                try:
+                    source_ckpt_str = str(ckpt_candidate.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                except ValueError:
+                    source_ckpt_str = str(ckpt_candidate).replace("\\", "/")
+            elif ckpt_candidate:
+                source_ckpt_str = str(ckpt_candidate).replace("\\", "/")
+            init_session(
+                current_session_dir,
+                current_session_id,
+                start_epoch=start_epoch,
+                target_epochs=epochs,
+                mode="resume",
+                source_checkpoint=source_ckpt_str,
+            )
+        print(f"[SESIÓN] Sesión activa: {current_session_id} (Época inicial: {start_epoch})")
 
     # Old checkpoints remain valid. If a modern checkpoint carries observational
     # history and the status file does not, restore only that metadata.
@@ -2184,11 +2354,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             scaler_g.scale(total_g).backward()
             scaler_g.unscale_(opt_g)
             g_norm = torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=5.0)
-            if torch.isfinite(g_norm):
-                scaler_g.step(opt_g)
-            else:
-                skipped_amp_g += 1
+            scale_g_before = scaler_g.get_scale()
+            scaler_g.step(opt_g)
             scaler_g.update()
+            scale_g_after = scaler_g.get_scale()
+            if scale_g_after < scale_g_before or (hasattr(g_norm, "item") and not math.isfinite(g_norm.item())):
+                skipped_amp_g += 1
 
             # Discriminador (Aprende mas lento para no aplastar al generador)
             opt_d.zero_grad()
@@ -2216,11 +2387,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             scaler_d.scale(total_d).backward()
             scaler_d.unscale_(opt_d)
             d_norm = torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=5.0)
-            if torch.isfinite(d_norm):
-                scaler_d.step(opt_d)
-            else:
-                skipped_amp_d += 1
+            scale_d_before = scaler_d.get_scale()
+            scaler_d.step(opt_d)
             scaler_d.update()
+            scale_d_after = scaler_d.get_scale()
+            if scale_d_after < scale_d_before or (hasattr(d_norm, "item") and not math.isfinite(d_norm.item())):
+                skipped_amp_d += 1
 
             epoch_g_loss += total_g.item()
             epoch_d_loss += total_d.item()
@@ -2443,6 +2615,45 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             torch.save(generator.state_dict(), gen_only_file)
             print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f}, Best: {best_loss:.4f})")
 
+        # -------------------------------------------------------------
+        # CHECKPOINT DE SESION: Guardado aislado por sesion y rotacion
+        # -------------------------------------------------------------
+        session_epoch = epoch - session_start_epoch + 1
+        is_epoch_healthy = not _quality_is_critical(published_status)
+        qc_status_str = "APPROVED" if is_epoch_healthy else "REJECTED"
+        session_ckpt_file = None
+        if current_session_dir is not None:
+            session_ckpt_file = current_session_dir / f"epoch_{epoch:03d}.pt"
+            save_checkpoint(
+                session_ckpt_file,
+                epoch,
+                avg_g,
+                best_loss,
+                generator,
+                discriminator,
+                opt_g,
+                opt_d,
+                scaler_g,
+                scaler_d,
+                scheduler_g,
+                scheduler_d,
+                is_best_model=False,
+                guidance_state=published_status.get("guidance_state"),
+                session_id=current_session_id,
+                session_epoch=session_epoch,
+                qc_result={"status": qc_status_str, "is_healthy": is_epoch_healthy},
+            )
+            record_session_checkpoint(
+                current_session_dir,
+                epoch=epoch,
+                session_epoch=session_epoch,
+                checkpoint_filename=session_ckpt_file.name,
+                metrics={"g_loss": avg_g, "l1_loss": avg_l1, "d_loss": avg_d, "edge_loss": avg_edge, "lr": current_lr},
+                qc_result={"status": qc_status_str, "is_healthy": is_epoch_healthy},
+                is_healthy=is_epoch_healthy,
+                max_kept_healthy=10,
+            )
+
         # Checkpoints de mejor rendimiento y ultimo (preservando siempre best_loss)
         if avg_g < best_loss and math.isfinite(avg_g) and avg_g > 0.0 and not _quality_is_critical(published_status):
             best_loss = avg_g
@@ -2451,13 +2662,33 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
         if math.isfinite(avg_g):
             latest_checkpoint = CHECKPOINT_DIR / "latest_checkpoint.pt"
-            save_checkpoint(latest_checkpoint, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
+            save_checkpoint(
+                latest_checkpoint,
+                epoch,
+                avg_g,
+                best_loss,
+                generator,
+                discriminator,
+                opt_g,
+                opt_d,
+                scaler_g,
+                scaler_d,
+                scheduler_g,
+                scheduler_d,
+                session_id=current_session_id,
+                session_epoch=session_epoch,
+            )
             if not _quality_is_critical(published_status):
                 retain_checkpoint_atomic(
                     latest_checkpoint,
                     CHECKPOINT_DIR / "last_quality_healthy_checkpoint.pt",
                 )
                 published_status["last_quality_healthy_epoch"] = int(epoch)
+                if session_ckpt_file is not None:
+                    try:
+                        published_status["last_quality_healthy_session_epoch"] = str(session_ckpt_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                    except ValueError:
+                        published_status["last_quality_healthy_session_epoch"] = str(session_ckpt_file).replace("\\", "/")
                 write_status_file(STATUS_FILE, published_status)
             last_completed_epoch = epoch
 

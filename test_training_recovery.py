@@ -7,6 +7,12 @@ from pixel_ai_engine.training_recovery import (
     activate_recovery_status,
     choose_recovery_snapshot,
     detect_training_instability,
+    find_session_recovery_checkpoint,
+    generate_session_id,
+    get_session_dir,
+    init_session,
+    load_session_manifest,
+    record_session_checkpoint,
     retain_checkpoint_atomic,
     write_status_file,
 )
@@ -234,3 +240,126 @@ def test_qc_auto_resume_marks_status_and_launches_once(tmp_path, monkeypatch):
     assert written[-1]["status"] == "RECUPERANDO"
     assert written[-1]["recovery"]["auto_resume_attempts"] == 1
     assert written[-1]["auto_resume"]["failed_epoch"] == 41
+
+
+def test_retain_checkpoint_does_not_share_hardlink(tmp_path: Path):
+    latest = tmp_path / "latest.pt"
+    healthy = tmp_path / "healthy.pt"
+    latest.write_bytes(b"epoch-15-initial")
+
+    retain_checkpoint_atomic(latest, healthy)
+    assert healthy.read_bytes() == b"epoch-15-initial"
+
+    # In-place write to latest must NEVER modify healthy
+    latest.write_bytes(b"epoch-16-inplace-mutation")
+    assert latest.read_bytes() == b"epoch-16-inplace-mutation"
+    assert healthy.read_bytes() == b"epoch-15-initial"
+
+
+def test_session_lifecycle_and_ring_buffer_pruning(tmp_path: Path):
+    session_id = "session_20261005_120000"
+    session_dir = get_session_dir(session_id, base_dir=tmp_path)
+    init_session(session_dir, session_id, start_epoch=1, target_epochs=50, mode="start")
+
+    manifest = load_session_manifest(session_dir)
+    assert manifest["session_id"] == session_id
+    assert manifest["start_epoch"] == 1
+    assert manifest["mode"] == "start"
+    assert manifest["checkpoints"] == []
+
+    # Simulate saving 13 healthy checkpoints
+    for ep in range(1, 14):
+        ckpt_file = session_dir / f"epoch_{ep:03d}.pt"
+        ckpt_file.write_bytes(f"weights-epoch-{ep}".encode("utf-8"))
+        record_session_checkpoint(
+            session_dir=session_dir,
+            epoch=ep,
+            session_epoch=ep,
+            checkpoint_filename=ckpt_file.name,
+            metrics={"g_loss": 0.20 - ep * 0.005, "lr": 1e-4},
+            qc_result={"status": "APPROVED", "severity": "low"},
+            is_healthy=True,
+            max_kept_healthy=10,
+        )
+
+    updated = load_session_manifest(session_dir)
+    assert updated["latest_epoch"] == 13
+    assert updated["latest_healthy_epoch"] == 13
+
+    # Check that older checkpoints (epochs 1, 2, 3) were pruned from disk
+    assert not (session_dir / "epoch_001.pt").exists()
+    assert not (session_dir / "epoch_002.pt").exists()
+    assert not (session_dir / "epoch_003.pt").exists()
+
+    # The 10 most recent (epochs 4 to 13) must exist
+    for ep in range(4, 14):
+        assert (session_dir / f"epoch_{ep:03d}.pt").exists()
+
+
+def test_find_session_recovery_returns_exact_healthy_epoch(tmp_path: Path):
+    session_dir = tmp_path / "sessions" / "session_test"
+    session_dir.mkdir(parents=True)
+    init_session(session_dir, "session_test", start_epoch=20, target_epochs=70, mode="resume")
+
+    # Epochs 21..26 approved, 27..28 rejected
+    for ep in range(21, 27):
+        ckpt = session_dir / f"epoch_{ep:03d}.pt"
+        ckpt.write_bytes(b"data")
+        record_session_checkpoint(
+            session_dir, ep, ep - 19, ckpt.name,
+            metrics={"g_loss": 0.15}, qc_result={"status": "APPROVED"}, is_healthy=True,
+        )
+    for ep in range(27, 29):
+        ckpt = session_dir / f"epoch_{ep:03d}.pt"
+        ckpt.write_bytes(b"bad-data")
+        record_session_checkpoint(
+            session_dir, ep, ep - 19, ckpt.name,
+            metrics={"g_loss": 0.45}, qc_result={"status": "REJECTED"}, is_healthy=False,
+        )
+
+    # When failing at epoch 29, recovery MUST pick epoch 26, NOT epoch 20!
+    rec = find_session_recovery_checkpoint(session_dir, failed_epoch=29)
+    assert rec is not None
+    assert rec["epoch"] == 26
+    assert rec["path"].name == "epoch_026.pt"
+
+
+def test_choose_recovery_snapshot_prioritizes_session_over_snapshots(tmp_path: Path):
+    snapshots_dir = tmp_path / "snapshots"
+    snapshots_dir.mkdir()
+    (snapshots_dir / "checkpoint_epoch_010.pt").touch()
+    (snapshots_dir / "checkpoint_epoch_020.pt").touch()
+
+    session_dir = tmp_path / "sessions" / "session_active"
+    session_dir.mkdir(parents=True)
+    init_session(session_dir, "session_active", start_epoch=20, target_epochs=50)
+
+    # Put approved checkpoints up to 26 in session
+    for ep in range(21, 27):
+        (session_dir / f"epoch_{ep:03d}.pt").write_bytes(b"good")
+        record_session_checkpoint(
+            session_dir, ep, ep - 20, f"epoch_{ep:03d}.pt",
+            metrics={"g_loss": 0.12}, qc_result={"status": "APPROVED"}, is_healthy=True,
+        )
+
+    plan = choose_recovery_snapshot([], snapshots_dir, failed_epoch=29, session_dir=session_dir)
+    assert plan is not None
+    assert plan["epoch"] == 26
+    assert plan["selection"] == "session_healthy_checkpoint"
+
+
+def test_start_mode_isolates_from_old_snapshots(tmp_path: Path):
+    snapshots_dir = tmp_path / "snapshots"
+    snapshots_dir.mkdir()
+    (snapshots_dir / "checkpoint_epoch_010.pt").touch()
+    (snapshots_dir / "checkpoint_epoch_020.pt").touch()
+
+    # Empty new session with no healthy checkpoints yet
+    session_dir = tmp_path / "sessions" / "session_new"
+    session_dir.mkdir(parents=True)
+    init_session(session_dir, "session_new", start_epoch=1, target_epochs=50, mode="start")
+
+    # In mode start (allow_snapshots_fallback=False), do NOT pull in old snapshots
+    plan = choose_recovery_snapshot([], snapshots_dir, failed_epoch=5, session_dir=session_dir, allow_snapshots_fallback=False)
+    assert plan is None
+

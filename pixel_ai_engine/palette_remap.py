@@ -73,14 +73,17 @@ def remap_image_to_palette(
     img: Image.Image,
     palette: np.ndarray,
     tolerance: float = 35.0,
+    outlier_ceiling: float = 85.0,
     min_alpha: int = 25,
     binarize_alpha: bool = True,
     alpha_thresh: int = 40
 ) -> Image.Image:
     """
     Remapea los píxeles del sprite al color más cercano de la paleta permitida.
-    Si un píxel dista más de `tolerance` (ej. detalles distintivos o accesorios legítimos),
-    se conserva su color para no degradarlo a tonos grises o neutros erróneos.
+    - Si un píxel dista menos de `tolerance`, se ajusta al color exacto de la paleta.
+    - Si dista entre `tolerance` y `outlier_ceiling`, se preserva para permitir matices sutiles.
+    - Si dista más de `outlier_ceiling` (ruido confeti / artefactos extremos), se fuerza
+      al color más cercano de la paleta para evitar manchas psicodélicas.
     Además, produce un canal alfa estrictamente binario (0 o 255) si binarize_alpha=True.
     """
     rgba = np.array(img.convert("RGBA"))
@@ -102,10 +105,10 @@ def remap_image_to_palette(
     nearest_idx = np.argmin(dist, axis=1)
     min_dists = dist[np.arange(len(flat_rgb)), nearest_idx]
 
-    # Conservar píxeles que caen dentro de la tolerancia; preservar los restantes
-    close_enough = min_dists <= tolerance
+    # Encajar si está dentro de la tolerancia, o si es un outlier extremo (> outlier_ceiling)
+    snap_mask = (min_dists <= tolerance) | (min_dists > outlier_ceiling)
     snapped_rgb = flat_rgb.copy()
-    snapped_rgb[close_enough] = pal[nearest_idx[close_enough]]
+    snapped_rgb[snap_mask] = pal[nearest_idx[snap_mask]]
 
     out_rgba = np.zeros_like(rgba)
     out_rgba[visible_mask, :3] = snapped_rgb.astype(np.uint8)
@@ -116,6 +119,50 @@ def remap_image_to_palette(
         out_rgba[:, :, 3] = np.where(visible_mask, alpha, 0).astype(np.uint8)
 
     return Image.fromarray(out_rgba, mode="RGBA")
+
+def despeckle_chromatic_noise(
+    img: Image.Image,
+    color_diff_threshold: float = 45.0,
+    min_similar_neighbors: int = 1,
+    min_alpha: int = 25
+) -> Image.Image:
+    """
+    Filtro Quirúrgico de Ruido Cromático / Salt-and-Pepper para Pixel Art.
+    Detecta píxeles aislados de confeti (outliers cromáticos rodeados de tonos distintos)
+    y los reemplaza vectorialmente por la mediana local de sus vecinos válidos.
+    """
+    rgba = np.array(img.convert("RGBA"))
+    alpha = rgba[:, :, 3]
+    visible = alpha >= min_alpha
+    if not np.any(visible):
+        return img
+
+    rgb = rgba[:, :, :3].astype(np.float32)
+    pad_rgb = np.pad(rgb, ((1, 1), (1, 1), (0, 0)), mode="edge")
+    pad_vis = np.pad(visible, ((1, 1), (1, 1)), mode="constant", constant_values=False)
+
+    neighbor_rgbs = []
+    similar_counts = np.zeros(alpha.shape, dtype=int)
+
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            n_rgb = pad_rgb[1 + dy : pad_rgb.shape[0] - 1 + dy, 1 + dx : pad_rgb.shape[1] - 1 + dx]
+            n_vis = pad_vis[1 + dy : pad_vis.shape[0] - 1 + dy, 1 + dx : pad_vis.shape[1] - 1 + dx]
+            neighbor_rgbs.append(n_rgb)
+            diff = np.sqrt(np.sum((rgb - n_rgb) ** 2, axis=-1))
+            similar_counts += ((diff <= color_diff_threshold) & n_vis).astype(int)
+
+    # Píxeles visibles que son outliers (menos de min_similar_neighbors vecinos similares)
+    outlier_mask = visible & (similar_counts < min_similar_neighbors)
+    if np.any(outlier_mask):
+        stacked = np.stack(neighbor_rgbs, axis=0)
+        median_rgb = np.median(stacked, axis=0)
+        rgb[outlier_mask] = median_rgb[outlier_mask]
+        rgba[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(rgba, mode="RGBA")
 
 def clean_orphan_pixels(
     img: Image.Image,

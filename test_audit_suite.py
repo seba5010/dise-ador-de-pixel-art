@@ -447,6 +447,32 @@ def test_past_eras_archiving():
         train_mod.STATUS_FILE = orig_status_file
 
 
+def test_despeckle_and_chromatic_noise():
+    print("\n--- TEST 7: Filtro de Ruido Cromático y Outliers ---")
+    from pixel_ai_engine.palette_remap import despeckle_chromatic_noise, remap_image_to_palette
+
+    # 1. Crear sprite con un píxel de ruido confeti (rojo brillante en fondo verde oscuro)
+    arr = np.zeros((16, 16, 4), dtype=np.uint8)
+    arr[:, :, :3] = [30, 80, 40]  # Verde oscuro (chaqueta)
+    arr[:, :, 3] = 255
+    arr[8, 8, :3] = [255, 0, 0]   # Píxel confeti rojo intenso
+    img = Image.fromarray(arr, mode="RGBA")
+
+    cleaned = despeckle_chromatic_noise(img, color_diff_threshold=45.0)
+    cleaned_arr = np.array(cleaned)
+    assert not np.array_equal(cleaned_arr[8, 8, :3], [255, 0, 0]), "El píxel confeti debe haber sido limpiado"
+    assert np.all(np.abs(cleaned_arr[8, 8, :3].astype(int) - [30, 80, 40]) < 10), "El píxel limpiado debe coincidir con el vecindario"
+    print("[PASS] 7.1: despeckle_chromatic_noise reemplazó el píxel de confeti por la mediana del vecindario.")
+
+    # 2. Test outlier ceiling en remap_image_to_palette
+    palette = np.array([[30, 80, 40], [200, 160, 120]], dtype=np.uint8)
+    remapped = remap_image_to_palette(img, palette, tolerance=35.0, outlier_ceiling=85.0)
+    remapped_arr = np.array(remapped)
+    # El píxel rojo dista más de 85 de la paleta, por lo que debe ser forzado a la paleta más cercana
+    assert not np.array_equal(remapped_arr[8, 8, :3], [255, 0, 0]), "El outlier extremo debe ser forzado a la paleta"
+    print("[PASS] 7.2: remap_image_to_palette eliminó el outlier extremo por encima de outlier_ceiling.")
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("EJECUTANDO BATERIA DE PRUEBAS CPU Y GPU")
@@ -457,6 +483,8 @@ if __name__ == "__main__":
     test_checkpoint_schedulers_and_rng()
     test_past_eras_archiving()
     test_gpu_specific_checks()
+    test_despeckle_and_chromatic_noise()
     print("\n==============================================")
     print("TODAS LAS PRUEBAS COMPLETADAS EXITOSAMENTE")
     print("==============================================")
+
