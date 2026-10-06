@@ -362,20 +362,30 @@ def test_loss_ab_report_preserves_baseline_and_makes_no_quality_claim():
     assert report["quality_improvement_claimed"] is False
 
 
+def _rollback_guidance(**extra):
+    payload = {
+        "recommended_action": "ROLLBACK",
+        "severity": "critical",
+        "audit_coverage": {"ready_for_rollback": True, "character_coverage": 1.0},
+    }
+    payload.update(extra)
+    return payload
+
+
 def test_intervention_policy_confirms_critical_regression_or_accepts_immediate_collapse():
     policy = GuidanceInterventionPolicy(cooldown_epochs=5, max_consecutive=3)
     first_critical = policy.decide(
         10,
-        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "REGRESSION"}},
+        _rollback_guidance(trend={"status": "REGRESSION"}),
     )
     confirmed = policy.decide(
         11,
-        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "REGRESSION"}},
+        _rollback_guidance(trend={"status": "REGRESSION"}),
         first_critical["state"],
     )
     sustained = policy.decide(
         10,
-        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "COLLAPSE"}},
+        _rollback_guidance(trend={"status": "COLLAPSE"}),
     )
 
     assert first_critical["authorized_action"] == "CONTINUE"
@@ -388,7 +398,7 @@ def test_intervention_policy_stops_after_a_post_rollback_quality_collapse():
     policy = GuidanceInterventionPolicy(max_rollbacks=1)
     decision = policy.decide(
         20,
-        {"recommended_action": "ROLLBACK", "severity": "critical", "trend": {"status": "COLLAPSE"}},
+        _rollback_guidance(trend={"status": "COLLAPSE"}),
         {"rollback_count": 1},
     )
 
@@ -404,6 +414,32 @@ def test_intervention_policy_can_authorize_learning_rate_reduction():
     )
 
     assert decision["authorized_action"] == "REDUCE_LR"
+
+
+def test_intervention_policy_blocks_rollback_until_dataset_coverage_is_ready():
+    policy = GuidanceInterventionPolicy(critical_confirmations=1)
+    missing_coverage = policy.decide(
+        20,
+        {
+            "recommended_action": "ROLLBACK",
+            "severity": "critical",
+            "trend": {"status": "COLLAPSE"},
+        },
+    )
+    incomplete_coverage = policy.decide(
+        20,
+        {
+            "recommended_action": "ROLLBACK",
+            "severity": "critical",
+            "trend": {"status": "COLLAPSE"},
+            "audit_coverage": {"ready_for_rollback": False, "character_coverage": 0.5},
+        },
+    )
+
+    assert missing_coverage["authorized_action"] == "CONTINUE"
+    assert missing_coverage["reason"] == "insufficient_dataset_coverage"
+    assert incomplete_coverage["authorized_action"] == "CONTINUE"
+    assert incomplete_coverage["reason"] == "insufficient_dataset_coverage"
 
 
 def test_intervention_policy_enforces_cooldown_and_maximum():

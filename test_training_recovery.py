@@ -153,3 +153,84 @@ def test_retain_checkpoint_keeps_previous_epoch_when_latest_is_replaced(tmp_path
 
     assert latest.read_bytes() == b"epoch-16"
     assert healthy.read_bytes() == b"epoch-15"
+
+
+def test_qc_auto_resume_command_preserves_target_and_batch(monkeypatch):
+    import sprite_studio
+
+    monkeypatch.setattr(sprite_studio, "AUTO_RESUME_QC_RECOVERY", True)
+    monkeypatch.setattr(sprite_studio, "AUTO_RESUME_QC_MAX_ATTEMPTS", 1)
+    status = {
+        "epoch": 20,
+        "total_epochs": 500,
+        "status": "RECUPERACION_LISTA",
+        "recovery": {"active": True, "source_epoch": 20, "auto_resume_attempts": 0},
+    }
+    command = [
+        "python.exe", "train_supervised.py", "--epochs", "500",
+        "--batch_size", "6", "--lr", "0.0001", "--mode", "start",
+    ]
+
+    resumed = sprite_studio._build_qc_auto_resume_command(command, status)
+
+    assert resumed is not None
+    assert resumed[resumed.index("--epochs") + 1] == "480"
+    assert resumed[resumed.index("--batch_size") + 1] == "6"
+    assert resumed[resumed.index("--mode") + 1] == "resume"
+    assert resumed[resumed.index("--lr") + 1] == "0.0001"
+
+    status["recovery"]["auto_resume_attempts"] = 1
+    assert sprite_studio._build_qc_auto_resume_command(command, status) is None
+
+
+def test_qc_auto_resume_marks_status_and_launches_once(tmp_path, monkeypatch):
+    import sprite_studio
+
+    checkpoint = tmp_path / "checkpoints" / "recovery_checkpoint.pt"
+    checkpoint.parent.mkdir()
+    checkpoint.touch()
+    status = {
+        "epoch": 20,
+        "total_epochs": 50,
+        "status": "RECUPERACION_LISTA",
+        "recovery": {
+            "active": True,
+            "source_epoch": 20,
+            "failed_epoch": 41,
+            "checkpoint": "checkpoints/recovery_checkpoint.pt",
+        },
+    }
+    written = []
+    launched = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    fake_process = FakeProcess()
+    monkeypatch.setattr(sprite_studio, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(sprite_studio, "TRAINING_LOG_FILE", tmp_path / "training_logs" / "training.log")
+    monkeypatch.setattr(sprite_studio, "AUTO_RESUME_QC_RECOVERY", True)
+    monkeypatch.setattr(sprite_studio, "AUTO_RESUME_QC_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(sprite_studio, "GLOBAL_TRAINING_PROC", None)
+    monkeypatch.setattr(sprite_studio, "load_status_file", lambda _path: dict(status))
+    monkeypatch.setattr(sprite_studio, "get_active_recovery_checkpoint", lambda: checkpoint)
+    monkeypatch.setattr(sprite_studio, "write_status_file", lambda _path, data: written.append(dict(data)))
+    monkeypatch.setattr(
+        sprite_studio,
+        "launch_training_process",
+        lambda command, env: launched.append((list(command), dict(env))) or fake_process,
+    )
+
+    result = sprite_studio._maybe_auto_resume_qc_recovery(
+        ["python.exe", "train_supervised.py", "--epochs", "50", "--batch_size", "4", "--mode", "start"],
+        {"PYTHONUNBUFFERED": "1"},
+        return_code=0,
+    )
+
+    assert result is fake_process
+    assert len(launched) == 1
+    assert launched[0][0][launched[0][0].index("--epochs") + 1] == "30"
+    assert written[-1]["status"] == "RECUPERANDO"
+    assert written[-1]["recovery"]["auto_resume_attempts"] == 1
+    assert written[-1]["auto_resume"]["failed_epoch"] == 41

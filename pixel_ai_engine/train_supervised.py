@@ -81,6 +81,11 @@ STOP_FLAG_FILE = PROJECT_ROOT / "stop_training.flag"
 PAUSE_FLAG_FILE = PROJECT_ROOT / "pause_training.flag"
 RECOVERY_CHECKPOINT_FILE = CHECKPOINT_DIR / "recovery_checkpoint.pt"
 
+QUALITY_AUDIT_SAMPLES_PER_EPOCH = 10
+QUALITY_AUDIT_WINDOW_EPOCHS = 14
+QUALITY_AUDIT_MIN_FRAMES_PER_CHARACTER = 2
+QUALITY_TRACKER_MIN_COVERAGE = 1.0
+
 CACHE_PATH = PROJECT_ROOT / "dataset_supervisado" / "supervised_cache_8x12.pt"
 
 
@@ -131,6 +136,9 @@ def _evaluate_observational_guidance(
     state["last_skipped_amp_steps"] = cumulative_skips
     state["amp_skip_history"] = recent_skips
     state["amp_skips_in_window"] = sum(recent_skips)
+    for key in ("dataset_character_ids", "dataset_sample_count"):
+        if key in previous:
+            state[key] = previous[key]
     return decision, state
 
 
@@ -446,6 +454,22 @@ def _print_quality_guidance(guidance: Any) -> None:
         f"Acción autorizada: {authorized_action} | MODO ACTUAL: {mode}",
         flush=True,
     )
+    coverage = guidance.get("audit_coverage")
+    if isinstance(coverage, dict):
+        print(
+            f"  Cobertura QC: {int(coverage.get('characters_covered', 0))}/"
+            f"{int(coverage.get('characters_total', 0))} personajes | "
+            f"mín. {int(coverage.get('minimum_frames_per_character', 0))} frames/personaje | "
+            f"tracker {float(coverage.get('tracker_frame_coverage', 0.0)) * 100.0:.1f}% | "
+            f"rollback {'HABILITADO' if coverage.get('ready_for_rollback') else 'EN ESPERA'}",
+            flush=True,
+        )
+    certification = guidance.get("full_certification")
+    if isinstance(certification, dict) and certification.get("due"):
+        print(
+            f"  Certificación completa: {'APROBADA' if certification.get('passed') else 'NO APROBADA'}",
+            flush=True,
+        )
 
 
 def _active_recovery_checkpoint(status_data: Dict[str, Any]) -> Optional[Path]:
@@ -1050,13 +1074,23 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
     resolved_quality = quality if isinstance(quality, dict) and quality else prev_quality
     if isinstance(guidance_runtime, dict):
         guidance_state = {**guidance_state, **guidance_runtime}
+    guidance_quality = resolved_quality
+    if reevaluate_guidance and isinstance(quality, dict) and quality:
+        guidance_quality = _rolling_dataset_quality(
+            history,
+            quality,
+            epoch=int(epoch),
+            frame_quality=guidance_state.get("frame_quality", {}),
+            expected_character_ids=guidance_state.get("dataset_character_ids", []),
+            expected_samples=guidance_state.get("dataset_sample_count", previous_total_frames),
+        )
     quality_guidance = prev_guidance if isinstance(prev_guidance, dict) else None
     if not ENABLE_QUALITY_GUIDANCE:
         quality_guidance = _disabled_guidance()
     elif reevaluate_guidance and isinstance(quality, dict) and quality:
         try:
             quality_guidance, guidance_state = _evaluate_observational_guidance(
-                quality,
+                guidance_quality,
                 epoch=int(epoch),
                 training_metrics={
                     "g_loss": f_loss,
@@ -1069,6 +1103,16 @@ def update_status(epoch, total_epochs, status_str, g_loss, d_loss, l1_val, edge_
                 },
                 previous_state=guidance_state,
             )
+            certification = quality_guidance.get("full_certification")
+            if isinstance(certification, dict):
+                expected_ids = guidance_state.get("dataset_character_ids") or []
+                epoch_characters = int(certification.get("epoch_characters_audited") or 0)
+                certification["passed"] = bool(
+                    certification.get("due")
+                    and certification.get("coverage_complete")
+                    and epoch_characters >= max(1, len(expected_ids))
+                    and str(quality_guidance.get("severity", "low")).lower() != "critical"
+                )
         except Exception as guidance_error:
             # A broken audit must not corrupt the training state.
             quality_guidance = dict(quality_guidance or _disabled_guidance())
@@ -1187,13 +1231,18 @@ def _maybe_save_quality_checkpoint(
     generator: nn.Module,
 ) -> Dict[str, Any]:
     data = dict(status_data)
-    vector = (data.get("guidance") or {}).get("quality_vector", {})
+    guidance = data.get("guidance") or {}
+    vector = guidance.get("quality_vector", {})
+    coverage = guidance.get("audit_coverage") if isinstance(guidance, dict) else None
+    coverage_ready = bool(isinstance(coverage, dict) and coverage.get("ready_for_rollback"))
     assessment = assess_quality_checkpoint(vector)
+    assessment["coverage_ready"] = coverage_ready
     previous = data.get("best_quality_score")
     previous_score = float(previous) if isinstance(previous, (int, float)) and math.isfinite(float(previous)) else None
     improved = bool(
         ENABLE_QUALITY_CHECKPOINT
         and assessment["eligible"]
+        and coverage_ready
         and (previous_score is None or assessment["score"] > previous_score)
     )
     checkpoint_info = {**assessment, "enabled": bool(ENABLE_QUALITY_CHECKPOINT), "improved": improved}
@@ -1217,6 +1266,9 @@ def _maybe_save_quality_checkpoint(
         prior_checkpoint = data["quality_checkpoint"]
         checkpoint_info.update({key: prior_checkpoint[key] for key in ("file", "epoch") if key in prior_checkpoint})
     data["quality_checkpoint"] = checkpoint_info
+    certification = guidance.get("full_certification") if isinstance(guidance, dict) else None
+    if isinstance(certification, dict):
+        data["quality_certification"] = dict(certification)
     return data
 
 def _tensor_to_preview_image(tensor, has_alpha=False):
@@ -1371,7 +1423,7 @@ def _audit_training_prediction(generated, target, palette):
     return apply_strict_visual_metrics(qc, generated, target)
 
 
-def _aggregate_training_quality(audits):
+def _aggregate_training_quality(audits, *, include_sample_metrics=True):
     """Use a conservative percentile and retain mean/worst evidence."""
     valid = [item for item in audits if isinstance(item.get("metrics"), dict) and item["metrics"]]
     if not valid:
@@ -1424,8 +1476,184 @@ def _aggregate_training_quality(audits):
             for item in valid
         ],
     })
+    if include_sample_metrics:
+        aggregated["evaluated_sample_metrics"] = [
+            {
+                "character_id": str(item["character_id"]),
+                "frame_idx": int(item["frame_idx"]),
+                "metrics": dict(item["metrics"]),
+            }
+            for item in valid
+        ]
     aggregated["quality_guide"] = PixelArtEnhancer.build_quality_guide(aggregated)
     return aggregated
+
+
+def _frame_tracker_summary(frame_quality, *, expected_samples, expected_characters):
+    records = frame_quality if isinstance(frame_quality, dict) else {}
+    valid = [record for record in records.values() if isinstance(record, dict)]
+    characters = {str(record.get("char_id", "unknown")) for record in valid}
+    qualities = [
+        float(record["quality"])
+        for record in valid
+        if isinstance(record.get("quality"), (int, float)) and math.isfinite(float(record["quality"]))
+    ]
+
+    def metric_percentile(metric):
+        values = [
+            float(record["metrics"][metric])
+            for record in valid
+            if isinstance(record.get("metrics"), dict)
+            and isinstance(record["metrics"].get(metric), (int, float))
+            and math.isfinite(float(record["metrics"][metric]))
+        ]
+        return round(float(np.percentile(values, 25)), 4) if values else None
+
+    sample_total = max(0, int(expected_samples or 0))
+    character_total = max(0, int(expected_characters or 0))
+    return {
+        "observed_frames": len(valid),
+        "expected_frames": sample_total,
+        "frame_coverage": round(min(1.0, len(valid) / max(1, sample_total)), 4),
+        "observed_characters": len(characters),
+        "expected_characters": character_total,
+        "character_coverage": round(min(1.0, len(characters) / max(1, character_total)), 4),
+        "quality_p25": round(float(np.percentile(qualities, 25)), 4) if qualities else None,
+        "quality_average": round(float(np.mean(qualities)), 4) if qualities else None,
+        "quality_worst": round(float(min(qualities)), 4) if qualities else None,
+        "color_p25": metric_percentile("color"),
+        "alpha_p25": metric_percentile("alpha"),
+        "silhouette_p25": metric_percentile("silhouette"),
+    }
+
+
+def _rolling_dataset_quality(
+    history,
+    current_quality,
+    *,
+    epoch,
+    frame_quality,
+    expected_character_ids,
+    expected_samples,
+):
+    """Aggregate stratified deep audits and the all-frame training tracker."""
+    first_epoch = max(1, int(epoch) - QUALITY_AUDIT_WINDOW_EPOCHS + 1)
+    audit_records = []
+    for entry in history if isinstance(history, list) else []:
+        if not isinstance(entry, dict) or int(entry.get("epoch", 0)) < first_epoch:
+            continue
+        prior_quality = entry.get("quality")
+        if isinstance(prior_quality, dict):
+            audit_records.extend(prior_quality.get("evaluated_sample_metrics", []))
+    if isinstance(current_quality, dict):
+        audit_records.extend(current_quality.get("evaluated_sample_metrics", []))
+
+    latest_by_sample = {}
+    for record in audit_records:
+        if not isinstance(record, dict) or not isinstance(record.get("metrics"), dict):
+            continue
+        key = (str(record.get("character_id", "unknown")), int(record.get("frame_idx", -1)))
+        latest_by_sample[key] = {
+            "character_id": key[0],
+            "frame_idx": key[1],
+            "metrics": dict(record["metrics"]),
+        }
+    unique_records = list(latest_by_sample.values())
+    rolling = _aggregate_training_quality(unique_records, include_sample_metrics=False)
+    expected_ids = {str(value) for value in expected_character_ids or []}
+    frames_by_character = {character_id: set() for character_id in expected_ids}
+    for character_id, frame_idx in latest_by_sample:
+        if character_id in frames_by_character:
+            frames_by_character[character_id].add(frame_idx)
+        elif not expected_ids:
+            frames_by_character.setdefault(character_id, set()).add(frame_idx)
+    covered_characters = sum(bool(frames) for frames in frames_by_character.values())
+    expected_character_count = len(expected_ids) or len(frames_by_character)
+    min_frames = min((len(frames) for frames in frames_by_character.values()), default=0)
+    tracker = _frame_tracker_summary(
+        frame_quality,
+        expected_samples=expected_samples,
+        expected_characters=expected_character_count,
+    )
+    character_coverage = round(covered_characters / max(1, expected_character_count), 4)
+    ready = bool(
+        bool(expected_ids)
+        and expected_character_count > 0
+        and character_coverage >= 1.0
+        and min_frames >= QUALITY_AUDIT_MIN_FRAMES_PER_CHARACTER
+        and tracker["frame_coverage"] >= QUALITY_TRACKER_MIN_COVERAGE
+        and int(tracker["expected_frames"] or 0) > 0
+    )
+    if not rolling:
+        fallback = dict(current_quality or {})
+        fallback["audit_coverage"] = {
+            "window_start_epoch": first_epoch,
+            "window_end_epoch": int(epoch),
+            "window_epochs": QUALITY_AUDIT_WINDOW_EPOCHS,
+            "deep_samples": len(unique_records),
+            "characters_covered": covered_characters,
+            "characters_total": expected_character_count,
+            "character_coverage": character_coverage,
+            "minimum_frames_per_character": min_frames,
+            "required_frames_per_character": QUALITY_AUDIT_MIN_FRAMES_PER_CHARACTER,
+            "tracker_frames_observed": tracker["observed_frames"],
+            "tracker_frames_total": tracker["expected_frames"],
+            "tracker_frame_coverage": tracker["frame_coverage"],
+            "ready_for_rollback": False,
+        }
+        fallback["full_certification"] = {
+            "due": int(epoch) % 10 == 0,
+            "coverage_complete": False,
+            "characters_certified": covered_characters,
+            "frames_tracked": tracker["observed_frames"],
+        }
+        return fallback
+    coverage = {
+        "window_start_epoch": first_epoch,
+        "window_end_epoch": int(epoch),
+        "window_epochs": QUALITY_AUDIT_WINDOW_EPOCHS,
+        "deep_samples": len(unique_records),
+        "characters_covered": covered_characters,
+        "characters_total": expected_character_count,
+        "character_coverage": character_coverage,
+        "minimum_frames_per_character": min_frames,
+        "required_frames_per_character": QUALITY_AUDIT_MIN_FRAMES_PER_CHARACTER,
+        "tracker_frames_observed": tracker["observed_frames"],
+        "tracker_frames_total": tracker["expected_frames"],
+        "tracker_frame_coverage": tracker["frame_coverage"],
+        "ready_for_rollback": ready,
+    }
+
+    # The broad tracker may lower a deep-audit metric but never inflate it.
+    if tracker["quality_p25"] is not None and isinstance(rolling.get("score_total"), (int, float)):
+        rolling["score_total"] = round(min(float(rolling["score_total"]), tracker["quality_p25"]), 4)
+    for quality_key, tracker_key in (
+        ("silueta_iou_real", "silhouette_p25"),
+        ("pureza_alfa", "alpha_p25"),
+    ):
+        tracker_value = tracker.get(tracker_key)
+        if tracker_value is not None and isinstance(rolling.get(quality_key), (int, float)):
+            rolling[quality_key] = round(min(float(rolling[quality_key]), float(tracker_value)), 4)
+
+    rolling.update({
+        "comparison_source": "rolling_dataset_targets_plus_frame_tracker",
+        "comparison_method": "percentil_25_ventana_estratificada",
+        "audit_coverage": coverage,
+        "frame_tracker_summary": tracker,
+        "full_certification": {
+            "due": int(epoch) % 10 == 0,
+            "coverage_complete": ready,
+            "characters_certified": covered_characters,
+            "frames_tracked": tracker["observed_frames"],
+            "epoch_characters_audited": len({
+                str(record.get("character_id"))
+                for record in (current_quality or {}).get("evaluated_sample_metrics", [])
+                if isinstance(record, dict)
+            }) if isinstance(current_quality, dict) else 0,
+        },
+    })
+    rolling["quality_guide"] = PixelArtEnhancer.build_quality_guide(rolling)
+    return rolling
 
 
 def _select_quality_sample_indices(samples, epoch_label=None, limit=4):
@@ -1445,10 +1673,16 @@ def _select_quality_sample_indices(samples, epoch_label=None, limit=4):
     return selected
 
 
-def generate_preview(generator, dataset, epoch_label=None):
+def generate_preview(generator, dataset, epoch_label=None, *, full_certification=False):
     generator.eval()
     with torch.no_grad():
-        sample_indices = _select_quality_sample_indices(dataset.samples, epoch_label=epoch_label, limit=4)
+        character_count = len({str(sample.get("char_id", "unknown")) for sample in dataset.samples})
+        audit_limit = character_count if full_certification else QUALITY_AUDIT_SAMPLES_PER_EPOCH
+        sample_indices = _select_quality_sample_indices(
+            dataset.samples,
+            epoch_label=epoch_label,
+            limit=audit_limit,
+        )
         from pixel_ai_engine.dataset import TemplateManager
         tmpl_path = PROJECT_ROOT / "dataset_moldes" / "plantilla de los spritesheets.png"
         if not tmpl_path.exists():
@@ -1519,13 +1753,15 @@ def generate_preview(generator, dataset, epoch_label=None):
             y += c.height + 5
 
         comp_img.save(TRAIN_SAMPLES_DIR / "latest_detail_comparison.png")
-        if epoch_label is not None:
+        if full_certification and epoch_label is not None:
             comp_img.save(AUDIT_DIR / f"preview_epoch_{epoch_label:03d}.png")
 
         sheet_front = dataset.samples[sample_indices[0]]["front_tensor"]
         sheet_palette = extract_character_palette(_fit_preview_cell(_tensor_to_preview_image(sheet_front)), include_props=True)
         _generate_full_sheet_preview(generator, sheet_front, tm, sheet_palette)
-        _generate_all_frame_comparison(generator, dataset.samples, tm, epoch_label=epoch_label)
+        if full_certification:
+            certified_samples = [dataset.samples[index] for index in sample_indices]
+            _generate_all_frame_comparison(generator, certified_samples, tm, epoch_label=epoch_label)
 
         # Every percentage comes from prediction versus exact dataset target.
         return _aggregate_training_quality(quality_audits)
@@ -1554,6 +1790,10 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         )
 
     dataset = SupervisedTensorDataset(CACHE_PATH, augment=True)
+    dataset_character_ids = sorted({
+        str(item.get("char_id", "unknown"))
+        for item in _dataset_sample_descriptors(dataset)
+    })
     starting_guidance_state = status_at_start.get("guidance_state", {}) if isinstance(status_at_start.get("guidance_state"), dict) else {}
     frame_quality_tracker = FrameQualityTracker(starting_guidance_state.get("frame_quality", {}))
     current_sampling_plan = _build_sampling_plan(
@@ -2007,7 +2247,12 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
         # Muestra visual y auditoría clínica del cuerpo
         save_audit = (epoch % 10 == 0)
-        last_qc = generate_preview(generator, dataset, epoch_label=epoch if save_audit else None)
+        last_qc = generate_preview(
+            generator,
+            dataset,
+            epoch_label=epoch,
+            full_certification=save_audit,
+        )
         if last_qc and "score_total" in last_qc:
             c_prec = last_qc.get("cuerpo_precision", last_qc["score_total"])
             def_px = last_qc.get("defectos_cuerpo", 0)
@@ -2088,6 +2333,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 "frame_quality": frame_quality_tracker.export(),
                 "loss_multipliers": dict(loss_multipliers),
                 "loss_plan": dict(current_loss_plan),
+                "dataset_character_ids": dataset_character_ids,
+                "dataset_sample_count": len(dataset),
             },
         )
         published_status = _apply_intervention_policy(published_status)
@@ -2223,7 +2470,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             if PAUSE_FLAG_FILE.exists():
                 try: PAUSE_FLAG_FILE.unlink()
                 except Exception: pass
-            update_status(epoch, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration)
+            update_status(epoch, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration, reevaluate_guidance=False)
             return
 
     if math.isfinite(avg_g) and math.isfinite(avg_d) and avg_g > 0.0:

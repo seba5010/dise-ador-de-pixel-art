@@ -233,6 +233,110 @@ def test_quality_sample_selection_rotates_characters_and_frames():
     assert all(samples[index]["frame_idx"] == 1 for index in epoch_two)
 
 
+def test_stratified_rotation_covers_all_characters_twice_in_fourteen_epochs():
+    samples = [
+        {"char_id": f"hero_{character:02d}", "frame_idx": frame}
+        for character in range(56)
+        for frame in range(20)
+    ]
+    seen = {}
+    for epoch in range(1, 15):
+        indices = train_supervised._select_quality_sample_indices(
+            samples,
+            epoch_label=epoch,
+            limit=train_supervised.QUALITY_AUDIT_SAMPLES_PER_EPOCH,
+        )
+        for index in indices:
+            sample = samples[index]
+            seen.setdefault(sample["char_id"], set()).add(sample["frame_idx"])
+
+    assert len(seen) == 56
+    assert min(len(frames) for frames in seen.values()) == 2
+
+
+def test_rolling_quality_requires_deep_and_frame_tracker_coverage():
+    def audit(character, frame, score):
+        return {
+            "character_id": character,
+            "frame_idx": frame,
+            "metrics": {
+                "score_total": score,
+                "cuerpo_precision": score,
+                "silueta_iou_real": 95.0,
+                "pureza_alfa": 99.0,
+                "fidelidad_paleta": score,
+                "micro_detalles": score,
+                "strict_face": score,
+                "strict_anatomy": score,
+                "strict_silhouette": 95.0,
+                "strict_visual_noise": score,
+            },
+        }
+
+    characters = ["a", "b", "c", "d"]
+    first_pass = [audit(character, 0, 80.0) for character in characters]
+    second_pass = [audit(character, 1, 78.0) for character in characters]
+    history = [{"epoch": 1, "quality": {"evaluated_sample_metrics": first_pass}}]
+    current = {"evaluated_sample_metrics": second_pass}
+    tracker = {
+        f"{character}::frame_{frame:03d}": {
+            "char_id": character,
+            "frame_idx": frame,
+            "quality": 90.0,
+            "metrics": {"color": 90.0, "alpha": 99.0, "silhouette": 95.0},
+        }
+        for character in characters
+        for frame in (0, 1)
+    }
+
+    quality = train_supervised._rolling_dataset_quality(
+        history,
+        current,
+        epoch=2,
+        frame_quality=tracker,
+        expected_character_ids=characters,
+        expected_samples=8,
+    )
+
+    coverage = quality["audit_coverage"]
+    assert coverage["character_coverage"] == 1.0
+    assert coverage["minimum_frames_per_character"] == 2
+    assert coverage["tracker_frame_coverage"] == 1.0
+    assert coverage["ready_for_rollback"] is True
+    assert quality["comparison_source"] == "rolling_dataset_targets_plus_frame_tracker"
+
+    tracker.pop(next(iter(tracker)))
+    incomplete = train_supervised._rolling_dataset_quality(
+        history,
+        current,
+        epoch=2,
+        frame_quality=tracker,
+        expected_character_ids=characters,
+        expected_samples=8,
+    )
+    assert incomplete["audit_coverage"]["tracker_frame_coverage"] == 0.875
+    assert incomplete["audit_coverage"]["ready_for_rollback"] is False
+
+
+def test_rolling_quality_is_not_rollback_ready_without_character_roster():
+    quality = train_supervised._rolling_dataset_quality(
+        [],
+        {
+            "evaluated_sample_metrics": [{
+                "character_id": "a",
+                "frame_idx": 0,
+                "metrics": {"score_total": 80.0, "cuerpo_precision": 80.0, "silueta_iou_real": 95.0, "pureza_alfa": 99.0, "fidelidad_paleta": 80.0, "micro_detalles": 80.0, "strict_face": 80.0, "strict_anatomy": 80.0, "strict_silhouette": 95.0, "strict_visual_noise": 80.0},
+            }],
+        },
+        epoch=2,
+        frame_quality={},
+        expected_character_ids=[],
+        expected_samples=0,
+    )
+
+    assert quality["audit_coverage"]["ready_for_rollback"] is False
+
+
 def test_active_sampling_plan_uses_weighted_sampler_and_is_persisted():
     dataset = torch.utils.data.TensorDataset(torch.arange(3))
     plan = SamplingPlan(
@@ -366,6 +470,7 @@ def test_intervention_policy_state_is_attached_for_resume():
             "guidance": {
                 "recommended_action": "ROLLBACK",
                 "trend": {"status": "COLLAPSE"},
+                "audit_coverage": {"ready_for_rollback": True},
             },
         }
     )

@@ -1,121 +1,261 @@
-# DOCUMENTACIÓN OFICIAL DEL PROYECTO: DISEÑADOR DE PIXEL ART
-**Villa del Chef — Motor Neuronal de Spritesheets y Análisis Comparativo de Motores**  
-*Fecha: Octubre 2026 | Versión: 2.7 (Arquitectura Híbrida Supervisada, Kornia GPU, 8-Bit AdamW, Albumentations y Remapeo de Paleta)*
+# Diseñador de Pixel Art — Sprite Studio
 
----
+Motor local para generar, entrenar, revisar y corregir spritesheets de personajes 2D. El proyecto usa un generador supervisado píxel a píxel y una interfaz web de control de calidad orientada tanto a artistas como a desarrolladores.
 
-## 1. Resumen Ejecutivo del Proyecto
+**Estado de la documentación:** octubre de 2026
+**Versión funcional documentada:** 3.0
 
-El objetivo de este proyecto es desarrollar una herramienta de software e inteligencia artificial capaz de generar **hojas de sprites (spritesheets) completas de animación 2D en Pixel Art (formatos 16x4 de 64 frames y 8x12 de 96 frames)** a partir de **una única ilustración frontal de referencia** de un personaje (nuevo o existente), manteniendo:
-1. **Identidad absoluta del personaje:** Tono de piel exacto, peinado, ropa, delantal y detalles anatómicos.
-2. **Escala y anclaje canónico:** Personaje de ~32 a 48 píxeles de altura neta, anclado al piso en celdas de 128×128 (o 170×128 en 16x4).
-3. **Fondo 100% transparente (Alpha limpio):** Sin halos, sin fondos difusos o artefactos de compresión.
-4. **Rigidez de animación:** Cuadrícula matemática estricta con todas las direcciones (sur, este, oeste, norte, diagonales) y acciones complejas (caminar, cocinar con bowl, pensar, cargar caja, servir plato, celebrar).
+## Objetivo
 
----
+A partir de una ilustración frontal y un molde de pose, el sistema genera frames RGBA que deben conservar:
 
-## 2. Dictamen Técnico Crítico: Por qué el Motor de Difusión (Forge SD 1.5 + LoRA) NO Sirve para este Caso Específico
+- identidad, rostro, cabello, ropa y accesorios;
+- proporciones y postura del personaje;
+- paleta de colores original;
+- contornos nítidos propios del pixel art;
+- fondo transparente sin halos;
+- ubicación segura dentro de cada celda del spritesheet.
 
-Durante la fase experimental se integró un entorno de **Stable Diffusion WebUI Forge (SD 1.5 con LoRA entrenado sobre los personajes del juego)**. Tras auditorías visuales y pruebas de generación directa, se concluye formalmente que **el motor de difusión generativa libre por texto es inviable y NO sirve para este caso de uso**.
+Los formatos principales son **8×12 (96 frames)** y **16×4 (64 frames)**.
 
-A continuación se detallan las razones técnicas fundamentales de este fallo:
+## Arquitectura actual
 
-### 2.1. El Paradigma de "Alucinación Libre" vs la "Rigidez Matemática" del Pixel Art
-* **Naturaleza de Stable Diffusion:** Los modelos de difusión (SD 1.5) son sistemas probabilísticos diseñados para "imaginar" e ilustrar arte conceptual libre en base a descripciones en lenguaje natural.
-* **El Requisito del Videojuego 2D:** Un motor de spritesheet para videojuegos exige determinismo atómico:
-  * El pie en el frame 2 **debe** subir 3 píxeles exactos, no 12 ni 0.
-  * La paleta de color **debe** ser el valor hexadecimal original del personaje, no una reinterpretación estética.
-* **El Resultado en Forge:** Al pedirle por texto generar un frame de caminata, SD 1.5 "alucina" poses arbitrarias, cambia las posiciones de las extremidades a su antojo y pierde la sincronía de la cuadrícula de animación.
+El motor recomendado es `PixelArtUNetGenerator`, una U-Net supervisada de seis canales:
 
-### 2.2. Destrucción de la Escala y el Formato ("La Falla Dulce")
-* **Pérdida Matemática Engañosa:** En el entrenamiento LoRA, la pérdida matemática reportaba una reducción del >90% (loss de 0.12 a 0.011), lo que en apariencia sugería un "punto dulce".
-* **Realidad Visual:** Matemáticamente la red memorizó la relación texto-imagen, pero la representación generada fue un muñeco desproporcionado tipo "chibi gigante / entrenador Pokémon" que ocupaba el 85% de la celda de 128×128, en lugar del sprite estilizado y diminuto de ~40 px de Villa del Chef.
-* **Contaminación de Fondos y Artefactos:** SD 1.5 trabaja en un espacio latente de 512×512 entrenado con imágenes RGB con fondos. Al forzar la generación de pixel art:
-  * Genera fondos beige/grises con halos en los bordes.
-  * Al hacer el reescalado a 128×128 con Nearest-Neighbor, los rostros colapsan en manchas negras (ojos que parecen gafas de sol rectangulares) y las manos pierden definición anatómica.
-
-### 2.3. Ignorancia de la Imagen Frontal (Falta de Acondicionamiento Directo)
-* El endpoint `txt2img` de Forge solo recibe cadenas de texto (`prompt`). Ignora por completo los píxeles reales de la imagen frontal seleccionada por el usuario.
-* Si el usuario sube un personaje nuevo con delantal blanco o un peinado singular, Forge no puede transferir esos píxeles directamente; intenta inventar un personaje nuevo basado únicamente en palabras clave, cambiando colores arbitrariamente (por ejemplo, vistiendo al chef de rojo y negro).
-
-> **Conclusión sobre Forge:** El motor de difusión libre SD 1.5 + LoRA queda documentado oficialmente como **OBSOLETO Y NO APTO** para la generación de spritesheets rígidos en este proyecto.
-
----
-
-## 3. Rescate Tecnológico: Los 5 Componentes de Alto Rendimiento Salvados de Forge
-
-Aunque la difusión libre no sea apta, el entorno de Forge y su pila de visión artificial contienen **métodos, clases y algoritmos de alto rendimiento** que han sido rescatados e integrados directamente en nuestro motor supervisado:
-
-### 3.1. Optimizador de 8-Bits (`bitsandbytes.optim.AdamW8bit`)
-* **Origen:** Forge utiliza `bitsandbytes` para entrenar modelos pesados en GPUs de gama media sin desbordar la VRAM.
-* **Integración en `train_supervised.py`:** En lugar del optimizador Adam tradicional de PyTorch (que mantiene momentos en Float32 consumiendo casi 3 GB de VRAM), se activó `AdamW8bit`.
-* **Beneficio:** Reduce el consumo de VRAM a **~1.5 GB**, dejando holgura total para la GPU de 4 GB (RTX 3050 Ti) y acelerando la tasa de entrenamiento por época.
-
-### 3.2. Aceleración de Bordes en GPU con `Kornia` (`kornia.filters.sobel`)
-* **Origen:** Biblioteca de visión artificial totalmente diferenciable sobre tensores CUDA.
-* **Integración:** Reemplaza los filtros Sobel convolucionales manuales por kernels acelerados en GPU en `KorniaSobelLoss`.
-* **Beneficio:** Acelera el cómputo de la función de pérdida de bordes en un **30% a 40%**, manteniendo gradientes de contorno duros sin transferir tensores a la CPU.
-
-### 3.3. Aumento de Datos para Pixel Art con `Albumentations`
-* **Origen:** Librería de aumento de imágenes integrada en los loaders de Forge.
-* **Integración:** Aplica sutiles variaciones de contraste y luminosidad ($\pm 3\%$) a las muestras de entrada durante el entrenamiento.
-* **Beneficio:** Permite que el generador aprenda a transferir ropas y pieles sin importar si la ilustración frontal tiene luz cálida o fría, alcanzando una generalización inmediata con personajes nuevos.
-
-### 3.4. Módulo de Cuantización y Remapeo de Paleta (`pixel_ai_engine/palette_remap.py`)
-* **Origen:** Algoritmos de indexación de color y color snapping usados en pipelines profesionales de Pixel Art.
-* **Integración:**
-  1. `extract_character_palette(front_img)`: Extrae los centroides RGB exactos de la piel, ojos, cabello y prendas del frontal del personaje.
-  2. `remap_image_to_palette(frame, palette)`: Proyecta cada píxel generado por la U-Net al color canónico más cercano mediante distancia euclidiana mínima en espacio tridimensional.
-* **Beneficio:** Erradica al 100% cualquier color "inventado" o gradiente difuminado. El personaje mantiene una fidelidad cromática idéntica a su ilustración de entrada.
-
-### 3.5. Filtro Morfológico Anti-Hollín con `OpenCV` (`clean_orphan_pixels`)
-* **Origen:** Algoritmo de análisis de componentes conectados (`cv2.connectedComponentsWithStats`).
-* **Integración:** Inspecciona la máscara alfa del sprite generado y elimina cualquier grupo diminuto de píxeles ($< 4$ px) que haya quedado flotando en el vacío.
-* **Beneficio:** Sprites 100% limpios y transparentes listos para importar a Unity sin manchas fantasmas.
-
----
-
-## 4. El Motor Válido: Generador Supervisado Directo (Pix2Pix / UNet 6 Canales)
-
-La solución técnica definitiva es el **Generador Supervisado Píxel a Píxel (`PixelArtUNetGenerator`)**.
-
-### 4.1. Arquitectura de Entrada y Salida
-```
-[FRONTAL DEL PERSONAJE] (3 canales RGB: Identidad, Colores reales, Cabello, Ropa)
-           +
-[MOLDE CANÓNICO DE LA POSE] (3 canales RGB: Silueta exacta, Altura 40px, Suelo fijo)
-           │
-           ▼
-     ┌───────────┐
-     │  U-Net    │  (Entrada: 6 canales | Salida: 4 canales RGBA | Acelerado con Kornia)
-     └─────┬─────┘
-           ▼
-   [REMAPEO DE PALETA + ANTI-HOLLÍN] (pixel_ai_engine/palette_remap.py)
-           ▼
-[SPRITE FINAL 128×128] (Píxeles fieles, fondo alfa transparente estricto)
+```text
+Frontal del personaje (RGB)
+            +
+Molde de la pose (RGB)
+            |
+            v
+Generador U-Net (entrada 6 canales, salida RGBA)
+            |
+            v
+Remapeo de paleta + limpieza de píxeles huérfanos
+            |
+            v
+Frame final 128×128 con transparencia
 ```
 
-### 4.2. Los 4 Candados de Seguridad Implementados
-1. **🔒 Candado 1: Cero Texto, Cero Alucinación:** Entrada directa de 6 canales numéricos (Identidad + Pose).
-2. **🔒 Candado 2: Supremacía del Generador sobre el Discriminador:** Tasa de aprendizaje reducida (`lr * 0.5`) y peso adversarial de solo 5% (`adv_loss * 0.05`), frente a un 95% dominado por **Smooth L1 Color**, **Smooth L1 Alpha** y **Kornia Sobel Edge Loss** sobre 1.008 frames.
-3. **🔒 Candado 3: Blindaje Numérico Anti-NaN:** Clamping estricto de logits a Float32 en rango `[-30.0, 30.0]`.
-4. **🔒 Candado 4: Auditoría Visual en Vivo (4 Columnas) y Récord Histórico:** Tira comparativa en cada época y guardado de `best_generator.pt`.
+El entrenamiento combina:
 
----
+- pérdida de color `Smooth L1`;
+- pérdida de alfa;
+- pérdida de bordes Sobel con Kornia;
+- componente adversarial de peso reducido;
+- `AdamW8bit` cuando `bitsandbytes` está disponible;
+- AMP y protección contra valores no finitos.
 
-## 5. Control de Épocas y Sistema de Respawn (Snapshots cada 10 Épocas)
+Stable Diffusion/Forge y el LoRA experimental permanecen como herramientas auxiliares o históricas. No son el motor recomendado para producir spritesheets rígidos: tienden a cambiar la escala, inventar colores, contaminar el fondo y no respetar con precisión la cuadrícula.
 
-* **Snapshots cada 10 Épocas:** En `checkpoints/snapshots/` se guardan automáticamente `checkpoint_epoch_XXX.pt`, `generator_epoch_XXX.pt` y `preview_epoch_XXX.png`.
-* **Botón y Función de Respawn:** Desde el monitor web de Sprite Studio (`http://localhost:8080`), el usuario puede rebobinar el modelo a cualquier decena anterior si en el futuro se detecta sobreajuste o pérdida de nitidez.
+## Dataset supervisado
 
----
+El estado actual contiene **56 personajes** y **3124 pares de frames válidos** registrados por el tracker. Estas cantidades se leen dinámicamente; pueden crecer al incorporar nuevos personajes.
 
-## 6. Manual Operativo de Sprite Studio (`sprite_studio.py`)
+Cada muestra relaciona:
 
-1. **Iniciar Servidor:**
-   ```bash
-   & "d:\escritorio\diseñador de pixel art\webui forger\system\python\python.exe" "d:\escritorio\diseñador de pixel art\sprite_studio.py"
-   ```
-2. **Acceso Web:** `http://localhost:8080`
-3. **Selección de Motor:** En el Monitor de Entrenamiento, seleccionar **PyTorch UNet (Generador Quirúrgico Local)**.
-4. **Control de Calidad (QC):** En la pestaña de QC, auditar la alineación métrica y la transparencia de las hojas ensambladas.
+1. frontal de identidad;
+2. pose o molde correspondiente;
+3. target real del dataset;
+4. identificador de personaje, variante y número de frame.
+
+La comparación de calidad siempre debe usar el personaje y el frame exactos. No se considera suficiente comparar solamente contra el frontal ni utilizar siempre el frame 0.
+
+## Entrenamiento y checkpoints
+
+El entrenamiento se controla desde la pestaña **Monitor** de Sprite Studio.
+
+Archivos principales:
+
+- `checkpoints/latest_checkpoint.pt`: estado más reciente para reanudar;
+- `checkpoints/best_generator.pt`: mejor punto aceptado por pérdida y reglas de seguridad;
+- `checkpoints/best_quality_generator.pt`: mejor punto aceptado por calidad visual;
+- `checkpoints/last_quality_healthy_checkpoint.pt`: último punto saludable conocido;
+- `checkpoints/recovery_checkpoint.pt`: punto preparado para recuperación;
+- `checkpoints/snapshots/checkpoint_epoch_XXX.pt`: snapshot completo cada 10 épocas;
+- `checkpoints/snapshots/generator_epoch_XXX.pt`: pesos del generador en esa época.
+
+El sistema puede:
+
+- ajustar pesos de pérdida;
+- aumentar el muestreo de ejemplos difíciles;
+- reducir el learning rate;
+- volver al último checkpoint saludable;
+- pausar después de colapsos repetidos;
+- reanudar con optimizador, schedulers y estados RNG restaurados.
+
+Las escrituras de estado y checkpoints son atómicas. En Windows se utilizan temporales únicos y reintentos para tolerar bloqueos breves de antivirus o lectores del archivo, evitando el antiguo `PermissionError` al reemplazar `training_status.json`.
+
+## Auditoría automática durante el entrenamiento
+
+La auditoría ya no depende de cuatro previews fijos.
+
+### Rotación normal
+
+- Se evalúan **10 personajes por época**.
+- Los personajes rotan; los 56 quedan cubiertos aproximadamente cada seis épocas.
+- También rota el frame usado para cada personaje.
+- La ventana acumulada abarca **14 épocas**.
+- Para autorizar un rollback se exigen al menos **2 frames distintos por cada personaje**.
+- El tracker debe alcanzar **100% de los frames registrados**.
+
+### Certificación completa
+
+Cada 10 épocas se revisan los 56 personajes y se genera una comparación completa. Una certificación aprobada significa que supera los pisos configurados en ese momento; no significa necesariamente que sea mejor que todos los checkpoints anteriores.
+
+### Protección del rollback
+
+Una recomendación `ROLLBACK` queda en espera hasta disponer de cobertura suficiente. Esto evita volver atrás por una conclusión obtenida de pocos personajes. Cuando la cobertura está completa, la política puede:
+
+1. confirmar que el deterioro sea sostenido;
+2. volver al checkpoint saludable exacto;
+3. reducir la tasa de aprendizaje;
+4. reanudar automáticamente las épocas restantes;
+5. detener el ciclo si ya ocurrió un colapso anterior y la degradación se repite.
+
+Cuando el estado pasa a `RECUPERACION_LISTA`, Sprite Studio valida el checkpoint, cambia a `RECUPERANDO` y lanza el entrenamiento en modo `resume` sin exigir que el usuario pulse el botón. Conserva el objetivo original: si el rollback vuelve a la época 20 de un ciclo de 500, programa las 480 épocas restantes.
+
+La reanudación automática tiene un intento por cada ruta de recuperación. Nunca ignora una pausa o detención solicitada y no se activa para errores del proceso, checkpoints ausentes, `PAUSADO_QC` o ciclos ya terminados. Puede deshabilitarse iniciando el servidor con `SPRITE_STUDIO_AUTO_RESUME_QC=0`.
+
+## Control de Calidad interactivo
+
+La pestaña **Control de Calidad** tiene dos niveles diferentes.
+
+### Auditoría de hoja
+
+Comprueba la estructura completa del spritesheet:
+
+- cantidad de frames;
+- pureza del canal alfa;
+- contacto con los bordes de las celdas;
+- celdas vacías;
+- comparación visual contra los targets.
+
+Por eso una hoja puede tener 100% de completitud, alfa o márgenes y aun así fallar visualmente. Esos porcentajes técnicos no sustituyen anatomía, rostro, ropa o fidelidad de color.
+
+### Revisión por frame
+
+Cada tarjeta muestra:
+
+- frame generado y target real;
+- métricas principales traducidas al español;
+- problemas detectados;
+- acciones disponibles;
+- diagnóstico e historial explicados en lenguaje natural.
+
+El bloque **Ver explicación e historial** responde cuatro preguntas:
+
+1. **¿Cuál es el resultado?** Por ejemplo: aprobada, rechazada, necesita correcciones o enviada a refuerzo.
+2. **¿Qué está mal?** Explica si faltan rasgos del rostro, si los ojos no coinciden, si el cuerpo está deformado, si hay ruido, colores incorrectos, contornos cortados o problemas de transparencia.
+3. **¿Qué conviene hacer?** Recomienda regenerar, reevaluar o enviar a refuerzo según el tipo de defecto.
+4. **¿Qué ocurrió antes?** Traduce cada evaluación, rechazo, aprobación, regeneración y envío a refuerzo como una cronología legible.
+
+Los datos JSON originales continúan disponibles en **Ver datos técnicos (para desarrolladores)**.
+
+### Significado de las métricas
+
+| Métrica | Explicación para el usuario |
+|---|---|
+| Calidad general | Resumen conservador de toda la comparación. |
+| Cuerpo y anatomía | Forma, proporciones y presencia de las partes corporales. |
+| Silueta | Coincidencia del contorno exterior con el target. |
+| Rostro y ojos | Presencia, ubicación y fidelidad de los rasgos faciales. |
+| Ropa | Conservación de prendas y detalles del vestuario. |
+| Colores | Fidelidad respecto de la paleta original. |
+| Transparencia | Ausencia de halos y píxeles semitransparentes no deseados. |
+| Detalles pequeños | Ojos, adornos, pliegues y píxeles distintivos. |
+| Contorno | Continuidad, grosor y limpieza de los bordes. |
+| Objetos | Presencia y fidelidad de utensilios u otros props. |
+
+La explicación evita afirmar que “falta la cara” cuando la métrica solo demuestra una diferencia moderada. Esa frase se reserva para puntuaciones faciales extremadamente bajas; en los demás casos se informa que los ojos, la boca o la forma no coinciden suficientemente.
+
+### Estados y acciones de una muestra
+
+- **Aprobar:** acepta una muestra que supera la calidad mínima y no posee fallos bloqueantes.
+- **Rechazar:** la mueve fuera de la vista activa y la conserva en la pestaña **Rechazados** y en **Historial**. No se borra evidencia.
+- **Enviar a refuerzo:** la registra como ejemplo difícil para el entrenamiento y la mueve a la vista **En refuerzo**.
+- **Regenerar frame:** crea candidatos aislados; no reemplaza el frame actual hasta que se aplique explícitamente un candidato.
+- **Reevaluar:** ejecuta nuevamente la comparación contra el target vigente.
+- **Seleccionar todos:** selecciona o deselecciona todas las tarjetas visibles en el filtro actual.
+
+Rechazar y enviar a refuerzo son acciones distintas. Una muestra rechazada no entra automáticamente al entrenamiento; debe enviarse a refuerzo cuando se quiera que el modelo aprenda de ella.
+
+## Cómo interpretar QUALITY GUIDANCE
+
+Ejemplo:
+
+```text
+Problema principal: palette
+Severidad: CRITICAL
+Acción recomendada: ROLLBACK
+Acción autorizada: CONTINUE
+rollback EN ESPERA
+```
+
+Significa que los colores son el mayor cuello de botella y el controlador recomienda volver a un punto anterior, pero todavía no reunió la cobertura requerida. `CONTINUE` no significa que la muestra sea buena; significa que la intervención está temporalmente bloqueada por confirmación, cobertura, cooldown o presupuesto de acciones.
+
+## Sobreentrenamiento
+
+El número solicitado de épocas es un máximo, no una meta obligatoria. Debe conservarse el checkpoint que mejora la calidad visual, aunque la ejecución tenga épocas restantes.
+
+Señales de deterioro:
+
+- `G_Loss` y `Color_L1` suben durante varias épocas;
+- calidad general, anatomía o silueta caen de forma sostenida;
+- una categoría mejora a costa de varias otras;
+- aumenta la cantidad de pasos AMP omitidos;
+- la calidad queda por debajo del mejor checkpoint durante cinco o más épocas.
+
+Los snapshots, rollback y `best_quality_generator.pt` protegen el trabajo, pero la auditoría actual utiliza targets pertenecientes al dataset supervisado. Para medir sobreajuste clásico con total rigor todavía se recomienda incorporar un conjunto fijo de validación que nunca participe en el gradiente.
+
+## Archivos principales
+
+| Archivo | Responsabilidad |
+|---|---|
+| `sprite_studio.py` | Servidor web y API local. |
+| `sprite_studio.html` | Interfaz de generación, entrenamiento y QC. |
+| `pixel_ai_engine/train_supervised.py` | Ciclo de entrenamiento y auditoría rotativa. |
+| `pixel_ai_engine/quality_guidance.py` | Diagnóstico, tendencias e intervenciones. |
+| `pixel_ai_engine/quality_gate.py` | Evaluación visual por frame. |
+| `pixel_ai_engine/frame_quality_review.py` | Persistencia y estados de revisión. |
+| `pixel_ai_engine/interactive_qc.py` | Acciones individuales y por lote. |
+| `pixel_ai_engine/frame_regeneration.py` | Candidatos de regeneración. |
+| `pixel_ai_engine/hard_examples.py` | Cola de ejemplos enviados a refuerzo. |
+| `pixel_ai_engine/training_recovery.py` | Escrituras atómicas y recuperación segura. |
+| `training_status.json` | Estado, historial y QUALITY GUIDANCE actual. |
+| `training_logs/training.log` | Registro legible de las ejecuciones. |
+| `frame_review_queue.jsonl` | Historial persistente de revisiones por frame. |
+
+## Puesta en marcha
+
+Desde PowerShell, en la raíz del proyecto:
+
+```powershell
+& ".\webui forger\system\python\python.exe" ".\sprite_studio.py"
+```
+
+Abrir:
+
+```text
+http://localhost:8080/sprite_studio.html
+```
+
+## Pruebas
+
+Ejecutar con el mismo Python utilizado por el proyecto:
+
+```powershell
+& ".\webui forger\system\python\python.exe" -m pytest -q
+```
+
+Las pruebas cubren calidad, recuperación, revisión por frame, regeneración, refuerzo, selección por lotes y endpoints del servidor.
+
+## Regla operativa recomendada
+
+No aprobar una hoja solo porque completitud, alfa y márgenes indiquen 100%. Primero revisar la comparación visual y las tarjetas por frame. Cuando una muestra falle:
+
+1. leer la explicación natural;
+2. rechazarla si no debe utilizarse;
+3. regenerarla si el defecto es estructural;
+4. enviarla a refuerzo si el fallo se repite;
+5. reevaluar la nueva versión antes de aprobarla.

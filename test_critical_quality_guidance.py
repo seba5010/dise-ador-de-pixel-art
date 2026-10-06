@@ -61,7 +61,13 @@ def test_best_quality_checkpoint_is_independent_and_only_improves(monkeypatch, t
         "palette": 90, "alpha": 99, "micro_detail": 74, "outline": 78,
     }
     first = train_supervised._maybe_save_quality_checkpoint(
-        {"guidance": {"quality_vector": high_vector}, "guidance_state": {}},
+        {
+            "guidance": {
+                "quality_vector": high_vector,
+                "audit_coverage": {"ready_for_rollback": True},
+            },
+            "guidance_state": {},
+        },
         epoch=7,
         loss=2.0,
         best_loss=1.5,

@@ -848,6 +848,25 @@
     .fqr-metric { padding:5px; background:#151a26; border-radius:4px; text-align:center; font:600 10px var(--mono); }
     .fqr-issues { color:#fbbf24; font-size:10px; min-height:14px; }
     .fqr-diagnosis { white-space:pre-wrap; max-height:170px; overflow:auto; font:10px var(--mono); color:#aeb9cc; }
+    .fqr-diagnosis-details { border-top:1px solid #252d40; padding-top:8px; }
+    .fqr-diagnosis-details > summary { cursor:pointer; font-size:11px; font-weight:700; color:var(--accent); }
+    .fqr-human-diagnosis { margin-top:9px; display:flex; flex-direction:column; gap:8px; color:#dbe4f3; font-size:11px; line-height:1.45; }
+    .fqr-verdict { border:1px solid #33405a; border-left:4px solid #f59e0b; border-radius:6px; padding:9px 10px; background:#121824; }
+    .fqr-verdict.approved { border-left-color:#10b981; background:rgba(16,185,129,0.08); }
+    .fqr-verdict.rejected { border-left-color:#ef4444; background:rgba(239,68,68,0.08); }
+    .fqr-verdict.reinforcement { border-left-color:#3b82f6; background:rgba(59,130,246,0.08); }
+    .fqr-verdict strong { display:block; color:#fff; font-size:12px; margin-bottom:3px; }
+    .fqr-diagnosis-block { background:#101620; border:1px solid #252d40; border-radius:6px; padding:9px 10px; }
+    .fqr-diagnosis-block h4 { margin:0 0 6px; color:#f8fafc; font-size:11px; }
+    .fqr-reason-list { margin:0; padding-left:18px; }
+    .fqr-reason-list li + li { margin-top:5px; }
+    .fqr-recommendation { color:#bfdbfe; }
+    .fqr-history-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
+    .fqr-history-item { border-left:3px solid #475569; padding:2px 0 2px 9px; }
+    .fqr-history-item strong { color:#f8fafc; }
+    .fqr-history-time { color:var(--dim); font-size:9px; margin-top:2px; }
+    .fqr-technical { margin-top:2px; }
+    .fqr-technical > summary { cursor:pointer; color:var(--dim); font-size:10px; }
     .fqr-candidates { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:6px; }
     .fqr-candidate { border:1px solid #293248; border-radius:5px; padding:6px; background:#111723; font-size:9px; }
     .fqr-candidate.safe { border-color:#10b981; }
@@ -2361,6 +2380,238 @@
       })[char]);
     }
 
+    const FQR_METRIC_LABELS = {
+      global: 'Calidad general', anatomy: 'Cuerpo y anatomía', silhouette: 'Silueta',
+      pose: 'Postura', face: 'Rostro y ojos', hair: 'Cabello o gorro', clothing: 'Ropa',
+      arms_hands: 'Brazos y manos', feet: 'Pies', props: 'Objetos', palette: 'Colores',
+      alpha: 'Transparencia', micro_detail: 'Detalles pequeños', outline: 'Contorno',
+      training_stability: 'Estabilidad del entrenamiento'
+    };
+
+    const FQR_STATUS_LABELS = {
+      OK: 'Lista para revisión', NEEDS_REVIEW: 'Necesita correcciones',
+      REEVALUATED: 'Reevaluada', REGENERATED: 'Regenerada', APPROVED: 'Aprobada',
+      REJECTED: 'Rechazada', SENT_TO_REINFORCEMENT: 'Enviada a refuerzo', ERROR: 'No evaluable'
+    };
+
+    const FQR_DEFAULT_TARGETS = {
+      global: 85, anatomy: 75, silhouette: 85, pose: 85, face: 75, hair: 75,
+      clothing: 80, arms_hands: 75, feet: 80, props: 75, palette: 85,
+      alpha: 99.5, micro_detail: 75, outline: 85, training_stability: 90
+    };
+
+    function fqrMetricLabel(name) {
+      return FQR_METRIC_LABELS[name] || String(name || 'Métrica').replaceAll('_', ' ');
+    }
+
+    function fqrStatusLabel(status) {
+      return FQR_STATUS_LABELS[String(status || '')] || String(status || 'Sin estado').replaceAll('_', ' ');
+    }
+
+    function fqrScore(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function fqrScoreText(value) {
+      const number = fqrScore(value);
+      return number === null ? 'sin medición' : `${number.toFixed(1)}%`;
+    }
+
+    function fqrMetricReason(category, review) {
+      const quality = review.quality || {};
+      const diagnosis = review.diagnosis || {};
+      const deficits = diagnosis.deficits || {};
+      const value = fqrScore(quality[category]);
+      const deficit = fqrScore(deficits[category]);
+      const target = value !== null && deficit !== null && deficit > 0
+        ? Math.min(100, value + deficit)
+        : FQR_DEFAULT_TARGETS[category];
+      const measured = value === null ? 'No se pudo medir este aspecto.' : `Obtuvo ${value.toFixed(1)}%${target ? `; se espera al menos ${target.toFixed(1)}%` : ''}.`;
+      const low = value === null ? false : value < 50;
+      const veryLow = value === null ? false : value < 25;
+      const explanations = {
+        global: 'La muestra acumula varias diferencias frente al diseño original y todavía no alcanza la calidad necesaria.',
+        anatomy: low
+          ? 'El cuerpo está incompleto, deformado o con partes ubicadas de manera incorrecta respecto del original.'
+          : 'La forma o proporción del cuerpo no coincide suficientemente con el personaje original.',
+        silhouette: 'La forma exterior del personaje cambia demasiado: puede haber volumen de más, partes faltantes o una postura desalineada.',
+        pose: 'La postura no representa con suficiente fidelidad el movimiento esperado para este frame.',
+        face: veryLow
+          ? 'El rostro está casi ausente o no puede reconocerse.'
+          : low
+            ? 'El rostro está incompleto; faltan o están mal ubicados los ojos, la boca u otros rasgos principales.'
+            : 'Los ojos, la boca o la forma del rostro no coinciden suficientemente con el diseño original.',
+        hair: 'El cabello o el gorro perdió su forma, volumen o detalles característicos.',
+        clothing: 'La ropa no conserva suficientemente el diseño, la forma o los detalles del original.',
+        arms_hands: 'Los brazos o las manos están incompletos, deformados o en una posición incorrecta.',
+        feet: 'Los pies no tienen la forma o el apoyo esperado para esta pose.',
+        props: 'El objeto que acompaña al personaje falta, está incompleto o no coincide con el original.',
+        palette: 'Los colores se alejaron de la paleta original del personaje.',
+        alpha: 'La transparencia contiene halos o píxeles parcialmente transparentes que ensucian el sprite.',
+        micro_detail: 'Faltan detalles pequeños importantes, como ojos, adornos, pliegues o píxeles distintivos.',
+        outline: 'El contorno tiene cortes, grosor irregular o bordes poco definidos.',
+        training_stability: 'El modelo está produciendo resultados inestables entre evaluaciones.'
+      };
+      return `<strong>${fqrEscape(fqrMetricLabel(category))}:</strong> ${fqrEscape(explanations[category] || 'Este aspecto no coincide suficientemente con el target del dataset.')} ${fqrEscape(measured)}`;
+    }
+
+    function fqrIssueReason(issue, review) {
+      if (issue === 'FACE_STRUCTURE_FAIL') return fqrMetricReason('face', review);
+      if (issue === 'BODY_STRUCTURE_FAIL') return fqrMetricReason('anatomy', review);
+      if (issue === 'ALPHA_FAIL') return fqrMetricReason('alpha', review);
+      const reasons = {
+        VISUAL_NOISE_FAIL: '<strong>Limpieza visual:</strong> hay manchas, píxeles sueltos o ruido que no aparece en el diseño original.',
+        BORDER_TOUCH_TOP: '<strong>Margen superior:</strong> el personaje toca o se sale del borde superior de la celda.',
+        BORDER_TOUCH_BOTTOM: '<strong>Margen inferior:</strong> el personaje toca o se sale del borde inferior de la celda.',
+        BORDER_TOUCH_LEFT: '<strong>Margen izquierdo:</strong> el personaje toca o se sale del borde izquierdo de la celda.',
+        BORDER_TOUCH_RIGHT: '<strong>Margen derecho:</strong> el personaje toca o se sale del borde derecho de la celda.'
+      };
+      return reasons[issue] || '';
+    }
+
+    function fqrIssueShortLabel(issue) {
+      const labels = {
+        ALPHA_FAIL: 'Transparencia sucia', FACE_STRUCTURE_FAIL: 'Rostro incompleto',
+        BODY_STRUCTURE_FAIL: 'Cuerpo incorrecto', VISUAL_NOISE_FAIL: 'Ruido visual',
+        BORDER_TOUCH_TOP: 'Toca borde superior', BORDER_TOUCH_BOTTOM: 'Toca borde inferior',
+        BORDER_TOUCH_LEFT: 'Toca borde izquierdo', BORDER_TOUCH_RIGHT: 'Toca borde derecho'
+      };
+      return labels[issue] || fqrMetricLabel(issue);
+    }
+
+    function fqrVisibleIssueLabels(issues) {
+      const values = Array.isArray(issues) ? issues : [];
+      const issueSet = new Set(values);
+      const hiddenCategories = new Set();
+      if (issueSet.has('FACE_STRUCTURE_FAIL')) hiddenCategories.add('face');
+      if (issueSet.has('BODY_STRUCTURE_FAIL')) hiddenCategories.add('anatomy');
+      if (issueSet.has('ALPHA_FAIL')) hiddenCategories.add('alpha');
+      return Array.from(new Set(
+        values.filter(issue => !hiddenCategories.has(issue)).map(fqrIssueShortLabel)
+      ));
+    }
+
+    function fqrCandidateViolationLabel(code) {
+      const labels = {
+        anatomy_below_floor: 'anatomía insuficiente', face_below_floor: 'rostro insuficiente',
+        silhouette_below_floor: 'silueta insuficiente', palette_below_floor: 'colores insuficientes',
+        alpha_below_floor: 'transparencia insuficiente', outline_below_floor: 'contorno insuficiente',
+        micro_detail_below_floor: 'faltan detalles pequeños', global_below_floor: 'calidad general insuficiente',
+        critical_image_issue: 'fallo visual crítico', quality_regression: 'empeora la calidad anterior',
+        anatomy_regression: 'empeora la anatomía', face_regression: 'empeora el rostro',
+        palette_regression: 'empeora los colores', alpha_regression: 'empeora la transparencia'
+      };
+      return labels[code] || String(code || 'fallo no especificado').replaceAll('_', ' ');
+    }
+
+    function fqrDiagnosisReasons(review) {
+      const diagnosis = review.diagnosis || {};
+      const issues = Array.isArray(review.issues) ? review.issues : [];
+      const blockingCodes = issues.filter(issue => fqrIssueReason(issue, review));
+      const represented = new Set();
+      if (blockingCodes.includes('FACE_STRUCTURE_FAIL')) represented.add('face');
+      if (blockingCodes.includes('BODY_STRUCTURE_FAIL')) represented.add('anatomy');
+      if (blockingCodes.includes('ALPHA_FAIL')) represented.add('alpha');
+      const categories = [
+        diagnosis.primary_problem,
+        ...(Array.isArray(diagnosis.critical_breaches) ? diagnosis.critical_breaches : []),
+        ...(Array.isArray(diagnosis.secondary_problems) ? diagnosis.secondary_problems : []),
+        ...issues.filter(issue => FQR_METRIC_LABELS[issue])
+      ].filter(Boolean);
+      const reasons = blockingCodes.map(issue => fqrIssueReason(issue, review));
+      categories.forEach(category => {
+        if (!represented.has(category)) {
+          represented.add(category);
+          reasons.push(fqrMetricReason(category, review));
+        }
+      });
+      return Array.from(new Set(reasons)).slice(0, 6);
+    }
+
+    function fqrRecommendation(review) {
+      const status = String(review.status || '');
+      const primary = String(review.diagnosis?.primary_problem || '');
+      const issues = new Set(review.issues || []);
+      if (status === 'APPROVED') return 'No necesita correcciones. La muestra puede conservarse y usarse.';
+      if (status === 'REJECTED') return 'Debe permanecer fuera de uso hasta que se regenere o corrija y vuelva a ser evaluada.';
+      if (status === 'SENT_TO_REINFORCEMENT') return 'Ya está marcada como ejemplo difícil. El modelo debe reforzar este caso antes de generar una nueva versión.';
+      if (status === 'ERROR' || !review.audit_available) return 'Comprueba que existan tanto el frame generado como su target del dataset y vuelve a evaluar.';
+      if (issues.has('FACE_STRUCTURE_FAIL') || issues.has('BODY_STRUCTURE_FAIL') || ['face', 'anatomy', 'silhouette', 'pose'].includes(primary)) {
+        return 'Conviene regenerar el frame. Si el mismo fallo se repite, envíalo también a refuerzo para que el modelo aprenda ese caso.';
+      }
+      if (issues.has('VISUAL_NOISE_FAIL') || ['palette', 'outline', 'micro_detail', 'alpha'].includes(primary)) {
+        return 'Envía la muestra a refuerzo y genera una nueva versión antes de aprobarla.';
+      }
+      return 'Revisa visualmente las diferencias, regenera si son estructurales o envía a refuerzo si el defecto se repite.';
+    }
+
+    function fqrVerdict(review, reasons) {
+      const status = String(review.status || 'NEEDS_REVIEW');
+      const score = fqrScore(review.score_total ?? review.quality?.global);
+      const firstReason = reasons.length ? reasons[0].replace(/<[^>]*>/g, '') : '';
+      if (status === 'APPROVED') return { kind: 'approved', title: 'Muestra aprobada', text: `Cumple la revisión de calidad${score === null ? '' : ` con ${score.toFixed(1)}%`}.` };
+      if (status === 'REJECTED') return { kind: 'rejected', title: 'Muestra rechazada', text: firstReason || 'Fue rechazada manualmente y no debe usarse sin corregirla.' };
+      if (status === 'SENT_TO_REINFORCEMENT') return { kind: 'reinforcement', title: 'Muestra enviada a refuerzo', text: firstReason || 'El modelo usará este caso como ejemplo difícil.' };
+      if (status === 'ERROR' || !review.audit_available) return { kind: 'rejected', title: 'No se pudo evaluar la muestra', text: 'Falta el frame generado, el target o alguno de los archivos no puede abrirse.' };
+      if (score !== null && score >= 85 && reasons.length === 0) return { kind: 'approved', title: 'Muestra lista para revisión final', text: `La comparación automática alcanzó ${score.toFixed(1)}%.` };
+      return { kind: 'warning', title: 'Muestra no apta para aprobar todavía', text: firstReason || `La calidad general es ${fqrScoreText(score)} y necesita correcciones.` };
+    }
+
+    function fqrHistoryDescription(event) {
+      const action = String(event?.action || 'event');
+      const score = fqrScore(event?.score);
+      const scoreText = score === null ? '' : ` Resultado: ${score.toFixed(1)}%.`;
+      const descriptions = {
+        registered: 'La muestra se agregó a la cola de control de calidad.',
+        evaluated: `Se comparó automáticamente con el target del dataset.${scoreText}`,
+        reevaluated: `Se volvió a evaluar después de una revisión o cambio.${scoreText}`,
+        approved: `La muestra fue aprobada${event.actor ? ` por ${event.actor}` : ''}.${scoreText}`,
+        rejected: `La muestra fue rechazada${event.actor ? ` por ${event.actor}` : ''}.${event.reason ? ` Motivo: ${event.reason}.` : ''}`,
+        regenerated: `Se generaron ${event.candidate_count ?? 'nuevos'} candidato(s) para reemplazar el frame defectuoso.`,
+        candidate_applied: `Se aplicó el candidato ${event.candidate_id || 'seleccionado'} como nueva versión del frame.`,
+        regeneration_discarded: 'Se descartaron los candidatos regenerados y se conservó la versión anterior.',
+        sent_to_reinforcement: 'La muestra se envió a refuerzo para que el modelo aprenda de este fallo.'
+      };
+      return descriptions[action] || `Se registró la acción: ${action.replaceAll('_', ' ')}.`;
+    }
+
+    function fqrHistoryTitle(action) {
+      const titles = {
+        registered: 'Muestra registrada', evaluated: 'Evaluación automática', reevaluated: 'Reevaluación',
+        approved: 'Aprobación', rejected: 'Rechazo', regenerated: 'Regeneración',
+        candidate_applied: 'Nueva versión aplicada', regeneration_discarded: 'Regeneración descartada',
+        sent_to_reinforcement: 'Envío a refuerzo'
+      };
+      return titles[action] || 'Acción registrada';
+    }
+
+    function fqrFormatTime(value) {
+      if (!value) return 'Fecha no disponible';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'medium' });
+    }
+
+    function fqrHumanDiagnosis(review) {
+      const reasons = fqrDiagnosisReasons(review);
+      const verdict = fqrVerdict(review, reasons);
+      const history = Array.isArray(review.history) ? review.history : [];
+      const reasonItems = reasons.length
+        ? reasons.map(reason => `<li>${reason}</li>`).join('')
+        : '<li>No se detectaron fallos automáticos importantes.</li>';
+      const historyItems = history.length
+        ? history.slice().reverse().map(event => `<li class="fqr-history-item"><strong>${fqrEscape(fqrHistoryTitle(event.action))}</strong><div>${fqrEscape(fqrHistoryDescription(event))}</div><div class="fqr-history-time">${fqrEscape(fqrFormatTime(event.time))}</div></li>`).join('')
+        : '<li class="fqr-history-item">Todavía no hay acciones registradas.</li>';
+      const pose = review.pose?.action_desc ? `<div><strong>Pose evaluada:</strong> ${fqrEscape(review.pose.action_desc)}.</div>` : '';
+      return `<div class="fqr-human-diagnosis">
+        <div class="fqr-verdict ${fqrEscape(verdict.kind)}"><strong>${fqrEscape(verdict.title)}</strong><div>${fqrEscape(verdict.text)}</div>${pose}</div>
+        <div class="fqr-diagnosis-block"><h4>Qué está mal y por qué</h4><ul class="fqr-reason-list">${reasonItems}</ul></div>
+        <div class="fqr-diagnosis-block fqr-recommendation"><h4>Qué conviene hacer</h4>${fqrEscape(fqrRecommendation(review))}</div>
+        <div class="fqr-diagnosis-block"><h4>Historial de esta muestra</h4><ol class="fqr-history-list">${historyItems}</ol></div>
+        <details class="fqr-technical"><summary>Ver datos técnicos (para desarrolladores)</summary><pre class="fqr-diagnosis">${fqrEscape(JSON.stringify(review.diagnosis || {}, null, 2))}\n\n${fqrEscape(JSON.stringify(review.history || [], null, 2))}</pre></details>
+      </div>`;
+    }
+
     function fqrAssetUrl(path) {
       if (!path) return '';
       const normalized = String(path).replace(/\\/g, '/');
@@ -2588,14 +2839,14 @@
         const metrics = metricNames.map(name => {
           const value = quality[name];
           const shown = value === null || value === undefined ? 'N/D' : `${Number(value).toFixed(1)}%`;
-          return `<div class="fqr-metric"><span style="color:var(--dim)">${fqrEscape(name)}</span><br>${fqrEscape(shown)}</div>`;
+          return `<div class="fqr-metric"><span style="color:var(--dim)">${fqrEscape(fqrMetricLabel(name))}</span><br>${fqrEscape(shown)}</div>`;
         }).join('');
         const generatedUrl = fqrAssetUrl(review.generated_frame_path);
         const targetUrl = fqrAssetUrl(review.target_frame_path);
         const generated = generatedUrl ? `<img src="${fqrEscape(generatedUrl)}" alt="Frame generado ${Number(review.frame_idx)}">` : '';
         const target = targetUrl ? `<img src="${fqrEscape(targetUrl)}" alt="Target ${Number(review.frame_idx)}">` : '<div style="padding:30px 0;color:#ef4444">TARGET NO DISPONIBLE</div>';
-        const issues = (review.issues || []).map(fqrEscape).join(' · ') || 'Sin problemas críticos registrados';
-        const diagnosis = fqrEscape(JSON.stringify(review.diagnosis || {}, null, 2));
+        const issues = fqrVisibleIssueLabels(review.issues).map(fqrEscape).join(' · ') || 'Sin problemas importantes detectados';
+        const humanDiagnosis = fqrHumanDiagnosis(review);
         const id = fqrEscape(review.review_id);
         const frameNumber = Number(review.frame_idx);
         const isSelected = qcState.selectedReviewIds.has(String(review.review_id));
@@ -2603,7 +2854,7 @@
         const ranking = regeneration.ranking || {};
         const candidates = (ranking.candidates || []).map(candidate => {
           const url = fqrAssetUrl(candidate.path);
-          const violations = (candidate.violations || []).map(fqrEscape).join(', ') || 'Sin regresiones críticas';
+          const violations = (candidate.violations || []).map(code => fqrEscape(fqrCandidateViolationLabel(code))).join(', ') || 'Sin regresiones críticas';
           return `<div class="fqr-candidate ${candidate.safe ? 'safe' : 'unsafe'}">
             ${url ? `<img src="${fqrEscape(url)}" alt="${fqrEscape(candidate.candidate_id)}">` : ''}
             <strong>${fqrEscape(candidate.candidate_id)}</strong><br>
@@ -2621,15 +2872,15 @@
         return `<article class="fqr-card ${fqrEscape(review.status)}">
           <div class="fqr-card-head">
             <strong><input type="checkbox" class="fqr-select" value="${id}" data-frame="${frameNumber}" aria-label="Seleccionar frame ${frameNumber}" onchange="toggleFrameReviewSelection(this.value, this.dataset.frame, this.checked)" ${isSelected ? 'checked' : ''}> Frame ${String(frameNumber).padStart(3, '0')} · ${fqrEscape(review.character_id || 'sin identidad')}</strong>
-            <span class="fqr-status">${fqrEscape(review.status)}</span>
+            <span class="fqr-status">${fqrEscape(fqrStatusLabel(review.status))}</span>
           </div>
-          <div style="font:10px var(--mono);color:var(--dim)">${fqrEscape(review.variant || 'sin variante')} · score ${review.score_total ?? 'N/D'} · severidad ${fqrEscape(review.severity || 'N/D')}</div>
+          <div style="font:10px var(--mono);color:var(--dim)">${fqrEscape(review.variant || 'sin variante')} · calidad ${review.score_total ?? 'N/D'} · gravedad ${fqrEscape(({low:'baja',medium:'media',high:'alta',critical:'crítica'})[review.severity] || review.severity || 'N/D')}</div>
           <div class="fqr-images">
             <div class="fqr-image">${generated}<span>GENERADO</span></div>
             <div class="fqr-image">${target}<span>TARGET DEL DATASET</span></div>
           </div>
           <div class="fqr-metrics">${metrics}</div>
-          <div class="fqr-issues">${issues}</div>
+          <div class="fqr-issues"><strong>Problemas detectados:</strong> ${issues}</div>
           ${regenerationPanel}
           <div class="fqr-actions">
             <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reevaluate')">Reevaluar</button>
@@ -2639,7 +2890,7 @@
             <button class="qc-mini-btn" onclick="frameReviewAction('${id}', 'reject')">Rechazar</button>
             ${regenerationActions}
           </div>
-          <details><summary style="cursor:pointer;font-size:10px;color:var(--accent)">Ver diagnóstico e historial</summary><pre class="fqr-diagnosis">${diagnosis}\n\n${fqrEscape(JSON.stringify(review.history || [], null, 2))}</pre></details>
+          <details class="fqr-diagnosis-details"><summary>Ver explicación e historial</summary>${humanDiagnosis}</details>
         </article>`;
       }).join('');
     }

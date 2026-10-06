@@ -515,6 +515,10 @@ class GuidanceInterventionPolicy:
         critical_breaches = (
             list(diagnosis.get("critical_breaches", [])) if isinstance(diagnosis, Mapping) else []
         )
+        audit_coverage = (guidance or {}).get("audit_coverage")
+        coverage_ready = bool(
+            isinstance(audit_coverage, Mapping) and audit_coverage.get("ready_for_rollback")
+        )
         if recommendation == "ROLLBACK" and severity == "critical":
             critical_streak += 1
         else:
@@ -528,7 +532,10 @@ class GuidanceInterventionPolicy:
                 or trend == "COLLAPSE"
                 or critical_streak >= self.critical_confirmations
             )
-            if not rollback_ready:
+            if not coverage_ready:
+                authorized = "CONTINUE"
+                reason = "insufficient_dataset_coverage"
+            elif not rollback_ready:
                 authorized = "CONTINUE"
                 reason = "awaiting_critical_confirmation"
             elif rollback_count >= self.max_rollbacks:
@@ -1104,6 +1111,10 @@ class QualityGuidanceController:
             "training_modified": False,
             "reinforcement_rounds_remaining": self.max_reinforcement_rounds,
         }
+        if isinstance(metrics, Mapping) and isinstance(metrics.get("audit_coverage"), Mapping):
+            decision["audit_coverage"] = dict(metrics["audit_coverage"])
+        if isinstance(metrics, Mapping) and isinstance(metrics.get("full_certification"), Mapping):
+            decision["full_certification"] = dict(metrics["full_certification"])
         if epoch is not None:
             decision["epoch"] = int(epoch)
 

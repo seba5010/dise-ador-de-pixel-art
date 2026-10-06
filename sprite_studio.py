@@ -71,7 +71,7 @@ from pixel_ai_engine.frame_quality_review import (
 from pixel_ai_engine.frame_regeneration import FrameRegenerationManager
 from pixel_ai_engine.hard_examples import HardExampleQueue
 from pixel_ai_engine.interactive_qc import InteractiveQualityControlService
-from pixel_ai_engine.training_recovery import write_status_file
+from pixel_ai_engine.training_recovery import load_status_file, write_status_file
 
 PORT = 8080
 ACTIVE_JOB = {
@@ -96,6 +96,7 @@ QC_SERVICE = InteractiveQualityControlService(
 JOB_LOCK = threading.Lock()
 GLOBAL_TRAINING_PROC = None
 LAST_START_TIME = 0.0
+TRAINING_PROCESS_LOCK = threading.RLock()
 SERVER_HOST = os.environ.get("SPRITE_STUDIO_HOST", "127.0.0.1")
 TRAINING_LOG_FILE = PROJECT_ROOT / "training_logs" / "training.log"
 ACCESS_LOG_FILE = PROJECT_ROOT / "training_logs" / "access.log"
@@ -106,6 +107,9 @@ QUALITY_COMPARISON_CACHE: Dict[str, Dict[str, Any]] = {}
 QUALITY_COMPARISON_CACHE_LOCK = threading.RLock()
 QUALITY_REFERENCE_PALETTE_CACHE: Dict[Tuple[str, int, int], Any] = {}
 VISUAL_QUALITY_THRESHOLD = 85.0
+AUTO_RESUME_QC_RECOVERY = os.environ.get("SPRITE_STUDIO_AUTO_RESUME_QC", "1").strip().lower() not in {"0", "false", "no", "off"}
+_AUTO_RESUME_QC_MAX_RAW = os.environ.get("SPRITE_STUDIO_AUTO_RESUME_QC_MAX_ATTEMPTS", "1").strip()
+AUTO_RESUME_QC_MAX_ATTEMPTS = max(1, int(_AUTO_RESUME_QC_MAX_RAW)) if _AUTO_RESUME_QC_MAX_RAW.isdigit() else 1
 
 
 def write_access_event(client_ip: str, user_agent: str, event: str, target: str, details: str = "") -> None:
@@ -174,7 +178,116 @@ def release_server_lock() -> None:
     except (OSError, ValueError):
         pass
 
-def _forward_training_output(process: subprocess.Popen) -> None:
+
+def _command_option(command: List[str], option: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        index = command.index(option)
+    except ValueError:
+        return default
+    return command[index + 1] if index + 1 < len(command) else default
+
+
+def _build_qc_auto_resume_command(command: List[str], status_data: Dict[str, Any]) -> Optional[List[str]]:
+    """Build one bounded resume command for a QC-prepared recovery route."""
+    if not AUTO_RESUME_QC_RECOVERY or len(command) < 2:
+        return None
+    if Path(str(command[1])).name.lower() != "train_supervised.py":
+        return None
+    if str(status_data.get("status", "")).upper() != "RECUPERACION_LISTA":
+        return None
+    recovery = status_data.get("recovery")
+    if not isinstance(recovery, dict) or not recovery.get("active"):
+        return None
+    attempts = int(recovery.get("auto_resume_attempts", 0) or 0)
+    if attempts >= AUTO_RESUME_QC_MAX_ATTEMPTS:
+        return None
+    source_epoch = int(recovery.get("source_epoch", status_data.get("epoch", 0)) or 0)
+    total_epochs = int(status_data.get("total_epochs", 0) or 0)
+    remaining_epochs = total_epochs - source_epoch
+    if source_epoch < 0 or remaining_epochs <= 0:
+        return None
+    batch_size = max(1, int(_command_option(command, "--batch_size", "4") or 4))
+    resume_command = [
+        str(command[0]),
+        str(command[1]),
+        "--epochs", str(remaining_epochs),
+        "--batch_size", str(batch_size),
+        "--mode", "resume",
+    ]
+    requested_lr = _command_option(command, "--lr")
+    if requested_lr is not None:
+        resume_command.extend(["--lr", str(requested_lr)])
+    return resume_command
+
+
+def _append_training_supervisor_log(message: str) -> None:
+    TRAINING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    line = f"[Sprite Studio] {message}"
+    print(line, flush=True)
+    with open(TRAINING_LOG_FILE, "a", encoding="utf-8") as log_file:
+        log_file.write(line + "\n")
+
+
+def _maybe_auto_resume_qc_recovery(
+    previous_command: List[str],
+    process_env: Dict[str, str],
+    *,
+    return_code: int = 0,
+    trigger: str = "process_exit",
+) -> Optional[subprocess.Popen]:
+    """Resume a valid QC rollback automatically without overriding user pause/stop."""
+    global GLOBAL_TRAINING_PROC, LAST_START_TIME
+    if return_code != 0:
+        return None
+    stop_flag = PROJECT_ROOT / "stop_training.flag"
+    pause_flag = PROJECT_ROOT / "pause_training.flag"
+    if stop_flag.exists() or pause_flag.exists():
+        return None
+    status_file = PROJECT_ROOT / "training_status.json"
+    status_data = load_status_file(status_file)
+    resume_command = _build_qc_auto_resume_command(previous_command, status_data)
+    recovery_checkpoint = get_active_recovery_checkpoint()
+    if resume_command is None or recovery_checkpoint is None:
+        return None
+
+    recovery = dict(status_data.get("recovery") or {})
+    attempt = int(recovery.get("auto_resume_attempts", 0) or 0) + 1
+    recovery["auto_resume_attempts"] = attempt
+    recovery["auto_resume_max_attempts"] = AUTO_RESUME_QC_MAX_ATTEMPTS
+    recovery["auto_resume_trigger"] = trigger
+    recovery["auto_resume_started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    status_data["recovery"] = recovery
+    status_data["status"] = "RECUPERANDO"
+    status_data["timestamp"] = time.strftime("%H:%M:%S")
+    status_data["auto_resume"] = {
+        "active": True,
+        "attempt": attempt,
+        "max_attempts": AUTO_RESUME_QC_MAX_ATTEMPTS,
+        "source_epoch": int(recovery.get("source_epoch", status_data.get("epoch", 0)) or 0),
+        "failed_epoch": recovery.get("failed_epoch"),
+        "remaining_epochs": int(_command_option(resume_command, "--epochs", "0") or 0),
+        "trigger": trigger,
+    }
+    write_status_file(status_file, status_data)
+    _append_training_supervisor_log(
+        "QC autorizó rollback: reanudación automática "
+        f"{attempt}/{AUTO_RESUME_QC_MAX_ATTEMPTS} desde época "
+        f"{recovery.get('source_epoch')} con {status_data['auto_resume']['remaining_epochs']} épocas restantes."
+    )
+
+    with TRAINING_PROCESS_LOCK:
+        if GLOBAL_TRAINING_PROC is not None and GLOBAL_TRAINING_PROC.poll() is None:
+            return None
+        LAST_START_TIME = time.time()
+        GLOBAL_TRAINING_PROC = launch_training_process(resume_command, process_env)
+        return GLOBAL_TRAINING_PROC
+
+
+def _forward_training_output(
+    process: subprocess.Popen,
+    command: List[str],
+    process_env: Dict[str, str],
+) -> None:
     TRAINING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(TRAINING_LOG_FILE, "a", encoding="utf-8", buffering=1) as log_file:
@@ -192,6 +305,12 @@ def _forward_training_output(process: subprocess.Popen) -> None:
         sys.stdout.write(footer)
         sys.stdout.flush()
         log_file.write(footer)
+    _maybe_auto_resume_qc_recovery(
+        command,
+        process_env,
+        return_code=return_code,
+        trigger="process_exit",
+    )
 
 
 def launch_training_process(command: List[str], env: Dict[str, str]) -> subprocess.Popen:
@@ -208,7 +327,11 @@ def launch_training_process(command: List[str], env: Dict[str, str]) -> subproce
         errors="replace",
         bufsize=1,
     )
-    threading.Thread(target=_forward_training_output, args=(process,), daemon=True).start()
+    threading.Thread(
+        target=_forward_training_output,
+        args=(process, list(command), process_env),
+        daemon=True,
+    ).start()
     return process
 
 
@@ -2281,6 +2404,40 @@ def open_browser(host: str, port: int):
     webbrowser.open(url)
 
 
+def resume_pending_qc_recovery_on_startup() -> Optional[subprocess.Popen]:
+    """Honor a recovery that was prepared just before Sprite Studio restarted."""
+    status_data = load_status_file(PROJECT_ROOT / "training_status.json")
+    recovery = status_data.get("recovery")
+    if (
+        not AUTO_RESUME_QC_RECOVERY
+        or str(status_data.get("status", "")).upper() != "RECUPERACION_LISTA"
+        or not isinstance(recovery, dict)
+        or not recovery.get("active")
+    ):
+        return None
+    python_exe = sys.executable
+    embedded_python = PROJECT_ROOT / "webui forger" / "system" / "python" / "python.exe"
+    if not embedded_python.exists():
+        embedded_python = PROJECT_ROOT.parent / "webui forger" / "system" / "python" / "python.exe"
+    if embedded_python.exists():
+        python_exe = str(embedded_python)
+    train_script = PROJECT_ROOT / "pixel_ai_engine" / "train_supervised.py"
+    total_epochs = max(1, int(status_data.get("total_epochs", 1) or 1))
+    process_env = os.environ.copy()
+    process_env["PYTHONUNBUFFERED"] = "1"
+    return _maybe_auto_resume_qc_recovery(
+        [
+            str(python_exe), str(train_script),
+            "--epochs", str(total_epochs),
+            "--batch_size", str(int(status_data.get("batch_size", 4) or 4)),
+            "--mode", "resume",
+        ],
+        process_env,
+        return_code=0,
+        trigger="server_startup",
+    )
+
+
 def main():
     global PORT
     PORT = 8080
@@ -2311,6 +2468,9 @@ def main():
     print(f"  Directorio: {PROJECT_ROOT}")
     print(f"  Servidor activo en: http://{SERVER_HOST}:{PORT}")
     print("=" * 70)
+
+    # Un rollback confirmado por QC continua solo desde el punto seguro.
+    resume_pending_qc_recovery_on_startup()
 
     # Abrir navegador automáticamente salvo en reinicios técnicos en segundo plano.
     if os.environ.get("SPRITE_STUDIO_NO_BROWSER") != "1":
