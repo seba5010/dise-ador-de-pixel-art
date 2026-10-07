@@ -39,15 +39,26 @@ from pixel_ai_engine.dataset import (
 )
 from pixel_ai_engine.models import PixelArtUNetGenerator
 from pixel_ai_engine.phase3_critical_enhancer import PixelArtEnhancer
-from pixel_ai_engine.palette_remap import extract_character_palette
+from pixel_ai_engine.palette_remap import (
+    extract_character_palette,
+    remap_image_to_palette,
+    despeckle_chromatic_noise,
+    clean_orphan_pixels,
+)
+from pixel_ai_engine.head_rigging import HeadRiggingManager
+from pixel_ai_engine.pixel_art_fixer import snap_and_fix_pixel_art
+from pixel_ai_engine.fractional_downscale import fractional_silhouette_downscale
+from pixel_ai_engine.cell_pipeline import SingleCellCoordinator
 
 
 def get_best_available_checkpoint() -> Path:
     candidates = [
-        CHECKPOINT_DIR / "best_quality_generator.pt",
-        CHECKPOINT_DIR / "best_generator.pt",
-        CHECKPOINT_DIR / "recovery_checkpoint.pt",
+        CHECKPOINT_DIR / "snapshots" / "generator_epoch_090.pt",
+        CHECKPOINT_DIR / "snapshots" / "checkpoint_epoch_090.pt",
         CHECKPOINT_DIR / "latest_checkpoint.pt",
+        CHECKPOINT_DIR / "best_generator.pt",
+        CHECKPOINT_DIR / "best_quality_generator.pt",
+        CHECKPOINT_DIR / "recovery_checkpoint.pt",
     ]
     for c in candidates:
         if c.exists():
@@ -94,7 +105,9 @@ def export_character_spritesheet_8x12(
     front_arr = np.array(front_rgb).astype(np.float32) / 127.5 - 1.0
     front_tensor = torch.from_numpy(front_arr).permute(2, 0, 1)[:3].float().to(DEVICE)
 
+    # 1. Extraer paleta canónica y cabeza canónica de alta fidelidad (Técnicas 3 y 9)
     char_palette = extract_character_palette(clean_front, include_props=True)
+    canonical_head, _ = HeadRiggingManager.extract_canonical_head(clean_front)
 
     rows = 12
     cols = 8
@@ -105,6 +118,7 @@ def export_character_spritesheet_8x12(
     generated_frames = []
     with torch.no_grad():
         for frame_idx in range(total_frames):
+            row_idx = frame_idx // cols
             pose_tensor = template_mgr.get_frame_tensor(frame_idx).to(DEVICE)
             condition = torch.cat([front_tensor, pose_tensor], dim=0).unsqueeze(0)
 
@@ -116,20 +130,35 @@ def export_character_spritesheet_8x12(
             frame_rgba = Image.fromarray(arr, mode="RGBA")
 
             # Candado de silueta morfológico contra el molde de la pose
-            pose_img = template_mgr.get_frame_image(frame_idx)
+            pose_img = template_mgr.get_frame_padded_pil(frame_idx)
             clipped = PixelArtEnhancer.clip_stray_limbs_against_template(frame_rgba, pose_img, margin_px=6)
-            frame_clean = clean_pixel_art_alpha(clipped, alpha_threshold=alpha_threshold)
+
+            # Anclaje Modular de Cabeza e Identidad Facial (Técnica 9: Paper Doll)
+            with_head = HeadRiggingManager.composite_head_onto_frame(
+                clipped, canonical_head, pose_img, direction_row=row_idx
+            )
+
+            # Limpieza de alfa
+            frame_clean = clean_pixel_art_alpha(with_head, alpha_threshold=alpha_threshold)
+
+            # Remapeo estricto a Paleta del Personaje (Técnica 3: Cero colores inventados)
+            if char_palette is not None and len(char_palette) > 0:
+                frame_clean = remap_image_to_palette(frame_clean, char_palette)
+
+            # Despeckle Cromático y Limpieza de Hollín (Técnica 8)
+            frame_clean = despeckle_chromatic_noise(frame_clean)
+            frame_clean = clean_orphan_pixels(frame_clean)
+
+            # Snapping de Cuadrícula y Recuperación de Contorno de 1px (Técnica 8)
+            frame_clean = snap_and_fix_pixel_art(frame_clean, enforce_dark_outline=True)
+
             generated_frames.append(frame_clean)
 
-    canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    for frame_idx, frame_img in enumerate(generated_frames):
-        row = frame_idx // cols
-        col = frame_idx % cols
-        x0, y0, x1, y1 = get_cell_coordinates(canvas_w, canvas_h, row, col, rows, cols)
-        target_w = x1 - x0
-        target_h = y1 - y0
-        cell_sprite = place_in_cell(frame_img, cell_w=target_w, cell_h=target_h)
-        canvas.paste(cell_sprite, (x0, y0), cell_sprite)
+    # Ensamblado en cuadrícula canónica (Técnica 5)
+    coordinator = SingleCellCoordinator(
+        rows=rows, cols=cols, cell_w=128, cell_h=128, canvas_w=canvas_w, canvas_h=canvas_h
+    )
+    canvas = coordinator.assemble_cells_into_sheet(generated_frames)
 
     canvas.save(output_path, format="PNG")
 
@@ -144,13 +173,14 @@ def export_all_characters(
     checkpoint_path: Optional[Path] = None,
     output_dir: Optional[Path] = None,
     max_characters: Optional[int] = None,
+    char_filter: Optional[str] = None,
 ) -> Path:
     ckpt_file = checkpoint_path or get_best_available_checkpoint()
     out_dir = output_dir or (OUTPUT_DIR / "spritesheets_finales_era2")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
-    print("  PIPELINE DE ENTREGA FINAL - GENERADOR COMPLETO 8x12")
+    print("  PIPELINE DE ENTREGA FINAL - GENERADOR COMPLETO 8x12 (12 TÉCNICAS)")
     print(f"  Checkpoint fuente: {ckpt_file.name}")
     print(f"  Directorio destino: {out_dir}")
     print(f"  Dispositivo: {DEVICE}")
@@ -175,6 +205,9 @@ def export_all_characters(
     generator.eval()
 
     character_files = find_all_characters()
+    if char_filter:
+        character_files = [cf for cf in character_files if char_filter.lower() in cf.parent.name.lower()]
+
     if max_characters is not None:
         character_files = character_files[:max_characters]
 
@@ -195,7 +228,7 @@ def export_all_characters(
     report_path = PROJECT_ROOT / "reportes" / "entrega_final_era2.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
-        f.write("# Reporte de Entrega Final de Spritesheets (Era 2 - 8x12)\n\n")
+        f.write("# Reporte de Entrega Final de Spritesheets (Era 2 - 8x12 - 12 Técnicas)\n\n")
         f.write(f"- 📅 **Fecha:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"- 💾 **Checkpoint Evaluado:** `{ckpt_file.name}`\n")
         f.write(f"- 🎮 **Personajes Exportados:** `{len(exported)}`\n")
@@ -218,4 +251,12 @@ def export_all_characters(
 
 
 if __name__ == "__main__":
-    export_all_characters()
+    import argparse
+    parser = argparse.ArgumentParser(description="Exportar spritesheets con arquitectura de 12 técnicas")
+    parser.add_argument("--char", type=str, default=None, help="Personaje específico (ej: mauricio)")
+    parser.add_argument("--max", type=int, default=None, help="Límite máximo de personajes")
+    parser.add_argument("--output", type=str, default=None, help="Directorio de salida personalizado")
+    args = parser.parse_args()
+
+    out_p = Path(args.output) if args.output else None
+    export_all_characters(char_filter=args.char, max_characters=args.max, output_dir=out_p)

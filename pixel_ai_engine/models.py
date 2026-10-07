@@ -684,3 +684,226 @@ class PixelArtLoss(nn.Module):
             "d_fake": loss_fake.item()
         }
         return total_d_loss, metrics
+
+
+# ============================================================================
+# 8. COMPONENTES NEURONALES AVANZADOS DE LA ARQUITECTURA DE 12 TÉCNICAS
+# ============================================================================
+
+class LocalFaceDiscriminator(nn.Module):
+    """
+    Discriminador Local Quirúrgico de Rostro (Técnica 1).
+    Inspirado en Iizuka et al. y LADN (Local Adversarial Disentangling Network).
+    Opera sobre un recorte centrado de la cabeza (32x32 / 64x64), obligando al generador
+    a renderizar gafas, ojos, pupilas y corte de pelo con nitidez extrema de 1 píxel.
+    """
+    def __init__(self, in_channels: int = 4):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.InstanceNorm2d(128, affine=True),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, kernel_size=4, stride=1, padding=1, bias=False),
+            nn.InstanceNorm2d(256, affine=True),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        self.final_conv = nn.Conv2d(256, 1, kernel_size=4, stride=1, padding=1)
+
+    @staticmethod
+    def crop_head_patch(tensor_rgba: torch.Tensor, patch_size: int = 64) -> torch.Tensor:
+        """
+        Extrae un recorte centrado en el tercio superior (cabeza) del sprite.
+        """
+        b, c, h, w = tensor_rgba.shape
+        start_y = max(0, int(round(h * 0.05)))
+        end_y = min(h, start_y + patch_size)
+        start_x = max(0, (w - patch_size) // 2)
+        end_x = min(w, start_x + patch_size)
+        crop = tensor_rgba[:, :, start_y:end_y, start_x:end_x]
+        if crop.shape[2] != patch_size or crop.shape[3] != patch_size:
+            crop = F.interpolate(crop, size=(patch_size, patch_size), mode="nearest")
+        return crop
+
+    def forward(self, face_patch: torch.Tensor) -> torch.Tensor:
+        feat = self.features(face_patch)
+        return self.final_conv(feat)
+
+
+class AppearanceFlowModule(nn.Module):
+    """
+    Módulo de Deformación de Coordenadas y Muestreo de Píxeles Reales (Técnica 2).
+    Inspirado en GFLA (Global Flow Local Attention, CVPR) y Liquid Warping GAN.
+    Predice un campo vectorial denso de desplazamiento 2D (u, v) y muestrea directamente
+    los píxeles originales de la foto frontal de referencia con torch.nn.functional.grid_sample.
+    """
+    def __init__(self, in_channels: int = 6):
+        super().__init__()
+        self.flow_net = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 2, kernel_size=3, padding=1),
+            nn.Tanh()
+        )
+
+    def forward(self, source_rgb: torch.Tensor, condition: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        b, _, h, w = source_rgb.shape
+        flow = self.flow_net(condition)
+
+        y_coords = torch.linspace(-1, 1, h, device=source_rgb.device, dtype=source_rgb.dtype)
+        x_coords = torch.linspace(-1, 1, w, device=source_rgb.device, dtype=source_rgb.dtype)
+        grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+        base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).repeat(b, 1, 1, 1)
+
+        disp = flow.permute(0, 2, 3, 1) * 0.30
+        sample_grid = torch.clamp(base_grid + disp, -1.0, 1.0)
+        warped = F.grid_sample(source_rgb, sample_grid, mode="nearest", padding_mode="zeros", align_corners=True)
+        return warped, flow
+
+
+class PaletteHistogramLoss(nn.Module):
+    """
+    Pérdida de Histograma y Restricción de Paleta (Técnica 3).
+    Inspirado en Coutinho & Chaimowicz (AIIDE 2022 - palette-and-histo-gan).
+    Castiga suavemente cualquier dispersión cromática o color inventado que se desvíe
+    de la distribución de color de la referencia canónica del personaje.
+    """
+    def __init__(self, num_subregions: int = 4):
+        super().__init__()
+        self.num_subregions = num_subregions
+
+    def forward(self, pred_rgb: torch.Tensor, target_rgb: torch.Tensor) -> torch.Tensor:
+        p = (pred_rgb + 1.0) * 0.5
+        t = (target_rgb + 1.0) * 0.5
+
+        p_sub = F.adaptive_avg_pool2d(p, (self.num_subregions, self.num_subregions))
+        t_sub = F.adaptive_avg_pool2d(t, (self.num_subregions, self.num_subregions))
+        hist_loss = F.l1_loss(p_sub, t_sub)
+        return hist_loss
+
+
+class DiscretePixelCodebook(nn.Module):
+    """
+    Cuantización Vectorial Discreta (Técnica 4).
+    Inspirado en Pixel VQ-VAE (akashsara/fusion-dance, EXAG 2022).
+    Discretiza las activaciones latentes continuas en un diccionario discreto finito,
+    eliminando físicamente la posibilidad de que la red genere gradientes y colores intermedios.
+    """
+    def __init__(self, num_embeddings: int = 128, embedding_dim: int = 64, commitment_cost: float = 0.25):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.commitment_cost = commitment_cost
+
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.embedding.weight.data.uniform_(-1.0 / num_embeddings, 1.0 / num_embeddings)
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        b, c, h, w = x.shape
+        flat_x = x.permute(0, 2, 3, 1).contiguous().view(-1, self.embedding_dim)
+
+        distances = (
+            torch.sum(flat_x ** 2, dim=1, keepdim=True)
+            + torch.sum(self.embedding.weight ** 2, dim=1)
+            - 2 * torch.matmul(flat_x, self.embedding.weight.t())
+        )
+
+        encoding_indices = torch.argmin(distances, dim=1)
+        quantized = self.embedding(encoding_indices).view(b, h, w, c).permute(0, 3, 1, 2).contiguous()
+
+        q_loss = F.mse_loss(quantized, x.detach())
+        e_loss = F.mse_loss(x, quantized.detach())
+        loss = q_loss + self.commitment_cost * e_loss
+
+        quantized = x + (quantized - x).detach()
+        return quantized, loss
+
+
+class MultiScaleDiscriminator(nn.Module):
+    """
+    Discriminador Multi-Escala (Técnica 7).
+    Inspirado en NVIDIA Pix2PixHD (Wang et al., CVPR).
+    Opera simultáneamente a escala 1x (micro-detalles de píxel) y escala 0.5x (anatomía global).
+    """
+    def __init__(self, in_channels: int = 7, num_scales: int = 2):
+        super().__init__()
+        self.num_scales = num_scales
+        self.discriminators = nn.ModuleList([
+            PixelArtPatchDiscriminator(in_channels=in_channels)
+            for _ in range(num_scales)
+        ])
+
+    def forward(self, condition: torch.Tensor, target: torch.Tensor) -> List[torch.Tensor]:
+        outputs = []
+        cur_cond = condition
+        cur_target = target
+
+        for i, disc in enumerate(self.discriminators):
+            if i > 0:
+                cur_cond = F.avg_pool2d(cur_cond, 2, stride=2)
+                cur_target = F.avg_pool2d(cur_target, 2, stride=2)
+            out = disc(cur_cond, cur_target)
+            outputs.append(out)
+
+        return outputs
+
+
+class FeatureMatchingLoss(nn.Module):
+    """
+    Pérdida de Coincidencia de Características (Feature Matching Loss - Técnica 7).
+    Compara las activaciones intermedias de las capas del discriminador entre la imagen
+    real y la generada, estabilizando el entrenamiento de texturas finas.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, fake_feats: List[torch.Tensor], real_feats: List[torch.Tensor]) -> torch.Tensor:
+        loss = torch.tensor(0.0, device=fake_feats[0].device if len(fake_feats) > 0 else "cpu")
+        for f_f, r_f in zip(fake_feats, real_feats):
+            loss = loss + F.l1_loss(f_f, r_f.detach())
+        return loss / max(1, len(fake_feats))
+
+
+class LaplacianPyramidLoss(nn.Module):
+    """
+    Pérdida de Pirámide Laplaciana Multiescala (Técnica 11).
+    Descompone la imagen en múltiples sub-bandas de frecuencia espacial.
+    Asigna un multiplicador de peso de 15x a la banda de frecuencia más alta
+    (ojos, gafas, suelas y trazos de 1 píxel).
+    """
+    def __init__(self, num_levels: int = 3, high_freq_weight: float = 15.0):
+        super().__init__()
+        self.num_levels = num_levels
+        self.high_freq_weight = high_freq_weight
+        kernel = torch.tensor([[ 0.0, -1.0,  0.0],
+                               [-1.0,  4.0, -1.0],
+                               [ 0.0, -1.0,  0.0]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.register_buffer("kernel", kernel)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = pred.shape
+        p = pred
+        t = target
+        total_loss = torch.tensor(0.0, device=pred.device)
+        weight = self.high_freq_weight
+
+        for lvl in range(self.num_levels):
+            cur_h, cur_w = p.shape[2], p.shape[3]
+            p_flat = p.reshape(b * c, 1, cur_h, cur_w)
+            t_flat = t.reshape(b * c, 1, cur_h, cur_w)
+
+            p_lap = F.conv2d(p_flat, self.kernel, padding=1).reshape(b, c, cur_h, cur_w)
+            t_lap = F.conv2d(t_flat, self.kernel, padding=1).reshape(b, c, cur_h, cur_w)
+
+            total_loss = total_loss + weight * F.l1_loss(p_lap, t_lap)
+            weight *= 0.5
+
+            if lvl < self.num_levels - 1 and min(cur_h, cur_w) >= 8:
+                p = F.avg_pool2d(p, 2)
+                t = F.avg_pool2d(t, 2)
+
+        return total_loss
+

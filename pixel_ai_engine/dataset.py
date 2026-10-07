@@ -400,8 +400,10 @@ class TemplateManager:
         
         self.frame_tensors = []
         self.frame_masks = []
+        self.padded_frames = []
         for frame in self.frames:
             padded_frame = pad_target_frame_canonical(frame, self.target_size)
+            self.padded_frames.append(padded_frame)
             arr = np.array(padded_frame).astype(np.float32)
             alpha_mask = (arr[:, :, 3] > 20)
             rgb = arr[:, :, :3]
@@ -421,6 +423,10 @@ class TemplateManager:
 
     def get_frame_pil(self, frame_idx: int) -> Image.Image:
         return self.frames[frame_idx]
+
+    def get_frame_padded_pil(self, frame_idx: int) -> Image.Image:
+        return self.padded_frames[frame_idx]
+
 
 
 def scan_character_datasets(root_dir: Path) -> List[Dict[str, Path]]:

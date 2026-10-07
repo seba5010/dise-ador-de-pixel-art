@@ -17,7 +17,14 @@ from .models import (
     PixelArtPatchDiscriminator,
     PixelArtLoss,
     SilhouetteAlignmentLoss,
-    MinibatchStdDev
+    MinibatchStdDev,
+    LocalFaceDiscriminator,
+    AppearanceFlowModule,
+    PaletteHistogramLoss,
+    DiscretePixelCodebook,
+    MultiScaleDiscriminator,
+    FeatureMatchingLoss,
+    LaplacianPyramidLoss,
 )
 from .dataset import (
     PixelArtDataset,
@@ -45,6 +52,14 @@ from .quality_guidance import (
 )
 from .generate_character_sheet import generate_spritesheet
 from .train import train
+
+# Módulos de la arquitectura avanzada de 12 técnicas
+from .fractional_downscale import fractional_silhouette_downscale
+from .pixel_art_fixer import snap_and_fix_pixel_art
+from .head_rigging import HeadRiggingManager
+from .semantic_molds import create_semantic_part_map
+from .salience_pixelization import prepare_salience_preserved_front
+from .cell_pipeline import SingleCellCoordinator
 
 __all__ = [
     "PROJECT_ROOT",
@@ -85,4 +100,18 @@ __all__ = [
     "diagnose_quality_bottleneck",
     "generate_spritesheet",
     "train",
+    # 12 técnicas
+    "fractional_silhouette_downscale",
+    "snap_and_fix_pixel_art",
+    "HeadRiggingManager",
+    "create_semantic_part_map",
+    "prepare_salience_preserved_front",
+    "SingleCellCoordinator",
+    "LocalFaceDiscriminator",
+    "AppearanceFlowModule",
+    "PaletteHistogramLoss",
+    "DiscretePixelCodebook",
+    "MultiScaleDiscriminator",
+    "FeatureMatchingLoss",
+    "LaplacianPyramidLoss",
 ]
