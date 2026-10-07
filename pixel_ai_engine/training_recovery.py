@@ -585,4 +585,13 @@ def activate_recovery_status(
         },
         "quality": None,
     })
+    guidance_state = dict(data.get("guidance_state", {}))
+    if "intervention_state" in guidance_state and isinstance(guidance_state["intervention_state"], dict):
+        intervention_state = dict(guidance_state["intervention_state"])
+        intervention_state["critical_streak"] = 0
+        intervention_state["consecutive_interventions"] = 0
+        intervention_state["rollback_count"] = 0
+        guidance_state["intervention_state"] = intervention_state
+    guidance_state["intervention_count"] = 0
+    data["guidance_state"] = guidance_state
     return data

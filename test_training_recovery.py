@@ -388,3 +388,34 @@ def test_qc_auto_resume_supports_pausado_qc_and_train_py():
     assert "--lr" in cmd and cmd[cmd.index("--lr") + 1] == "4.5e-05"
 
 
+def test_activate_recovery_status_resets_intervention_streak():
+    status_data = {
+        "epoch": 61,
+        "history": [{"epoch": 60, "loss": 0.35, "g_loss": 0.35}],
+        "guidance_state": {
+            "intervention_state": {
+                "critical_streak": 8,
+                "consecutive_interventions": 3,
+                "rollback_count": 3,
+            },
+            "intervention_count": 5,
+        },
+    }
+    repaired = activate_recovery_status(
+        status_data=status_data,
+        source_epoch=60,
+        source_file=Path("checkpoints/recovery_checkpoint.pt"),
+        source_loss=0.35,
+        failed_epoch=61,
+        reason={"code": "test_recovery"},
+        total_epochs=90,
+        preferred_lr=5e-5,
+    )
+    intervention_state = repaired["guidance_state"]["intervention_state"]
+    assert intervention_state["critical_streak"] == 0
+    assert intervention_state["rollback_count"] == 0
+    assert intervention_state["consecutive_interventions"] == 0
+    assert repaired["guidance_state"]["intervention_count"] == 0
+
+
+

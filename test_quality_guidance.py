@@ -456,3 +456,21 @@ def test_intervention_policy_enforces_cooldown_and_maximum():
     assert second["authorized_action"] == third["authorized_action"] == "ADJUST_SAMPLING"
     assert exhausted["authorized_action"] == "CONTINUE"
     assert exhausted["reason"] == "intervention_budget_exhausted"
+
+
+def test_unrelated_secondary_regression_does_not_escalate_primary_severity():
+    trend = {
+        "status": "REGRESSION",
+        "by_category": {"anatomy": "PLATEAU", "global": "PLATEAU", "palette": "REGRESSION"},
+        "regression_categories": ["palette"],
+        "deltas": {"anatomy": 0.0, "global": 0.0, "palette": -3.5},
+    }
+    diagnosis = diagnose_quality_bottleneck(
+        QualityVector(global_score=75, anatomy=68, palette=82),
+        thresholds={"anatomy": 85, "palette": 85},
+        critical_floors={"anatomy": 55, "palette": 65},
+        trend=trend,
+    )
+    assert diagnosis["primary_problem"] == "anatomy"
+    assert diagnosis["severity"] == "high"
+

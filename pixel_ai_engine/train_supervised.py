@@ -682,7 +682,7 @@ def _materialize_recovery_route(
         param_groups = opt_state.get("param_groups", [])
         if param_groups:
             source_optimizer_lr = finite_positive(param_groups[0].get("lr"))
-    preferred_lr = min(8e-5, (source_optimizer_lr or 1.5e-4) * 0.5)
+    preferred_lr = max(2.5e-5, min(8e-5, (source_optimizer_lr or 1.5e-4) * 0.5))
 
     source_checkpoint["best_loss"] = source_loss
     source_checkpoint["recovery_origin"] = str(source_file.relative_to(PROJECT_ROOT)).replace("\\", "/")

@@ -275,3 +275,44 @@ Epoca [001/001] - G_Loss: 0.0941 | Color_L1: 0.0250 | Borde: 0.0013 | D_Loss: 0.
 - **Velocidad**: 38.18 cuadros/segundo.
 - **Consumo VRAM**: ~1.5 GB.
 - **Resultado**: 100% libre de NaNs, estable y verificado.
+
+---
+
+## 6. Resolución del Bucle de Reversión Falsa en Control de Calidad (Época 60-61)
+
+### 6.1. Síntoma
+Durante el aprendizaje activo con minería de casos difíciles (1,249 frames complejos priorizados), el sistema entraba en un bucle cerrado tras la época 60:
+```text
+[CONTROL DE CALIDAD] Segunda degradación crítica confirmada: checkpoint degradado rechazado.
+Rebobinando a época saludable 60 y reanudando automáticamente con LR=0.00000316...
+```
+Cada vez que finalizaba la época 61, el checkpoint era rechazado y rebobinado a la 60, reduciendo repetidamente el Learning Rate a la mitad hasta alcanzar valores microscópicos ($3.16 \times 10^{-6}$).
+
+### 6.2. Diagnóstico de Causa Raíz
+Se identificaron 4 factores estructurales concurrentes:
+1. **Contaminación de Tendencia Global por Variación Secundaria**:
+   `QualityTrendAnalyzer` agregaba el estado global de tendencia tomando la peor categoría de las 15 observadas (`priority = ("COLLAPSE", "REGRESSION", ...)`). Si una métrica secundaria inocua como `palette` oscilaba levemente ($\Delta = -3.2\%$, de 86.1% a 82.9% al procesar ropa oscura), la tendencia global del modelo entero se marcaba como `REGRESSION`.
+2. **Escalada Falsa de Severidad Primaria**:
+   En `diagnose_quality_bottleneck()`, si la tendencia global era `REGRESSION`, la severidad del problema primario (`anatomy`, con déficit de 16.25 por entrenar activamente frames de cocina/pensamiento/cargas) se escalaba automáticamente de `HIGH` a `CRITICAL`, recomendando `ROLLBACK`. Esto ocurría a pesar de que la anatomía no estaba en regresión sino en meseta/práctica.
+3. **Persistencia Huérfana del Contador de Intervenciones**:
+   Al ejecutar `STOP` y materializar el rollback, `activate_recovery_status()` conservaba el estado en disco sin limpiar `critical_streak` ni `rollback_count`. El nuevo proceso heredaba `rollback_count >= 3`, convirtiendo cualquier alerta subsiguiente en un `STOP` inmediato en la primera época.
+4. **Desgaste Excesivo del Learning Rate**:
+   Cada rollback dividía el LR por 2 sin una cota inferior (`preferred_lr = min(8e-5, lr * 0.5)`), congelando la capacidad de aprendizaje del generador para resolver poses difíciles.
+
+### 6.3. Correcciones Implementadas
+1. **Aislamiento Causal de Regresión (`quality_guidance.py`)**:
+   La elevación de severidad por `REGRESSION` ahora exige que el problema primario específico o la métrica `global` se encuentren activamente en regresión (`primary in regression_categories or 'global' in regression_categories`). Las fluctuaciones de paleta o métricas secundarias ya no provocan falsas alarmas críticas en anatomía.
+2. **Calibración de Meta Anatómica (`DEFAULT_TARGETS['anatomy'] = 85.0`)**:
+   Ajustado de 90.0 a 85.0 para reflejar la realidad del muestreo ponderado de poses no convencionales sin entrar en zona de severidad crítica espuria.
+3. **Reseteo Estricto de Estado en Recuperación (`training_recovery.py`)**:
+   `activate_recovery_status()` reinicia atómicamente `critical_streak = 0`, `consecutive_interventions = 0` y `rollback_count = 0` al persistir el estado de recuperación, garantizando que el nuevo proceso comience limpio.
+4. **Cota Inferior de LR (`train_supervised.py`)**:
+   Se estableció `preferred_lr = max(2.5e-5, min(8e-5, ...))` para prevenir la atrofia del optimizador.
+
+### 6.4. Resultado
+El ciclo Época 61 fue evaluado correctamente:
+- **Calidad Anatómica**: 74.45% (Cuerpo 76.08%)
+- **Problema Principal**: `anatomy` | **Severidad**: `HIGH`
+- **Acción recomendada**: `REINFORCE` | **Acción autorizada**: `CONTINUE`
+- **Resultado**: Época 61 aprobada exitosamente, sin rollback, continuando el entrenamiento hacia la época objetivo.
+

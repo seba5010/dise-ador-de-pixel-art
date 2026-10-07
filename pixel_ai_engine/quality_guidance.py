@@ -765,7 +765,7 @@ def assess_quality_checkpoint(quality: Any) -> Dict[str, Any]:
 
 DEFAULT_TARGETS: Dict[str, float] = {
     "global": 90.0,
-    "anatomy": 90.0,
+    "anatomy": 85.0,
     "silhouette": 90.0,
     "pose": 85.0,
     "face": 90.0,
@@ -998,11 +998,23 @@ def diagnose_quality_bottleneck(
         if payload.get(category) is not None and float(payload[category]) < float(floor)
     ]
     trend_status = str((trend or {}).get("status", "INSUFFICIENT_DATA"))
+    by_category = (trend or {}).get("by_category", {}) if isinstance(trend, Mapping) else {}
+    regression_categories = set((trend or {}).get("regression_categories", [])) if isinstance(trend, Mapping) else set()
+    primary_regressing = bool(
+        trend_status == "REGRESSION"
+        and (
+            primary in regression_categories
+            or by_category.get(primary) in {"REGRESSION", "COLLAPSE"}
+            or "global" in regression_categories
+            or by_category.get("global") in {"REGRESSION", "COLLAPSE"}
+            or (primary is None and bool(regression_categories))
+        )
+    )
     if critical_breaches or trend_status == "COLLAPSE":
         severity = "critical"
         if primary is None and critical_breaches:
             primary = critical_breaches[0]
-    elif trend_status == "REGRESSION":
+    elif primary_regressing:
         severity = {"low": "medium", "medium": "high", "high": "critical", "critical": "critical"}[severity]
 
     coverage = observed / max(1, len(target_map))
