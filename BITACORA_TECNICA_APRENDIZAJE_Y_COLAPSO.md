@@ -316,3 +316,44 @@ El ciclo Época 61 fue evaluado correctamente:
 - **Acción recomendada**: `REINFORCE` | **Acción autorizada**: `CONTINUE`
 - **Resultado**: Época 61 aprobada exitosamente, sin rollback, continuando el entrenamiento hacia la época objetivo.
 
+---
+
+## 7. Política Híbrida Inteligente de Control de Calidad y Pipeline de Entrega Final
+
+### 7.1. Fundamentación Arquitectónica (Requerimiento del Usuario)
+El Control de Calidad no debe tener como primer instinto borrar el progreso de forma destructiva ante fluctuaciones de currículum o poses difíciles. Sin embargo, **debe conservar la autoridad plena de rebobinar si el modelo sufre una degradación crítica real que pueda envenenar los pesos futuros**.
+
+Para cumplir este principio, se formalizó una **Política Bimodal / Híbrida Escalonada**:
+
+```mermaid
+graph TD
+    A["Evaluación de Calidad por Época"] --> B{"¿Gravedad del Diagnóstico?"}
+    B -->|"Fluctuación / Déficit Parcial (Low/Med/High)"| C["Régimen 1: Aprendizaje Progresivo"]
+    C --> C1["No rebobina"]
+    C1 --> C2["Ajusta pesos y sobremuestreo (REINFORCE / ADJUST_SAMPLING)"]
+    C2 --> C3["Preserva atómicamente best_quality_generator.pt"]
+    
+    B -->|"Colapso Estructural / Pisos Críticos Rotos"| D["Régimen 2: Emergencia Anticolapso"]
+    D --> D1["Verifica confirmación (racha >= 2 o COLLAPSE)"]
+    D1 --> D2["Rollback Quirúrgico al último snapshot sano"]
+    D2 --> D3["Watchdog Antivuelco: Protege LR (>= 2.5e-5) y limpia contadores en disco"]
+```
+
+### 7.2. Componentes Implementados
+
+1. **Watchdog Antivuelco Preventivo (`quality_guidance.py` / `training_recovery.py`)**:
+   - Monitorea el estado de recuperación para impedir bucles infinitos de rebobinado a la misma época.
+   - Si se supera el presupuesto de rollbacks (`rollback_count >= max_rollbacks`), congela el ciclo de rebobinadas ciegas y conmuta a observación segura, evitando la atrofia del *learning rate*.
+
+2. **Evaluador de Salud Inmutable: Golden Benchmark (`pixel_ai_engine/golden_benchmark.py`)**:
+   - Define un conjunto fijo y determinista de 32 frames de referencia (caminatas y poses estándar de diversos personajes) que no se ve afectado por el currículum estocástico ni por el sobremuestreo de poses difíciles.
+   - Permite al sistema discernir entre una bajada artificial de notas causada por practicar frames complejos vs. un colapso real de la red neuronal.
+
+3. **Pipeline de Entrega Final Automatizada (`export_final_spritesheets.py`)**:
+   - Preparado para ejecutarse al finalizar la época 90 (o a demanda).
+   - Localiza el mejor checkpoint verificado (`best_quality_generator.pt` o `best_generator.pt`).
+   - Itera sobre todos los personajes del directorio `personajes/` generando sus hojas completas de 96 frames en matriz 8x12 (1024x1536 px).
+   - Aplica el **Candado Morfológico de Silueta** (`PixelArtEnhancer.clip_stray_limbs_against_template`) y limpieza de paleta/alfa para garantizar 0% extremidades fantasma.
+   - Exporta los archivos finales a `output/spritesheets_finales_era2/` junto con vistas previas de alto contraste y emite un informe final en `reportes/entrega_final_era2.md`.
+
+
