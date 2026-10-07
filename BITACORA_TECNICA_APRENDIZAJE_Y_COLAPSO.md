@@ -7,6 +7,19 @@
 
 ---
 
+## Actualización 7 de Octubre de 2026: Triple Protección (Candado de Silueta, Sobremuestreo Balanceado y Aumentación Cruzada de Color)
+
+Durante el ciclo de entrenamiento supervisado de 150 épocas (pausado en época 22 para blindaje), se identificó el fenómeno de **brazos dobles** y **nubes de ruido en ropa oscura** al sintetizar acciones complejas (cocina, transporte de cajas, celebración en filas 9 a 12).
+
+1. **Causa Raíz:** Asimetría severa en el dataset (56 personajes caminando vs solo 6-13 en acciones complejas, casi todos de blanco). La red tenía un sesgo dominante de brazos abajo y asociaba la cocina a color blanco.
+2. **Solución Implementada (Triple Candado):**
+   - **Candado 1 (Silueta y Límite de Pose):** Activación por defecto de `ENABLE_SILHOUETTE_LOSS = True` (1.5x) y adición de `boundary_loss` (2.0x) en `train_supervised.py`, junto con la tijera quirúrgica `clip_stray_limbs_against_template()` en `enhancer.py` (margen 6px) para exportación y regeneración limpias.
+   - **Candado 2 (Sobremuestreo Balanceado):** En `quality_guidance.py`, detección automática de rareza de pose en el dataset y boost de hasta 3.0x en `WeightedRandomSampler` para las filas 9 a 12.
+   - **Candado 3 (Aumentación Cruzada de Color en GPU):** Variación simultánea e idéntica de color, brillo y contraste en `front` y `target` (`apply_coordinated_color_augmentation`), obligando a la red a transferir identidad sin sobreajustarse a colores claros.
+3. **Documentación Completa:** Véase [`ARQUITECTURA_TRIPLE_CANDADO_Y_GENERALIZACION.md`](file:///d:/escritorio/dise%C3%B1ador%20de%20pixel%20art/ARQUITECTURA_TRIPLE_CANDADO_Y_GENERALIZACION.md).
+
+---
+
 ## Actualización 6 de Octubre de 2026: Blindaje Numérico de GradScaler AMP, Despeckle Cromático Quirúrgico y Recuperación Post-Pausa QC
 
 Durante el entrenamiento avanzado de 8x12 (épocas 54 a 100), se detectaron y resolvieron tres fenómenos técnicos:
