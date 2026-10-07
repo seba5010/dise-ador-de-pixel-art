@@ -2812,6 +2812,41 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 write_status_file(STATUS_FILE, published_status)
             last_completed_epoch = epoch
 
+        # -------------------------------------------------------------
+        # AUDITORÍA PERIÓDICA QUIRÚRGICA Y AUTO-INYECCIÓN CADA 10 ÉPOCAS
+        # -------------------------------------------------------------
+        if epoch % 10 == 0:
+            try:
+                print(f"\n[AUDITORÍA PERIÓDICA] Guardado de época {epoch:03d} completado. Iniciando auditoría quirúrgica de los 29 personajes...", flush=True)
+                from pixel_ai_engine.periodic_audit import run_periodic_audit_and_injection
+                audit_res = run_periodic_audit_and_injection(
+                    generator=generator,
+                    template_manager=tmpl_mgr,
+                    epoch=epoch,
+                    session_id=current_session_id,
+                    device=DEVICE,
+                    reports_dir=PROJECT_ROOT / "reportes",
+                    canonical_output=PROJECT_ROOT / "REPORTE_CALIDAD_FRAMES_IMAGINARIOS.md",
+                    inject_hard_examples=True,
+                    threshold_anatomy=75.0,
+                    threshold_outline=75.0,
+                    max_stray_limbs=0.03,
+                    priority=2.0,
+                    dataset_character_ids=dataset_character_ids,
+                )
+                current_sampling_plan = _build_sampling_plan(
+                    dataset,
+                    frame_quality_tracker.export(),
+                    published_status.get("guidance"),
+                )
+                print(
+                    f"[AUDITORÍA PERIÓDICA] Reporte guardado en 'reportes/' y {audit_res['injected_count']} frames débiles "
+                    f"inyectados a Hard Examples para la época {epoch + 1:03d} (Sampling Plan: {current_sampling_plan.hard_frames} frames priorizados).\n",
+                    flush=True
+                )
+            except Exception as e_audit:
+                print(f"[!] Advertencia no crítica en auditoría periódica: {e_audit}", flush=True)
+
         # Termostato Inteligente Adaptativo en Tiempo Real (Protección Dual: GPU <= 84°C, CPU <= 90°C)
         manage_adaptive_thermal_throttle()
 
