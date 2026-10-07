@@ -7,6 +7,25 @@
 
 ---
 
+## Actualización 7 de Octubre de 2026 (Tarde): Auditoría Quirúrgica Multi-Personaje (29 Monos), Repositorio de Reportes Versionados y Auto-Inyección Activa
+
+Para resolver el problema del entrenamiento "a ciegas" (donde el motor promediaba pérdidas globales sin saber qué personajes o poses específicas tenían defectos), se implementó un sistema de **aprendizaje activo en circuito cerrado (*Closed-Loop Active Curriculum Learning*)**:
+
+1. **Auditoría Quirúrgica Maestro (`audit_imaginary_frames.py`):**
+   - Evalúa a **los 29 personajes** del dataset en minilotes GPU (16 frames/batch), analizando **2,784 frames** píxel a píxel en menos de 3 minutos.
+   - Diagnóstica con exactitud milimétrica la relación anatómica, pureza de contorno (outline), silueta IoU y extremidades fantasma (brazos dobles).
+2. **Repositorio Central de Reportes Versionados (`reportes/`):**
+   - Cada ciclo genera un par inmutable: `reportes/reporte_calidad_era_2_epoca_{epoch}_{timestamp}.md` y `.json` (con 1.28 MB de telemetría por frame).
+   - Mantiene actualizado el documento canónico [`REPORTE_CALIDAD_FRAMES_IMAGINARIOS.md`](file:///d:/escritorio/diseñador%20de%20pixel%20art/REPORTE_CALIDAD_FRAMES_IMAGINARIOS.md) en la raíz y expone el nuevo endpoint `GET /api/qc/reports` en `sprite_studio.py`.
+3. **Auto-Inyección Post-Guardado (`pixel_ai_engine/periodic_audit.py`):**
+   - En cada época múltiplo de 10 (`epoch % 10 == 0`), inmediatamente después de certificar y guardar el snapshot de respawn, el motor audita a todos los personajes.
+   - Filtra los frames con defectos (`raw_anatomy < 75%`, `raw_outline < 75%` o `stray_limbs > 3%`) y los inyecta atómicamente a [`hard_examples.jsonl`](file:///d:/escritorio/diseñador%20de%20pixel%20art/hard_examples.jsonl).
+   - El `WeightedRandomSampler` asigna de inmediato un multiplicador de **2.0x a 3.0x** en la siguiente época (11, 21, 31, 41...), focalizando el cómputo en los puntos débiles de cada personaje.
+4. **Graduación Inteligente:** Al superar el 85.0% de calidad en auditorías posteriores, el Control de Calidad marca el frame como `RESOLVED`, restableciendo el peso a 1.0 para evitar sobreajuste.
+5. **Documentación de Arquitectura Completa:** Véase [`ARQUITECTURA_APRENDIZAJE_ACTIVO_Y_AUDITORIA_PERIODICA.md`](file:///d:/escritorio/diseñador%20de%20pixel%20art/ARQUITECTURA_APRENDIZAJE_ACTIVO_Y_AUDITORIA_PERIODICA.md).
+
+---
+
 ## Actualización 7 de Octubre de 2026: Triple Protección (Candado de Silueta, Sobremuestreo Balanceado y Aumentación Cruzada de Color)
 
 Durante el ciclo de entrenamiento supervisado de 150 épocas (pausado en época 22 para blindaje), se identificó el fenómeno de **brazos dobles** y **nubes de ruido en ropa oscura** al sintetizar acciones complejas (cocina, transporte de cajas, celebración en filas 9 a 12).
