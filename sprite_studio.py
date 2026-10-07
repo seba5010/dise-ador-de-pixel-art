@@ -1621,6 +1621,20 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        elif path == "/api/qc/reports":
+            rep_dir = PROJECT_ROOT / "reportes"
+            reports_list = []
+            if rep_dir.exists():
+                for p in sorted(rep_dir.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
+                    reports_list.append({
+                        "filename": p.name,
+                        "size_bytes": p.stat().st_size,
+                        "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
+                        "has_json": (p.with_suffix(".json")).exists(),
+                    })
+            self.send_json({"reports": reports_list})
+            return
+
         elif path == "/api/qc/batches":
             self.send_json({"jobs": QC_SERVICE.list_batches()})
             return
