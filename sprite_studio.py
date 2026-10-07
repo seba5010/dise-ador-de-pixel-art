@@ -769,14 +769,17 @@ def run_pytorch_generation(
             raw_frame_pil = Image.fromarray(arr, mode="RGBA")
             raw_frame_pil.save(raw_dir / f"frame_{f_idx:03d}.png")
 
-            # Aplicar Enhancer Quirurgico
+            # Aplicar Enhancer Quirurgico con Candado de Silueta
+            pose_pil = tmpl_mgr.get_frame_pil(f_idx)
             enh_frame_pil = PixelArtEnhancer.enhance_frame(
                 raw_frame_pil,
                 palette=canonical_palette,
                 snap_palette=True,
                 remove_noise=True,
                 binarize=True,
-                sharpen_tattoos=True
+                sharpen_tattoos=True,
+                template_frame=pose_pil,
+                clip_silhouette=True,
             )
             enh_frame_pil.save(enh_dir / f"frame_{f_idx:03d}.png")
 

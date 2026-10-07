@@ -247,6 +247,8 @@ class TorchFrameCandidateGenerator:
                 outputs.append(PixelArtEnhancer.enhance_frame(
                     raw, palette=palette, snap_palette=True,
                     remove_noise=True, binarize=True, sharpen_tattoos=True,
+                    template_frame=templates.get_frame_pil(frame_idx),
+                    clip_silhouette=True,
                 ))
         return outputs
 

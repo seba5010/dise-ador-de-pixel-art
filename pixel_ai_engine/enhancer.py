@@ -217,6 +217,40 @@ class PixelArtEnhancer:
         arr[:, :, :3] = rgb
         return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGBA")
 
+    @staticmethod
+    def clip_stray_limbs_against_template(
+        frame_img: Image.Image,
+        template_img: Image.Image,
+        margin_px: int = 6,
+    ) -> Image.Image:
+        """
+        Candado Quirúrgico de Silueta (Post-procesado / Generación):
+        Elimina cualquier extremidad fantasma (ej: brazos caídos hacia abajo durante cocina/cajas/celebración)
+        o nubes de ruido generadas fuera del envolvente anatómico delimitado por la plantilla de pose.
+        Aplica dilatación morfológica con `margin_px` para respetar variaciones legítimas de volumen
+        (ropa holgada, sombreros, cabello) sin recortar el sprite.
+        """
+        frame_arr = np.array(frame_img.convert("RGBA"))
+        tmpl_arr = np.array(template_img.convert("RGBA"))
+
+        if frame_arr.shape[:2] != tmpl_arr.shape[:2]:
+            tmpl_resized = template_img.resize((frame_arr.shape[1], frame_arr.shape[0]), Image.Resampling.NEAREST)
+            tmpl_arr = np.array(tmpl_resized.convert("RGBA"))
+
+        tmpl_mask = tmpl_arr[..., 3] > 20
+        if not np.any(tmpl_mask):
+            return frame_img
+
+        ksize = max(1, int(margin_px)) * 2 + 1
+        structure = np.ones((ksize, ksize), dtype=bool)
+        allowed_mask = binary_dilation(tmpl_mask, structure=structure)
+
+        stray_mask = (frame_arr[..., 3] > 30) & (~allowed_mask)
+        if np.any(stray_mask):
+            frame_arr[stray_mask, 3] = 0
+
+        return Image.fromarray(frame_arr, mode="RGBA")
+
     @classmethod
     def enhance_frame(cls,
                       frame_img: Image.Image,
@@ -226,16 +260,23 @@ class PixelArtEnhancer:
                       remove_noise: bool = True,
                       binarize: bool = True,
                       sharpen_tattoos: bool = True,
-                      restore_features: bool = True) -> Image.Image:
+                      restore_features: bool = True,
+                      template_frame: Optional[Image.Image] = None,
+                      clip_silhouette: bool = True,
+                      margin_px: int = 6) -> Image.Image:
         """
         Pipeline completo de pulido quirúrgico:
         1. Limpieza de ruido y píxeles huérfanos.
-        2. Binarización estricta de canal alfa.
-        3. Restauración quirúrgica de cejas de 1px, separación ocular y costuras anatómicas.
-        4. Refuerzo de micro-detalles y tinta de tatuajes.
-        5. Encaje cromático a la paleta de identidad frontal (K-Means).
+        2. Candado de silueta contra extremidades fantasma y nubes de ruido.
+        3. Binarización estricta de canal alfa.
+        4. Restauración quirúrgica de cejas de 1px, separación ocular y costuras anatómicas.
+        5. Refuerzo de micro-detalles y tinta de tatuajes.
+        6. Encaje cromático a la paleta de identidad frontal (K-Means).
         """
         enhanced = frame_img.copy()
+
+        if clip_silhouette and template_frame is not None:
+            enhanced = cls.clip_stray_limbs_against_template(enhanced, template_frame, margin_px=margin_px)
 
         if remove_noise:
             enhanced = cls.remove_orphan_pixels(enhanced, min_connected_size=3)
@@ -257,6 +298,9 @@ class PixelArtEnhancer:
                 pal = cls.extract_palette(identity_img, max_colors=40)
             if pal is not None:
                 enhanced = cls.snap_to_palette(enhanced, pal, tolerance=35.0)
+
+        if clip_silhouette and template_frame is not None:
+            enhanced = cls.clip_stray_limbs_against_template(enhanced, template_frame, margin_px=margin_px)
 
         if binarize:
             enhanced = cls.binarize_alpha(enhanced, threshold=40)

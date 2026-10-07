@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 
-ENABLE_SILHOUETTE_LOSS = os.environ.get("PIXEL_AI_ENABLE_SILHOUETTE_LOSS", "0").strip().lower() not in {
+ENABLE_SILHOUETTE_LOSS = os.environ.get("PIXEL_AI_ENABLE_SILHOUETTE_LOSS", "1").strip().lower() not in {
     "0", "false", "no", "off"
 }
 

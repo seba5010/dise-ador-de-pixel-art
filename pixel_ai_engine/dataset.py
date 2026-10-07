@@ -399,6 +399,7 @@ class TemplateManager:
         self.frames = slice_spritesheet(self.template_img, self.rows, self.cols)
         
         self.frame_tensors = []
+        self.frame_masks = []
         for frame in self.frames:
             padded_frame = pad_target_frame_canonical(frame, self.target_size)
             arr = np.array(padded_frame).astype(np.float32)
@@ -409,9 +410,14 @@ class TemplateManager:
             tensor = torch.from_numpy(norm_rgb).permute(2, 0, 1).float()
             assert tensor.shape[0] == 3, f"Tensor de pose debe tener 3 canales."
             self.frame_tensors.append(tensor)
+            mask_tensor = torch.from_numpy(alpha_mask.astype(np.float32)).unsqueeze(0)
+            self.frame_masks.append(mask_tensor)
 
     def get_frame_tensor(self, frame_idx: int) -> torch.Tensor:
         return self.frame_tensors[frame_idx]
+
+    def get_frame_mask(self, frame_idx: int) -> torch.Tensor:
+        return self.frame_masks[frame_idx]
 
     def get_frame_pil(self, frame_idx: int) -> Image.Image:
         return self.frames[frame_idx]

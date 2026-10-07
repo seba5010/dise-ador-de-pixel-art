@@ -8,7 +8,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Tuple, List
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
@@ -847,6 +847,62 @@ class SupervisedTensorDataset(Dataset):
         return front, f_idx, target, s["char_id"]
 
 
+def apply_coordinated_color_augmentation(
+    fronts: torch.Tensor,
+    targets: torch.Tensor,
+    f_indices: Any,
+    p_base: float = 0.45,
+    p_rare: float = 0.85,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Candado 3: Aumentación Cruzada Coordinada de Color y Paleta (GPU).
+    Aplica perturbaciones idénticas de color/brillo/contraste a `fronts` y `targets`
+    para obligar a la red a transferir identidad y color en lugar de memorizar ropa
+    específica en poses poco representadas (cocinar, cajas, platos, etc.).
+    """
+    if not (fronts.is_floating_point() and targets.is_floating_point()):
+        return fronts, targets
+
+    b = fronts.shape[0]
+    device = fronts.device
+    aug_fronts = fronts.clone()
+    aug_targets = targets.clone()
+
+    for i in range(b):
+        frame_val = f_indices[i]
+        f_idx = int(frame_val.item()) if hasattr(frame_val, "item") else int(frame_val)
+        p = p_rare if f_idx >= 64 else p_base
+        if torch.rand(1).item() > p:
+            continue
+
+        # Factores aleatorios idénticos para front y target
+        channel_scales = (torch.rand(3, 1, 1, device=device) * 0.8 + 0.60)
+        brightness_shift = (torch.rand(3, 1, 1, device=device) * 0.5 - 0.25)
+        contrast = torch.rand(1, device=device).item() * 0.5 + 0.75
+
+        # Máscaras de opacidad para no pintar el fondo transparente
+        if aug_fronts.shape[1] >= 4:
+            front_alpha_mask = aug_fronts[i, 3:4] > -0.8
+        else:
+            front_alpha_mask = torch.ones(1, aug_fronts.shape[2], aug_fronts.shape[3], dtype=torch.bool, device=device)
+
+        if aug_targets.shape[1] >= 4:
+            target_alpha_mask = aug_targets[i, 3:4] > -0.8
+        else:
+            target_alpha_mask = torch.ones(1, aug_targets.shape[2], aug_targets.shape[3], dtype=torch.bool, device=device)
+
+        f_rgb = aug_fronts[i, :3]
+        t_rgb = aug_targets[i, :3]
+
+        f_rgb = torch.clamp((f_rgb * contrast + brightness_shift) * channel_scales, -1.0, 1.0)
+        t_rgb = torch.clamp((t_rgb * contrast + brightness_shift) * channel_scales, -1.0, 1.0)
+
+        aug_fronts[i, :3] = torch.where(front_alpha_mask.expand(3, -1, -1), f_rgb, aug_fronts[i, :3])
+        aug_targets[i, :3] = torch.where(target_alpha_mask.expand(3, -1, -1), t_rgb, aug_targets[i, :3])
+
+    return aug_fronts, aug_targets
+
+
 def compute_frame_quality_batch(
     predictions: torch.Tensor,
     targets: torch.Tensor,
@@ -1397,16 +1453,20 @@ def _generate_full_sheet_preview(generator, front, template_manager, character_p
         with autocast(enabled=USE_AMP):
             predictions = generator(conditions)
 
-        for prediction in predictions:
+        for offset, prediction in enumerate(predictions):
+            frame_idx = start + offset
             raw_image = _tensor_to_preview_image(prediction, has_alpha=True)
+            template_pil = template_manager.get_frame_pil(frame_idx)
+            clipped_raw = PixelArtEnhancer.clip_stray_limbs_against_template(raw_image, template_pil, margin_px=6)
             remapped = remap_image_to_palette(
-                raw_image,
+                clipped_raw,
                 character_palette,
                 tolerance=35.0,
                 binarize_alpha=True,
             )
             remapped = despeckle_chromatic_noise(remapped)
             cleaned = clean_orphan_pixels(remapped, min_connected_size=3, binarize=True)
+            cleaned = PixelArtEnhancer.clip_stray_limbs_against_template(cleaned, template_pil, margin_px=6)
             cells.append(_fit_preview_cell(cleaned))
 
     sheet = Image.new("RGBA", (128 * 8, 128 * 12), (16, 18, 26, 255))
@@ -1822,11 +1882,13 @@ def generate_preview(generator, dataset, epoch_label=None, *, full_certification
             raw_prediction = _tensor_to_preview_image(out, has_alpha=True)
             raw_pred_pil = _fit_preview_cell(raw_prediction)
             
-            # 4. Predicción IA con Remapeo de Paleta + Filtro Morfológico Anti-Hollín + Alfa Puro
+            # 4. Predicción IA con Remapeo de Paleta + Candado de Silueta + Alfa Puro
             char_palette = extract_character_palette(f_pil, include_props=True)
-            snapped_pil = remap_image_to_palette(raw_pred_pil, char_palette, tolerance=35.0, binarize_alpha=True)
+            clipped_raw = PixelArtEnhancer.clip_stray_limbs_against_template(raw_pred_pil, p_pil, margin_px=6)
+            snapped_pil = remap_image_to_palette(clipped_raw, char_palette, tolerance=35.0, binarize_alpha=True)
             snapped_pil = despeckle_chromatic_noise(snapped_pil)
             pred_pil = clean_orphan_pixels(snapped_pil, min_connected_size=3, binarize=True)
+            pred_pil = PixelArtEnhancer.clip_stray_limbs_against_template(pred_pil, p_pil, margin_px=6)
 
             # 5. Ground Truth Real
             target_image = _tensor_to_preview_image(target, has_alpha=True)
@@ -2308,25 +2370,48 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             fronts = fronts.to(DEVICE)
             targets = targets.to(DEVICE)
             poses = torch.stack([tmpl_mgr.get_frame_tensor(idx) for idx in f_indices]).to(DEVICE)
-            cond = torch.cat([fronts, poses], dim=1)
+            if hasattr(tmpl_mgr, "get_frame_mask"):
+                pose_masks = torch.stack([tmpl_mgr.get_frame_mask(idx) for idx in f_indices]).to(DEVICE)
+            else:
+                pose_masks = (poses.abs().sum(dim=1, keepdim=True) > 0.1).float()
+
+            # Candado 3: Aumentación Cruzada Coordinada de Color y Paleta (GPU)
+            fronts_aug, targets_aug = apply_coordinated_color_augmentation(
+                fronts, targets, f_indices, p_base=0.45, p_rare=0.85
+            )
+            cond = torch.cat([fronts_aug, poses], dim=1)
 
             # Generador
             opt_g.zero_grad()
             with autocast(enabled=USE_AMP):
                 preds = generator(cond)
-                l1_color = criterion_l1(preds[:, :3], targets[:, :3]) * BASE_LOSS_WEIGHTS["color"] * loss_multipliers["color"]
-                l1_alpha = criterion_l1(preds[:, 3:], targets[:, 3:]) * BASE_LOSS_WEIGHTS["alpha"] * loss_multipliers["alpha"]
-                edge_loss = criterion_edge(preds[:, :3], targets[:, :3]) * BASE_LOSS_WEIGHTS["edge"] * loss_multipliers["edge"]
+                l1_color = criterion_l1(preds[:, :3], targets_aug[:, :3]) * BASE_LOSS_WEIGHTS["color"] * loss_multipliers["color"]
+                l1_alpha = criterion_l1(preds[:, 3:], targets_aug[:, 3:]) * BASE_LOSS_WEIGHTS["alpha"] * loss_multipliers["alpha"]
+                edge_loss = criterion_edge(preds[:, :3], targets_aug[:, :3]) * BASE_LOSS_WEIGHTS["edge"] * loss_multipliers["edge"]
 
                 # Discriminador: orden canonico (condition, target)
                 d_fake = discriminator(cond, preds)
                 adv_loss = criterion_bce(d_fake.float().clamp(-30.0, 30.0), torch.ones_like(d_fake).float()) * BASE_LOSS_WEIGHTS["adversarial"] * loss_multipliers["adversarial"]
                 silhouette_loss = (
-                    differentiable_silhouette_loss(preds, targets) * 0.5
+                    differentiable_silhouette_loss(preds, targets_aug) * 1.5
                     if ENABLE_SILHOUETTE_LOSS
                     else preds.new_zeros(())
                 )
-                total_g = l1_color + l1_alpha + edge_loss + adv_loss + silhouette_loss
+
+                # Candado 1: Límite de Silueta Anatómica (Pose Boundary Constraint)
+                h_dim, w_dim = pose_masks.shape[-2], pose_masks.shape[-1]
+                ksize = min(11, min(h_dim, w_dim))
+                if ksize % 2 == 0:
+                    ksize = max(1, ksize - 1)
+                pad = ksize // 2
+                allowed_envelope = torch.nn.functional.max_pool2d(pose_masks, kernel_size=ksize, stride=1, padding=pad)
+                pred_alpha_01 = ((preds[:, 3:4] + 1.0) * 0.5).clamp(0.0, 1.0)
+                stray_silhouette_loss = (
+                    torch.relu(pred_alpha_01 - 0.20) * (1.0 - allowed_envelope)
+                ).sum(dim=(1, 2, 3)) / ((1.0 - allowed_envelope).sum(dim=(1, 2, 3)) + 1e-6)
+                boundary_loss = stray_silhouette_loss.mean() * 2.0
+
+                total_g = l1_color + l1_alpha + edge_loss + adv_loss + silhouette_loss + boundary_loss
 
             # 1. Comprobacion estricta de finitud de componentes ANTES de backward y acumulacion
             g_components = [
@@ -2335,6 +2420,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 ("edge_loss", edge_loss.item()),
                 ("adv_loss", adv_loss.item()),
                 ("silhouette_loss", silhouette_loss.item()),
+                ("boundary_loss", boundary_loss.item()),
                 ("total_g", total_g.item())
             ]
             for c_name, c_val in g_components:
@@ -2364,7 +2450,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             # Discriminador (Aprende mas lento para no aplastar al generador)
             opt_d.zero_grad()
             with autocast(enabled=USE_AMP):
-                d_real = discriminator(cond, targets)
+                d_real = discriminator(cond, targets_aug)
                 d_fake_det = discriminator(cond, preds.detach())
                 loss_d_real = criterion_bce(d_real.float().clamp(-30.0, 30.0), torch.ones_like(d_real).float())
                 loss_d_fake = criterion_bce(d_fake_det.float().clamp(-30.0, 30.0), torch.zeros_like(d_fake_det).float())

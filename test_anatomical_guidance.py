@@ -53,7 +53,7 @@ def test_anatomical_metrics_feed_quality_vector():
     assert vector["pose"] == metrics["pose_alignment"]
 
 
-def test_silhouette_loss_is_finite_differentiable_and_disabled_by_default():
+def test_silhouette_loss_is_finite_differentiable_and_enabled_by_default():
     prediction = torch.zeros(2, 4, 8, 8, requires_grad=True)
     target = torch.zeros(2, 4, 8, 8)
     target[:, 3, 2:6, 2:6] = 1.0
@@ -63,4 +63,4 @@ def test_silhouette_loss_is_finite_differentiable_and_disabled_by_default():
     assert torch.isfinite(loss)
     assert prediction.grad is not None
     assert torch.isfinite(prediction.grad).all()
-    assert ENABLE_SILHOUETTE_LOSS is False
+    assert ENABLE_SILHOUETTE_LOSS is True

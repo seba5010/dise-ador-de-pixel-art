@@ -283,12 +283,14 @@ class HardExampleMiningPolicy:
         min_observations: int = 2,
         min_confidence: float = 0.75,
         max_weight: float = 2.0,
+        max_rarity_weight: float = 3.0,
         hard_threshold: float = 75.0,
         very_hard_threshold: float = 50.0,
     ):
         self.min_observations = max(1, int(min_observations))
         self.min_confidence = min(1.0, max(0.0, float(min_confidence)))
         self.max_weight = min(2.0, max(1.0, float(max_weight)))
+        self.max_rarity_weight = min(3.5, max(1.0, float(max_rarity_weight)))
         self.hard_threshold = normalize_quality_score(hard_threshold) or 75.0
         self.very_hard_threshold = normalize_quality_score(very_hard_threshold) or 50.0
 
@@ -322,7 +324,9 @@ class HardExampleMiningPolicy:
         enabled: bool,
         recommendation: str = "REINFORCE",
         manual_weights: Optional[Mapping[str, Any]] = None,
+        enable_pose_balancing: bool = True,
     ) -> SamplingPlan:
+        sample_list = list(samples)
         records = frame_quality if isinstance(frame_quality, Mapping) else {}
         manual = manual_weights if isinstance(manual_weights, Mapping) else {}
         keys: List[str] = []
@@ -330,7 +334,25 @@ class HardExampleMiningPolicy:
         eligible = 0
         hard = 0
         manual_hard = 0
-        for sample in samples:
+        rarity_hard = 0
+
+        # Conteo de ocurrencias por frame en el dataset para balanceo por rareza de pose
+        frame_counts: Dict[int, int] = {}
+        for sample in sample_list:
+            try:
+                f_idx = int(sample.get("frame_idx", -1))
+            except (TypeError, ValueError):
+                f_idx = -1
+            if f_idx >= 0:
+                frame_counts[f_idx] = frame_counts.get(f_idx, 0) + 1
+
+        max_frame_count = max(frame_counts.values()) if frame_counts else 0
+        # Disparidad de frecuencia en el dataset (ej: caminatas con 56 muestras vs acciones con 6 a 13)
+        has_frequency_disparity = max_frame_count > 1 and any(
+            count <= max_frame_count * 0.5 for count in frame_counts.values()
+        )
+
+        for sample in sample_list:
             key = frame_quality_key(sample.get("char_id", "unknown"), sample.get("frame_idx", -1))
             weight, is_eligible = self._weight_for(records.get(key))
             manual_weight = normalize_quality_score(manual.get(key))
@@ -346,17 +368,38 @@ class HardExampleMiningPolicy:
                 manual_hard += 1
                 is_eligible = True
                 weight = max(weight, manual_weight)
+
+            # Candado 2: Sobremuestreo Balanceado por Pose (Pose-Balanced Rarity Sampling)
+            if has_frequency_disparity and enable_pose_balancing:
+                try:
+                    s_fidx = int(sample.get("frame_idx", -1))
+                except (TypeError, ValueError):
+                    s_fidx = -1
+                if s_fidx >= 0:
+                    s_count = frame_counts.get(s_fidx, max_frame_count)
+                    if s_count < max_frame_count * 0.5 or s_fidx >= 64:
+                        rarity_boost = min(
+                            self.max_rarity_weight,
+                            max(1.0, (max_frame_count / max(1, s_count)) ** 0.5)
+                        )
+                        if rarity_boost > 1.0:
+                            weight = max(weight, rarity_boost)
+                            rarity_hard += 1
+                            is_eligible = True
+
             keys.append(key)
             weights.append(weight)
             eligible += int(is_eligible)
             hard += int(is_eligible and weight > 1.0)
 
         intervention_allowed = recommendation in {"REINFORCE", "ADJUST_SAMPLING"}
-        active = bool(enabled and (intervention_allowed or manual_hard > 0) and eligible > 0 and hard > 0)
+        active = bool(enabled and (intervention_allowed or manual_hard > 0 or rarity_hard > 0) and eligible > 0 and hard > 0)
         if not enabled:
             reason = "feature_disabled"
         elif manual_hard > 0:
             reason = "manual_hard_examples_active"
+        elif rarity_hard > 0:
+            reason = "pose_balanced_rarity_sampling_active"
         elif not intervention_allowed:
             reason = "guidance_did_not_request_sampling"
         elif eligible == 0:
