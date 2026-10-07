@@ -488,7 +488,7 @@ class GuidanceInterventionPolicy:
         cooldown_epochs: int = 5,
         max_consecutive: int = 3,
         critical_confirmations: int = 2,
-        max_rollbacks: int = 1,
+        max_rollbacks: int = 3,
     ):
         self.cooldown_epochs = max(1, int(cooldown_epochs))
         self.max_consecutive = max(1, int(max_consecutive))

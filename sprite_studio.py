@@ -108,8 +108,8 @@ QUALITY_COMPARISON_CACHE_LOCK = threading.RLock()
 QUALITY_REFERENCE_PALETTE_CACHE: Dict[Tuple[str, int, int], Any] = {}
 VISUAL_QUALITY_THRESHOLD = 85.0
 AUTO_RESUME_QC_RECOVERY = os.environ.get("SPRITE_STUDIO_AUTO_RESUME_QC", "1").strip().lower() not in {"0", "false", "no", "off"}
-_AUTO_RESUME_QC_MAX_RAW = os.environ.get("SPRITE_STUDIO_AUTO_RESUME_QC_MAX_ATTEMPTS", "1").strip()
-AUTO_RESUME_QC_MAX_ATTEMPTS = max(1, int(_AUTO_RESUME_QC_MAX_RAW)) if _AUTO_RESUME_QC_MAX_RAW.isdigit() else 1
+_AUTO_RESUME_QC_MAX_RAW = os.environ.get("SPRITE_STUDIO_AUTO_RESUME_QC_MAX_ATTEMPTS", "3").strip()
+AUTO_RESUME_QC_MAX_ATTEMPTS = max(3, int(_AUTO_RESUME_QC_MAX_RAW)) if _AUTO_RESUME_QC_MAX_RAW.isdigit() else 3
 
 
 def write_access_event(client_ip: str, user_agent: str, event: str, target: str, details: str = "") -> None:
@@ -191,9 +191,11 @@ def _build_qc_auto_resume_command(command: List[str], status_data: Dict[str, Any
     """Build one bounded resume command for a QC-prepared recovery route."""
     if not AUTO_RESUME_QC_RECOVERY or len(command) < 2:
         return None
-    if Path(str(command[1])).name.lower() != "train_supervised.py":
+    script_name = Path(str(command[1])).name.lower()
+    if script_name not in ("train_supervised.py", "train.py"):
         return None
-    if str(status_data.get("status", "")).upper() != "RECUPERACION_LISTA":
+    status = str(status_data.get("status", "")).upper()
+    if status not in ("RECUPERACION_LISTA", "PAUSADO_QC"):
         return None
     recovery = status_data.get("recovery")
     if not isinstance(recovery, dict) or not recovery.get("active"):
@@ -214,9 +216,13 @@ def _build_qc_auto_resume_command(command: List[str], status_data: Dict[str, Any
         "--batch_size", str(batch_size),
         "--mode", "resume",
     ]
-    requested_lr = _command_option(command, "--lr")
-    if requested_lr is not None:
-        resume_command.extend(["--lr", str(requested_lr)])
+    preferred_lr = recovery.get("preferred_lr")
+    if preferred_lr is not None:
+        resume_command.extend(["--lr", str(preferred_lr)])
+    else:
+        requested_lr = _command_option(command, "--lr")
+        if requested_lr is not None:
+            resume_command.extend(["--lr", str(requested_lr)])
     return resume_command
 
 

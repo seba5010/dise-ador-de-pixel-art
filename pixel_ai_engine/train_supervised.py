@@ -2512,21 +2512,55 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         published_status = _apply_intervention_policy(published_status)
         authorized_action = published_status.get("guidance", {}).get("authorized_action")
         if authorized_action == "STOP":
-            published_status["status"] = "PAUSADO_QC"
-            published_status["error_details"] = {
-                "epoch": epoch,
-                "metric": "repeated_quality_collapse",
-                "error": "Control de Calidad pausó el entrenamiento tras una recaída crítica posterior al rollback.",
-            }
-            published_status = _attach_model_approval(published_status, final_critical=True)
-            published_status["status"] = "PAUSADO_QC"
-            write_status_file(STATUS_FILE, published_status)
-            print(
-                "\n[CONTROL DE CALIDAD] Segunda degradación crítica confirmada. "
-                "Entrenamiento pausado; el checkpoint degradado no fue aprobado.",
-                flush=True,
+            guidance_recovery = _materialize_recovery_route(
+                status_data=published_status,
+                reason={
+                    "code": "repeated_quality_collapse",
+                    "message": "Segunda degradación crítica confirmada; rebobinando a checkpoint saludable para reanudar.",
+                    "failed_epoch": epoch,
+                    "g_loss": avg_g,
+                    "l1_loss": avg_l1,
+                    "quality": last_qc,
+                },
+                status_name="RECUPERACION_LISTA",
+                total_epochs=total_target_epochs,
+                rejected_metrics={
+                    "epoch": epoch,
+                    "g_loss": avg_g,
+                    "d_loss": avg_d,
+                    "l1_loss": avg_l1,
+                    "edge_loss": avg_edge,
+                    "quality": last_qc,
+                },
             )
-            return
+            if guidance_recovery is not None:
+                intervention_state = published_status.get("guidance_state", {}).get("intervention_state")
+                if isinstance(intervention_state, dict):
+                    intervention_state["critical_streak"] = 0
+                    intervention_state["consecutive_interventions"] = 0
+                    intervention_state["rollback_count"] = 0
+                print(
+                    f"\n[CONTROL DE CALIDAD] Segunda degradación crítica confirmada: checkpoint degradado rechazado. "
+                    f"Rebobinando a época saludable {guidance_recovery['source_epoch']} "
+                    f"y reanudando automáticamente con LR={guidance_recovery['preferred_lr']:.8f}...",
+                    flush=True,
+                )
+                return
+            else:
+                published_status["status"] = "PAUSADO_QC"
+                published_status["error_details"] = {
+                    "epoch": epoch,
+                    "metric": "repeated_quality_collapse",
+                    "error": "Control de Calidad pausó el entrenamiento tras una recaída crítica posterior al rollback (sin snapshot disponible).",
+                }
+                published_status = _attach_model_approval(published_status, final_critical=True)
+                write_status_file(STATUS_FILE, published_status)
+                print(
+                    "\n[CONTROL DE CALIDAD] Segunda degradación crítica confirmada. "
+                    "Entrenamiento pausado; no se encontró snapshot saludable para rollback.",
+                    flush=True,
+                )
+                return
         if authorized_action == "ROLLBACK":
             # The existing TrainingRecovery machinery remains the sole owner of
             # snapshot selection, atomic copying, LR reduction and history repair.

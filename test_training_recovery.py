@@ -363,3 +363,28 @@ def test_start_mode_isolates_from_old_snapshots(tmp_path: Path):
     plan = choose_recovery_snapshot([], snapshots_dir, failed_epoch=5, session_dir=session_dir, allow_snapshots_fallback=False)
     assert plan is None
 
+
+def test_qc_auto_resume_supports_pausado_qc_and_train_py():
+    import sprite_studio
+    status = {
+        "epoch": 20,
+        "total_epochs": 50,
+        "status": "PAUSADO_QC",
+        "recovery": {
+            "active": True,
+            "source_epoch": 20,
+            "failed_epoch": 41,
+            "preferred_lr": 4.5e-5,
+            "checkpoint": "checkpoints/recovery_checkpoint.pt",
+        },
+    }
+    cmd = sprite_studio._build_qc_auto_resume_command(
+        ["python.exe", "train.py", "--epochs", "50", "--batch_size", "4", "--mode", "resume"],
+        status,
+    )
+    assert cmd is not None
+    assert "--mode" in cmd and cmd[cmd.index("--mode") + 1] == "resume"
+    assert "--epochs" in cmd and cmd[cmd.index("--epochs") + 1] == "30"
+    assert "--lr" in cmd and cmd[cmd.index("--lr") + 1] == "4.5e-05"
+
+
