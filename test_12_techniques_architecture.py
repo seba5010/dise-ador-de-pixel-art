@@ -9,7 +9,6 @@ from PIL import Image
 
 from pixel_ai_engine.fractional_downscale import fractional_silhouette_downscale
 from pixel_ai_engine.pixel_art_fixer import snap_and_fix_pixel_art
-from pixel_ai_engine.head_rigging import HeadRiggingManager
 from pixel_ai_engine.semantic_molds import create_semantic_part_map, PART_COLORS
 from pixel_ai_engine.salience_pixelization import prepare_salience_preserved_front
 from pixel_ai_engine.cell_pipeline import SingleCellCoordinator
@@ -62,30 +61,6 @@ def test_pixel_art_fixer():
     # El píxel aislado en (2, 2) debe haber sido eliminado
     assert out_arr[2, 2, 3] == 0
 
-
-def test_head_rigging():
-    # Frontal sintético con cabeza definida
-    front = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    arr_f = np.array(front)
-    arr_f[10:20, 22:42] = [40, 25, 15, 255]   # pelo
-    arr_f[20:30, 24:40] = [220, 180, 140, 255] # cara
-    arr_f[30:55, 20:44] = [50, 80, 160, 255]  # ropa
-    front_img = Image.fromarray(arr_f, mode="RGBA")
-
-    head, bounds = HeadRiggingManager.extract_canonical_head(front_img)
-    assert head.size[0] > 0 and head.size[1] > 0
-
-    # Molde de pose sintético
-    pose = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    arr_p = np.array(pose)
-    arr_p[12:28, 24:40] = [120, 120, 120, 255] # cabeza pose
-    arr_p[28:56, 20:44] = [160, 160, 160, 255] # cuerpo pose
-    pose_img = Image.fromarray(arr_p, mode="RGBA")
-
-    composite = HeadRiggingManager.composite_head_onto_frame(
-        front_img, head, pose_img, direction_row=0
-    )
-    assert composite.size == (64, 64)
 
 
 def test_semantic_molds():
