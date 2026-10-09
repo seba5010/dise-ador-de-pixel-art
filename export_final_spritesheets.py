@@ -45,7 +45,6 @@ from pixel_ai_engine.palette_remap import (
     despeckle_chromatic_noise,
     clean_orphan_pixels,
 )
-from pixel_ai_engine.head_rigging import HeadRiggingManager
 from pixel_ai_engine.pixel_art_fixer import snap_and_fix_pixel_art
 from pixel_ai_engine.fractional_downscale import fractional_silhouette_downscale
 from pixel_ai_engine.cell_pipeline import SingleCellCoordinator
@@ -107,8 +106,6 @@ def export_character_spritesheet_8x12(
 
     # 1. Extraer paleta canónica y cabeza canónica de alta fidelidad (Técnicas 3 y 9)
     char_palette = extract_character_palette(clean_front, include_props=True)
-    canonical_head, _ = HeadRiggingManager.extract_canonical_head(clean_front)
-
     rows = 12
     cols = 8
     total_frames = 96
@@ -133,17 +130,12 @@ def export_character_spritesheet_8x12(
             pose_img = template_mgr.get_frame_padded_pil(frame_idx)
             clipped = PixelArtEnhancer.clip_stray_limbs_against_template(frame_rgba, pose_img, margin_px=6)
 
-            # Anclaje Modular de Cabeza e Identidad Facial (Técnica 9: Paper Doll)
-            with_head = HeadRiggingManager.composite_head_onto_frame(
-                clipped, canonical_head, pose_img, direction_row=row_idx
-            )
-
-            # Limpieza de alfa
-            frame_clean = clean_pixel_art_alpha(with_head, alpha_threshold=alpha_threshold)
+            # Limpieza de alfa directo del generador neuronal (sin collages ni recortes)
+            frame_clean = clean_pixel_art_alpha(clipped, alpha_threshold=alpha_threshold)
 
             # Remapeo estricto a Paleta del Personaje (Técnica 3: Cero colores inventados)
             if char_palette is not None and len(char_palette) > 0:
-                frame_clean = remap_image_to_palette(frame_clean, char_palette)
+                frame_clean = remap_image_to_palette(frame_clean, char_palette, tolerance=999.0)
 
             # Despeckle Cromático y Limpieza de Hollín (Técnica 8)
             frame_clean = despeckle_chromatic_noise(frame_clean)

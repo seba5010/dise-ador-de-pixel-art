@@ -29,7 +29,12 @@ from pixel_ai_engine.config import (
     DEVICE,
     USE_AMP
 )
-from pixel_ai_engine.models import PixelArtUNetGenerator, PixelArtPatchDiscriminator
+from pixel_ai_engine.models import (
+    PixelArtUNetGenerator,
+    PixelArtPatchDiscriminator,
+    LaplacianPyramidLoss,
+    PaletteHistogramLoss,
+)
 from pixel_ai_engine.dataset import place_in_cell
 from pixel_ai_engine.enhancer import PixelArtEnhancer
 from pixel_ai_engine.phase3_critical_enhancer import Phase3CriticalReviewer
@@ -2286,6 +2291,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     if HAS_KORNIA:
         print("[OK] Perdida de bordes Kornia Sobel acelerada en GPU activa")
     criterion_bce = nn.BCEWithLogitsLoss()
+    criterion_laplacian_pyramid = LaplacianPyramidLoss(num_levels=3, high_freq_weight=15.0).to(DEVICE)
+    criterion_palette_hist = PaletteHistogramLoss(num_subregions=4).to(DEVICE)
 
     scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(opt_g, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
     scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(opt_d, T_max=max(1, total_target_epochs - start_epoch + 1), eta_min=1e-6)
@@ -2411,7 +2418,11 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 ).sum(dim=(1, 2, 3)) / ((1.0 - allowed_envelope).sum(dim=(1, 2, 3)) + 1e-6)
                 boundary_loss = stray_silhouette_loss.mean() * 2.0
 
-                total_g = l1_color + l1_alpha + edge_loss + adv_loss + silhouette_loss + boundary_loss
+                # Técnicas 3 y 11: Restricción de Histograma de Color y Pirámide Laplaciana de Alta Frecuencia
+                pyr_loss = criterion_laplacian_pyramid(preds[:, :3], targets_aug[:, :3]) * 0.05
+                hist_loss = criterion_palette_hist(preds[:, :3], targets_aug[:, :3]) * 0.10
+
+                total_g = l1_color + l1_alpha + edge_loss + adv_loss + silhouette_loss + boundary_loss + pyr_loss + hist_loss
 
             # 1. Comprobacion estricta de finitud de componentes ANTES de backward y acumulacion
             g_components = [
@@ -2421,6 +2432,8 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 ("adv_loss", adv_loss.item()),
                 ("silhouette_loss", silhouette_loss.item()),
                 ("boundary_loss", boundary_loss.item()),
+                ("pyr_loss", pyr_loss.item()),
+                ("hist_loss", hist_loss.item()),
                 ("total_g", total_g.item())
             ]
             for c_name, c_val in g_components:

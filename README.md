@@ -18,33 +18,50 @@ A partir de una ilustración frontal y un molde de pose, el sistema genera frame
 
 Los formatos principales son **8×12 (96 frames)** y **16×4 (64 frames)**.
 
-## Arquitectura actual
+## Arquitectura actual y Pipeline de Alta Fidelidad (Motor A)
 
-El motor recomendado es `PixelArtUNetGenerator`, una U-Net supervisada de seis canales:
+El sistema utiliza **Motor A** (aprendizaje supervisado píxel a píxel en PyTorch) potenciado con una suite de **técnicas neuronales y matemáticas de alta fidelidad** diseñadas para superar el "techo del 30%" de calidad visual (borrosidad por regresión a la media en detalles de 1 píxel como ojos, pupilas, lentes y texturas).
+
+> [!IMPORTANT]
+> **Decisión de Diseño Crítica: Descarte de Collage / Recorte y Pegado.**
+> Tras pruebas experimentales, el recorte y pegado manual de cabezas/rostros fue **descartado de forma definitiva**. Generaba un efecto de "muñeco de papel recortado / sticker flotante" visualmente inaceptable y sin integración anatómica. Toda la síntesis es **100% neuronal y matemática de extremo a extremo**.
 
 ```text
-Frontal del personaje (RGB)
-            +
-Molde de la pose (RGB)
-            |
-            v
-Generador U-Net (entrada 6 canales, salida RGBA)
-            |
-            v
-Remapeo de paleta + limpieza de píxeles huérfanos
-            |
-            v
-Frame final 128×128 con transparencia
+Frontal (RGB) + Pose (RGB) + Mapas Semánticos (5 canales)
+                     |
+                     v
+       Preprocesamiento de Saliencia (Laplaciano)
+                     |
+                     v
+   Generador U-Net con Flujo de Apariencia (Appearance Flow)
+                     |
+                     v
+      Cuantización Vectorial (Discrete Pixel Codebook)
+                     |
+                     v
+    Supervisión Multi-Escala + Laplaciana + Discriminador Local Facial
+                     |
+                     v
+   Post-Proceso Morfológico: Snapping a Paleta + Pixel Art Fixer (1-px contour)
+                     |
+                     v
+            Frame Final 128×128 (Nítido, Estricto en Grilla)
 ```
 
-El entrenamiento combina:
+### Las Técnicas Neuronales y Matemáticas Integradas
 
-- pérdida de color `Smooth L1`;
-- pérdida de alfa;
-- pérdida de bordes Sobel con Kornia;
-- componente adversarial de peso reducido;
-- `AdamW8bit` cuando `bitsandbytes` está disponible;
-- AMP y protección contra valores no finitos.
+1. **LocalFaceDiscriminator (`pixel_ai_engine/models.py`)**: Sub-discriminador PatchGAN quirúrgico enfocado en el bounding box de la cabeza (32×32 / 64×64). Fuerza al generador a plasmar lentes, cejas y pupilas nítidas sin difuminarlas.
+2. **AppearanceFlowModule (`pixel_ai_engine/models.py`)**: Módulo de flujo de deformación densa 2D (`grid_sample`). Mapea y transfiere texturas directas de la ropa y rostro original en vez de recrear píxeles desde cero.
+3. **PaletteHistogramLoss (`pixel_ai_engine/models.py`)**: Penalización diferenciable en el espacio de color. Obliga a que la distribución cromática del frame pertenezca exactamente a la paleta canónica del personaje, prohibiendo colores inventados o degradados fangosos.
+4. **DiscretePixelCodebook (`pixel_ai_engine/models.py`)**: Cuantizador de vectores discretos estilo VQ-VAE con estimador straight-through (STE). Restringe las características latentes del generador a valores discretos propios del pixel art.
+5. **SingleCellCoordinator (`pixel_ai_engine/cell_pipeline.py`)**: Pipeline desacoplado que aísla la generación celda por celda (128×128) con acondicionamiento de pose unitario, eliminando el colapso de generar 96 celdas simultáneamente en un lienzo gigante.
+6. **Downscaling Fraccional Inteligente (`pixel_ai_engine/fractional_downscale.py`)**: Algoritmo de reducción sub-píxel guiado por silueta y contraste. Asegura que líneas de 1 píxel (como marcos de gafas) no se pierdan al reducir ilustraciones de alta resolución a sprite art.
+7. **MultiScaleDiscriminator + FeatureMatchingLoss (`pixel_ai_engine/models.py`)**: Arquitectura Pix2PixHD con discriminadores a escala completa (1x) y media resolución (0.5x). La pérdida de feature matching estabiliza los detalles finos.
+8. **PixelArtFixer (`pixel_ai_engine/pixel_art_fixer.py`)**: Módulo post-procesador morfológico. Ejecuta integer grid snapping, binarización estricta de canal alfa (sin halos semitransparentes), eliminación de píxeles huérfanos y reconstrucción de contorno exterior oscuro de 1 píxel.
+9. *(Nota: La técnica de collage/recorte manual de cabeza fue descartada).*
+10. **Semantic Molds / DensePose 2D (`pixel_ai_engine/semantic_molds.py`)**: Descomposición del molde de pose en 5 mapas de partes semánticas (Cabeza, Torso, Brazos, Piernas, Accesorios) para guiar la propagación del color y evitar que el color de la piel se filtre a la ropa.
+11. **LaplacianPyramidLoss (`pixel_ai_engine/models.py`)**: Pérdida de pirámide Laplaciana multinivel que descompone el frame en bandas de frecuencia espacial, ponderando con 15× las microfrecuencias para eliminar el desenfoque inducido por L1 regular.
+12. **Salience Pixelization Pre-processing (`pixel_ai_engine/salience_pixelization.py`)**: Algoritmo de realce de contraste de gradiente previo al generador para preservar micro-rasgos de alta saliencia.
 
 Stable Diffusion/Forge y el LoRA experimental permanecen como herramientas auxiliares o históricas. No son el motor recomendado para producir spritesheets rígidos: tienden a cambiar la escala, inventar colores, contaminar el fondo y no respetar con precisión la cuadrícula.
 
@@ -214,7 +231,14 @@ Los snapshots, rollback y `best_quality_generator.pt` protegen el trabajo, pero 
 |---|---|
 | `sprite_studio.py` | Servidor web y API local. |
 | `sprite_studio.html` | Interfaz de generación, entrenamiento y QC. |
-| `pixel_ai_engine/train_supervised.py` | Ciclo de entrenamiento y auditoría rotativa. |
+| `pixel_ai_engine/train_supervised.py` | Ciclo de entrenamiento con LaplacianPyramidLoss y PaletteHistogramLoss. |
+| `pixel_ai_engine/models.py` | Redes neuronales: U-Net, AppearanceFlow, Codebook, Face/MultiScale Discriminators. |
+| `pixel_ai_engine/fractional_downscale.py` | Downscaling fraccional sub-píxel guiado por contraste y silueta. |
+| `pixel_ai_engine/pixel_art_fixer.py` | Integer grid snapping, contorno exterior morfológico y limpieza binaria de alfa. |
+| `pixel_ai_engine/semantic_molds.py` | Particionado semántico DensePose 2D (cabeza, torso, extremidades, accesorios). |
+| `pixel_ai_engine/salience_pixelization.py` | Realce previo de gradiente espacial y saliencia visual. |
+| `pixel_ai_engine/cell_pipeline.py` | Coordinador desacoplado celda por celda (SingleCellCoordinator). |
+| `export_final_spritesheets.py` | Exportador final con remapeo cromático 100% estricto y PixelArtFixer. |
 | `pixel_ai_engine/quality_guidance.py` | Diagnóstico, tendencias e intervenciones. |
 | `pixel_ai_engine/quality_gate.py` | Evaluación visual por frame. |
 | `pixel_ai_engine/frame_quality_review.py` | Persistencia y estados de revisión. |

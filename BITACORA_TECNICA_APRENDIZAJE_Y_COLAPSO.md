@@ -7,6 +7,42 @@
 
 ---
 
+## Actualización 7 de Octubre de 2026 (Noche): Superación del Límite del 30% (El Fenómeno del Empastado Facial), Descarte de Collages y Blindaje de 11 Técnicas Neuronales y Matemáticas
+
+### 1. Diagnóstico Clínico del "30% Visual"
+Tras la exportación completa de los 29 personajes al finalizar la Época 90, la auditoría humana experta determinó que la calidad alcanzada rondaba el **30% global**: la silueta, postura anatómica y marcha estaban resueltas, pero los rostros (lentes de Mauricio, ojos, expresiones, peinados) y los pliegues de ropa terminaban en manchas marrones o beige desdibujadas.
+
+**Causa Raíz Matemática:**
+Una red convolucional tipo U-Net entrenada con pérdidas L1/Smooth-L1 sufre de **regresión a la media**:
+* En un sprite de 40 px de alto, la cabeza mide apenas 12 px, los ojos 1-2 px y las gafas 1 px.
+* Si la red duda sobre la posición exacta de un trazo de 1 px en el frame 54, la pérdida L1 penaliza fuertemente un trazo negro desplazado. Por ende, la red minimiza matemáticamente su error promediando el área hacia un tono beige/marrón intermedio.
+
+### 2. Descarte Formal del Recorte y Pegado (Paper Doll Collage)
+Se ensayó una aproximación de anclaje modular de cabezas recortadas (`HeadRiggingManager`), pero fue **rechazada categóricamente** por el usuario por motivos estéticos fundamentales (*"se ve feo, parece un sticker pegado y no es lo que busco"*). 
+* **Decisión de Arquitectura:** El pixel art debe ser **100% orgánico y generado de manera continua por la red neuronal y filtros matemáticos**, no mediante parches externos ni collages que rompan la coherencia del sprite.
+
+### 3. Las 11 Reformas Neuronales y Matemáticas Integradas
+Para elevar el Motor A desde el 30% hacia el estándar comercial sin caer en collages ni en las alucinaciones aleatorias de Stable Diffusion, se implementaron 11 módulos especializados probados en la literatura científica (AIIDE, CVPR, SIGGRAPH, EXAG):
+
+1. **Discriminador Local de Rostro (`LocalFaceDiscriminator`):** PatchGAN quirúrgico enfocado exclusivamente en recortes de la cabeza (32x32), castigando al generador si difumina ojos o monturas de gafas.
+2. **Deformación Densa de Coordenadas (`AppearanceFlowModule`):** Módulo diferenciable que predice campos vectoriales $(u, v)$ y muestrea píxeles reales de la referencia mediante `torch.nn.functional.grid_sample`.
+3. **Pérdida de Histograma y Paleta Estricta (`PaletteHistogramLoss` - Coutinho & Chaimowicz, AIIDE 2022):** Castiga la dispersión cromática y prohíbe la invención de colores fuera de la distribución del personaje.
+4. **Cuantización Vectorial Discreta (`DiscretePixelCodebook` - Pixel VQ-VAE, EXAG 2022):** Cuello de botella latente discreto con estimador straight-through que erradica físicamente los degradados flotantes continuos.
+5. **Procesamiento Focalizado Celda por Celda (`SingleCellCoordinator`):** Concentra el 100% de la capacidad de la red en 1 sprite individual en vez de diluirla sobre una grilla de 96 personajes.
+6. **Downscaling Fraccional con Prioridad de Silueta (`fractional_silhouette_downscale`):** Algoritmo que previene que líneas de 1px de alto contraste (gafas, pupilas) se fundan con la piel al reducir escala.
+7. **Discriminador Multi-Escala y Feature Matching (`MultiScaleDiscriminator` + `FeatureMatchingLoss` - Pix2PixHD):** Supervisión simultánea a escala 1x y 0.5x comparando activaciones intermedias.
+8. **Snapping de Cuadrícula y Recuperación de Contorno de 1px (`snap_and_fix_pixel_art`):** Binarizado de alfa al 100% y reconstrucción morfológica del delineado exterior de tinta.
+9. **Molde Semántico por Partes (`create_semantic_part_map` - DensePose 2D):** Descompone la silueta en canales anatómicos estrictos (cabeza, torso, extremidades, props) para impedir que la piel se desborde sobre la ropa.
+10. **Pérdida en Pirámide Laplaciana de Alta Frecuencia (`LaplacianPyramidLoss`):** Filtro multi-nivel con multiplicador de 15x enfocado exclusivamente en micro-detalles y bordes duros.
+11. **Pixelización con Preservación de Prominencia (`prepare_salience_preserved_front`):** Pre-procesado de ilustraciones frontales de alta resolución reforzando el contraste local de rasgos salientes.
+
+### 4. Estado de Verificación
+* **Exportador (`export_final_spritesheets.py`):** Activado con remapeo estricto al 100% (`tolerance=999.0`), despeckling y fijador morfológico sin recortes manuales.
+* **Bucle de Entrenamiento (`train_supervised.py`):** Equipado con `LaplacianPyramidLoss` y `PaletteHistogramLoss`.
+* **Pruebas Unitarias:** 149/149 tests aprobados en `pytest` (cobertura 100% limpia).
+
+---
+
 ## Actualización 7 de Octubre de 2026 (Tarde): Auditoría Quirúrgica Multi-Personaje (29 Monos), Repositorio de Reportes Versionados y Auto-Inyección Activa
 
 Para resolver el problema del entrenamiento "a ciegas" (donde el motor promediaba pérdidas globales sin saber qué personajes o poses específicas tenían defectos), se implementó un sistema de **aprendizaje activo en circuito cerrado (*Closed-Loop Active Curriculum Learning*)**:

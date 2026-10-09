@@ -1,11 +1,11 @@
 """
-Modular Paper Doll Head-Anchor Composition Module (Técnica 9)
-Inspirado en Universal LPC Sprite Sheet Generator y Top Down Sprite Maker (TDSM).
+Modular Paper Doll Head-Anchor Composition Module (Técnica 9 - DESCARTADA)
 
-Resuelve el problema de que una red convolucional promedia y difumina los rasgos
-faciales en 96 poses diferentes. Al separar el cuerpo animado de la cabeza canónica
-direccional, garantiza que los lentes, ojos, peinados y expresiones del personaje
-se mantengan 100% nítidos en todas las animaciones.
+ADVERTENCIA: Este módulo implementaba la técnica de recorte y pegado manual tipo collage / paper-doll.
+Fue DESCARTADA FORMALMENTE por directriz del usuario: "descartes el recortar y pegar la imagen
+para eso se ve feo y no es lo que busco". 
+El pipeline de generación y exportación opera de forma 100% orgánica, neuronal y matemática de
+extremo a extremo sin recurrir a recortes ni pegados artificiales.
 """
 
 from typing import Tuple, Optional, Dict, Any
@@ -82,11 +82,17 @@ class HeadRiggingManager:
         y1, x1 = coords.max(axis=0)
 
         char_h = y1 - y0 + 1
+        char_w = x1 - x0 + 1
         head_h = max(6, int(round(char_h * 0.32)))
+        cx = (x0 + x1) // 2
+        head_max_w_half = max(4, int(round(char_w * 0.28)))
 
-        # Sub-máscara de la cabeza
+        # Sub-máscara de la cabeza estricta en el tercio superior y zona central
+        # (evita que brazos o manos levantadas en celebración/cocina ensanchen la cabeza)
         head_mask = mask.copy()
         head_mask[y0 + head_h:, :] = False
+        is_central = np.abs(np.arange(mask.shape[1])[None, :] - cx) <= head_max_w_half
+        head_mask = head_mask & is_central
 
         head_coords = np.argwhere(head_mask)
         if len(head_coords) == 0:
@@ -97,8 +103,8 @@ class HeadRiggingManager:
         hw = hx1 - hx0 + 1
         hh = hy1 - hy0 + 1
 
-        neck_x = (hx0 + hx1) // 2
-        neck_y = hy1
+        neck_x = cx
+        neck_y = min(mask.shape[0] - 1, y0 + head_h)
 
         return (hx0, hy0, hw, hh, neck_x, neck_y)
 
