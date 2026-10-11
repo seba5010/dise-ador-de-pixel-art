@@ -1000,19 +1000,39 @@ def get_hardware_telemetry():
 def get_gpu_temperature():
     return get_hardware_telemetry()["gpu_temp"]
 
+def is_night_quiet_hours(start_hour: int = 2, end_hour: int = 6) -> bool:
+    """
+    Comprueba si la hora local actual se encuentra dentro de la ventana nocturna silenciosa (2:00 AM - 6:00 AM).
+    Permite descansar al usuario silenciando los ventiladores de la laptop sin detener el entrenamiento.
+    """
+    current_hour = time.localtime().tm_hour
+    if start_hour <= end_hour:
+        return start_hour <= current_hour < end_hour
+    else:
+        return current_hour >= start_hour or current_hour < end_hour
+
 def manage_adaptive_thermal_throttle(temp_gpu_limit: int = 84,
                                      temp_cpu_limit: int = 90,
                                      temp_gpu_cooldown: int = 74,
                                      temp_cpu_cooldown: int = 80):
     """
-    Termostato Inteligente Dual para Laptops (Protección Integral de GPU y CPU):
+    Termostato Inteligente Dual para Laptops (Protección Integral de GPU y CPU) con Modo Nocturno:
     - Monitorea simultáneamente la GPU (NVIDIA) y la CPU (WMI ACPI).
+    - Horario Nocturno Silencioso (02:00 - 06:00): limita a 72°C GPU / 78°C CPU para que los ventiladores
+      no rujan a altas revoluciones mientras el usuario duerme.
+    - Horario Diurno (06:00 en adelante): permite el rendimiento a máxima capacidad estándar (84°C/90°C).
     - Si la GPU >= limit o CPU >= limit: PAUSA el entrenamiento hasta que bajen a cooldown.
-    - Micro-pausa preventiva de 3s si GPU >= 80°C o CPU >= 85°C para disipar calor de heatpipes.
     - Pausa base de 0.5s en cada época para desestresar los VRMs.
     """
     if not torch.cuda.is_available():
         return None, None
+
+    # Adaptación dinámica por horario nocturno silencioso (02:00 - 06:00)
+    if is_night_quiet_hours(2, 6):
+        temp_gpu_limit = min(temp_gpu_limit, 72)
+        temp_cpu_limit = min(temp_cpu_limit, 78)
+        temp_gpu_cooldown = min(temp_gpu_cooldown, 65)
+        temp_cpu_cooldown = min(temp_cpu_cooldown, 70)
 
     hw = get_hardware_telemetry()
     g_temp = hw.get("gpu_temp")
@@ -2356,8 +2376,13 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         loss_multipliers = current_loss_plan.get("multipliers", LossMultiplierController.neutral())
 
         for batch_i, (fronts, f_indices, targets, char_ids) in enumerate(dataloader):
-            # Pequeño desahogo cooperativo para que el sistema operativo, VS Code y el navegador no se congelen
-            if batch_i % 10 == 0:
+            # Horario Nocturno Silencioso (02:00 a 06:00):
+            # Aplica micro-pausa de 25ms por lote para reducir el consumo continuo (duty cycle),
+            # enfriar la laptop pasivamente y mantener los ventiladores en velocidad silenciosa.
+            # Fuera de este horario (06:00 a 02:00): opera a máxima velocidad y capacidad sin pausa extra.
+            if is_night_quiet_hours(2, 6):
+                time.sleep(0.025)
+            elif batch_i % 10 == 0:
                 time.sleep(0.002)
 
             if PAUSE_FLAG_FILE.exists():
@@ -2731,6 +2756,11 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             best_loss=best_loss,
             generator=generator,
         )
+        published_status["night_quiet_mode"] = {
+            "active": is_night_quiet_hours(2, 6),
+            "window": "02:00 - 06:00",
+            "pacing_ms": 25 if is_night_quiet_hours(2, 6) else 0,
+        }
         write_status_file(STATUS_FILE, published_status)
         current_sampling_plan = next_sampling_plan
         current_loss_plan = next_loss_plan
