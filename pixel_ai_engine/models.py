@@ -770,6 +770,7 @@ class PaletteHistogramLoss(nn.Module):
     Inspirado en Coutinho & Chaimowicz (AIIDE 2022 - palette-and-histo-gan).
     Castiga suavemente cualquier dispersión cromática o color inventado que se desvíe
     de la distribución de color de la referencia canónica del personaje.
+    Optimizada para bajo consumo VRAM con aislamiento no_grad sobre la referencia.
     """
     def __init__(self, num_subregions: int = 4):
         super().__init__()
@@ -777,10 +778,10 @@ class PaletteHistogramLoss(nn.Module):
 
     def forward(self, pred_rgb: torch.Tensor, target_rgb: torch.Tensor) -> torch.Tensor:
         p = (pred_rgb + 1.0) * 0.5
-        t = (target_rgb + 1.0) * 0.5
-
+        with torch.no_grad():
+            t = (target_rgb + 1.0) * 0.5
+            t_sub = F.adaptive_avg_pool2d(t, (self.num_subregions, self.num_subregions))
         p_sub = F.adaptive_avg_pool2d(p, (self.num_subregions, self.num_subregions))
-        t_sub = F.adaptive_avg_pool2d(t, (self.num_subregions, self.num_subregions))
         hist_loss = F.l1_loss(p_sub, t_sub)
         return hist_loss
 
@@ -873,6 +874,9 @@ class LaplacianPyramidLoss(nn.Module):
     Descompone la imagen en múltiples sub-bandas de frecuencia espacial.
     Asigna un multiplicador de peso de 15x a la banda de frecuencia más alta
     (ojos, gafas, suelas y trazos de 1 píxel).
+    Optimizada para consumo mínimo de VRAM:
+      1. Convolución depthwise agrupada (groups=c) en único paso sin copias de tensores.
+      2. Filtrado de la imagen real bajo torch.no_grad() para no crear nodos en autograd.
     """
     def __init__(self, num_levels: int = 3, high_freq_weight: float = 15.0):
         super().__init__()
@@ -887,23 +891,26 @@ class LaplacianPyramidLoss(nn.Module):
         b, c, h, w = pred.shape
         p = pred
         t = target
-        total_loss = torch.tensor(0.0, device=pred.device)
+        total_loss = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
         weight = self.high_freq_weight
+
+        # Kernel depthwise emparejado a canales para ejecución GPU directa
+        k = self.kernel.repeat(c, 1, 1, 1).to(device=p.device, dtype=p.dtype)
 
         for lvl in range(self.num_levels):
             cur_h, cur_w = p.shape[2], p.shape[3]
-            p_flat = p.reshape(b * c, 1, cur_h, cur_w)
-            t_flat = t.reshape(b * c, 1, cur_h, cur_w)
 
-            p_lap = F.conv2d(p_flat, self.kernel, padding=1).reshape(b, c, cur_h, cur_w)
-            t_lap = F.conv2d(t_flat, self.kernel, padding=1).reshape(b, c, cur_h, cur_w)
+            p_lap = F.conv2d(p, k, padding=1, groups=c)
+            with torch.no_grad():
+                t_lap = F.conv2d(t, k, padding=1, groups=c)
 
             total_loss = total_loss + weight * F.l1_loss(p_lap, t_lap)
             weight *= 0.5
 
             if lvl < self.num_levels - 1 and min(cur_h, cur_w) >= 8:
                 p = F.avg_pool2d(p, 2)
-                t = F.avg_pool2d(t, 2)
+                with torch.no_grad():
+                    t = F.avg_pool2d(t, 2)
 
         return total_loss
 

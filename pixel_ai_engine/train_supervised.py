@@ -2863,6 +2863,10 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         # Termostato Inteligente Adaptativo en Tiempo Real (Protección Dual: GPU <= 84°C, CPU <= 90°C)
         manage_adaptive_thermal_throttle()
 
+        # Higiene de memoria VRAM GPU: purgar bloques residuales retenidos en caché cada época
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # Si se solicito pausa limpia durante los lotes de esta epoca, pausar ahora en frontera limpia
         if pause_requested:
             print(f"\n[PAUSA] Epoca {epoch} finalizada al 100%. Pausando entrenamiento en frontera limpia.", flush=True)
