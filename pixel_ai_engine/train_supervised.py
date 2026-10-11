@@ -81,6 +81,7 @@ from pixel_ai_engine.training_recovery import (
     record_session_checkpoint,
     retain_checkpoint_atomic,
     write_status_file,
+    atomic_torch_save,
 )
 
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -605,9 +606,7 @@ def _repair_best_checkpoint(source_checkpoint: Dict[str, Any], source_epoch: int
         "best_loss": float(source_loss),
         "recovered_from": source_checkpoint.get("recovery_origin", "automatic_recovery"),
     }
-    temporary_file = best_path.with_suffix(best_path.suffix + ".tmp")
-    torch.save(repaired_state, temporary_file)
-    os.replace(temporary_file, best_path)
+    atomic_torch_save(repaired_state, best_path)
     return backup_path
 
 
@@ -691,9 +690,7 @@ def _materialize_recovery_route(
 
     source_checkpoint["best_loss"] = source_loss
     source_checkpoint["recovery_origin"] = str(source_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
-    temporary_recovery = RECOVERY_CHECKPOINT_FILE.with_suffix(RECOVERY_CHECKPOINT_FILE.suffix + ".tmp")
-    torch.save(source_checkpoint, temporary_recovery)
-    os.replace(temporary_recovery, RECOVERY_CHECKPOINT_FILE)
+    atomic_torch_save(source_checkpoint, RECOVERY_CHECKPOINT_FILE)
 
     relative_recovery_file = RECOVERY_CHECKPOINT_FILE.relative_to(PROJECT_ROOT)
     repaired_status = activate_recovery_status(
@@ -1377,9 +1374,7 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
             "session_id": session_id,
             "session_epoch": session_epoch,
         }
-        temporary = file_path.with_suffix(file_path.suffix + ".tmp")
-        torch.save(state, temporary)
-        os.replace(temporary, file_path)
+        atomic_torch_save(state, file_path)
         return
     state = {
         "epoch": int(epoch),
@@ -1401,9 +1396,7 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "source_checkpoint": source_checkpoint,
         "qc_result": qc_result,
     }
-    temporary = file_path.with_suffix(file_path.suffix + ".tmp")
-    torch.save(state, temporary)
-    os.replace(temporary, file_path)
+    atomic_torch_save(state, file_path)
 
 
 def _maybe_save_quality_checkpoint(
@@ -1441,9 +1434,7 @@ def _maybe_save_quality_checkpoint(
             "quality_vector": dict(vector),
             "guidance_state": data.get("guidance_state", {}),
         }
-        temporary = destination.with_suffix(destination.suffix + ".tmp")
-        torch.save(state, temporary)
-        os.replace(temporary, destination)
+        atomic_torch_save(state, destination)
         data["best_quality_score"] = assessment["score"]
         checkpoint_info.update({"file": destination.name, "epoch": int(epoch)})
     elif isinstance(data.get("quality_checkpoint"), dict):
@@ -2775,7 +2766,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             snapshot_file = SNAPSHOTS_DIR / f"checkpoint_epoch_{epoch:03d}.pt"
             save_checkpoint(snapshot_file, epoch, avg_g, best_loss, generator, discriminator, opt_g, opt_d, scaler_g, scaler_d, scheduler_g, scheduler_d)
             gen_only_file = SNAPSHOTS_DIR / f"generator_epoch_{epoch:03d}.pt"
-            torch.save(generator.state_dict(), gen_only_file)
+            atomic_torch_save(generator.state_dict(), gen_only_file)
             print(f"[RESPAWN SNAPSHOT] Punto de restauracion guardado: Epoca {epoch:03d} (Loss: {avg_g:.4f}, Best: {best_loss:.4f})")
 
         # -------------------------------------------------------------

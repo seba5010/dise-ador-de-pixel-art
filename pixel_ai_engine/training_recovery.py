@@ -113,6 +113,39 @@ def retain_checkpoint_atomic(source: Path, destination: Path) -> None:
                 pass
 
 
+def atomic_torch_save(state: Any, destination: Path) -> None:
+    """Save PyTorch tensor/model checkpoint dictionary atomically with Windows-tolerant retry."""
+    import torch
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_file = _unique_temporary_path(destination)
+    try:
+        torch.save(state, temporary_file)
+        _replace_with_retry(temporary_file, destination, attempts=15)
+    except Exception as exc:
+        if temporary_file.exists():
+            # Fallback en Windows si os.replace falla temporalmente por antivirus
+            for _ in range(5):
+                time.sleep(0.05)
+                try:
+                    shutil.copy2(temporary_file, destination)
+                    temporary_file.unlink()
+                    return
+                except Exception:
+                    pass
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
+        raise exc
+    finally:
+        if temporary_file.exists():
+            try:
+                temporary_file.unlink()
+            except OSError:
+                pass
+
+
 def generate_session_id(prefix: str = "session_") -> str:
     """Generate a unique timestamped session ID."""
     return f"{prefix}{time.strftime('%Y%m%d_%H%M%S')}"
