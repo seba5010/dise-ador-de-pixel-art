@@ -99,7 +99,8 @@ El sistema puede:
 - reducir el learning rate;
 - volver al último checkpoint saludable;
 - pausar después de colapsos repetidos;
-- reanudar con optimizador, schedulers y estados RNG restaurados.
+- reanudar con optimizador, schedulers y estados RNG restaurados;
+- regular el ritmo térmico automáticamente mediante un programador horario nocturno (02:00 a 06:00) con micro-pausas para silenciar ventiladores de laptops y purgar memoria VRAM cada época.
 
 Las escrituras de estado y checkpoints son atómicas. En Windows se utilizan temporales únicos y reintentos para tolerar bloqueos breves de antivirus o lectores del archivo, evitando el antiguo `PermissionError` al reemplazar `training_status.json`.
 

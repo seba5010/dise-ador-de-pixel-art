@@ -7,6 +7,32 @@
 
 ---
 
+## Actualización 11 de Octubre de 2026: Optimización Térmica de Laptop (HP Victus), Gestión Eficiente de VRAM y Programador Horario Silencioso (Night Quiet Mode)
+
+### 1. Diagnóstico de Telemetría Térmica y VRAM en Portátiles (HP Victus 16-d0xxx)
+Durante el entrenamiento continuo de más de 200 épocas (más de 8 horas ininterrumpidas), se evaluó el comportamiento del hardware (Intel Core i5-11400H + NVIDIA RTX 3050 Ti Laptop GPU 4 GB):
+* **Telemetría VRAM Global:** El monitor de `nvidia-smi` reportaba 1.64 GB de VRAM debido a que en Windows WDDM la medición es global de la GPU, incluyendo aplicaciones de fondo concurrentes (`EpicGamesLauncher`, `SteelSeries Moments`, `ChatGPT Desktop`, `NVIDIA App`). El motor por sí solo opera en ~1.0 GB.
+* **Ruido Acústico y Disipación Térmica:** La VRAM como memoria física no genera calor significativo. Lo que disparaba los ventiladores al 100% (modo turbina) era el **ciclo de trabajo continuo (Duty Cycle al 100%)**:
+  1. La GPU consumía continuamente 59W de su límite de 60W TDP sin micro-respiros.
+  2. El procesador i5-11400H subía a 91°C debido a la agresividad de *Intel Turbo Boost* alimentando el DataLoader sin descanso.
+  3. Al compartir el procesador y la gráfica las mismas tuberías de cobre (*heatpipes*), el firmware de HP forzaba los ventiladores a máxima velocidad.
+
+### 2. Optimizaciones de Memoria en Pérdidas de Alta Fidelidad
+* **Convolución Depthwise Agrupada (`LaplacianPyramidLoss`):** Se reemplazó el `reshape(b*c, 1, h, w)` por una convolución con `groups=c` directa sobre los canales de la imagen. Esto corre en un único kernel CUDA optimizado sin clonar matrices en memoria.
+* **Aislamiento `torch.no_grad()` en Objetivos:** La imagen real de referencia se calcula bajo `torch.no_grad()`, impidiendo que PyTorch guarde ramas de autograd innecesarias para el target.
+* **Purga Periódica de Caché CUDA (`torch.cuda.empty_cache()`):** Al final de cada época se vacían los bloques de memoria retenidos por el asignador de PyTorch, evitando la fragmentación acumulativa tras cientos de épocas.
+
+### 3. Programador Horario Nocturno Silencioso (`is_night_quiet_hours`)
+Para conciliar el entrenamiento 24/7 con el descanso del usuario sin ruidos molestos de turbina:
+* **Ventana Nocturna (02:00 AM – 06:00 AM):**
+  * Se inyecta una micro-pausa de **25 milisegundos por lote**, bajando el consumo continuo de la GPU de 60W a ~35W y permitiendo enfriamiento pasivo.
+  * El termostato reduce preventivamente sus techos a **72°C GPU / 78°C CPU**, garantizando que los ventiladores permanezcan en velocidad inaudible/baja.
+* **Ventana Diurna (06:00 AM – 02:00 AM):**
+  * El motor apaga automáticamente las micro-pausas y restablece los techos térmicos a 84°C/90°C, operando a **Capacidad Máxima (100% FPS)** sin restricciones.
+* **Registro de Estado:** Se añadió el objeto `"night_quiet_mode"` a `training_status.json` para supervisión en tiempo real.
+
+---
+
 ## Actualización 7 de Octubre de 2026 (Noche): Superación del Límite del 30% (El Fenómeno del Empastado Facial), Descarte de Collages y Blindaje de 11 Técnicas Neuronales y Matemáticas
 
 ### 1. Diagnóstico Clínico del "30% Visual"
