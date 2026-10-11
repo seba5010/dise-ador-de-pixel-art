@@ -2255,7 +2255,27 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 try: pause_flag.unlink()
                 except Exception: pass
 
-            epochs = int(body.get("epochs", 50))
+            status_file = PROJECT_ROOT / "training_status.json"
+            cur = {}
+            if status_file.exists():
+                try:
+                    with open(status_file, "r", encoding="utf-8") as f:
+                        cur = json.load(f)
+                except Exception:
+                    cur = {}
+
+            from pixel_ai_engine.training_recovery import resolve_target_epochs
+            current_epoch = int(cur.get("epoch", 0))
+            req_epochs = int(body.get("epochs", 50))
+            sessions_dir = PROJECT_ROOT / "checkpoints" / "sessions"
+            effective_target_epochs = resolve_target_epochs(
+                requested_epochs=req_epochs,
+                start_epoch=current_epoch,
+                mode="resume",
+                status_data=cur,
+                sessions_dir=sessions_dir,
+            )
+            epochs = effective_target_epochs
             target_engine = "pytorch"  # Siempre PyTorch Supervisado
             batch_size = int(body.get("batch_size", 4))
             
@@ -2273,17 +2293,14 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 train_script = PROJECT_ROOT / "pixel_ai_engine" / "train_supervised.py"
                 msg_title = "Supervisado PyTorch UNet"
             
-            status_file = PROJECT_ROOT / "training_status.json"
-            if status_file.exists():
-                try:
-                    with open(status_file, "r", encoding="utf-8") as f:
-                        cur = json.load(f)
-                    recovery = cur.get("recovery", {})
-                    cur["status"] = "RECUPERANDO" if isinstance(recovery, dict) and recovery.get("active") else "REANUDANDO"
-                    cur["timestamp"] = time.strftime("%H:%M:%S")
-                    write_status_file(status_file, cur)
-                except Exception:
-                    pass
+            recovery = cur.get("recovery", {})
+            cur["status"] = "RECUPERANDO" if isinstance(recovery, dict) and recovery.get("active") else "REANUDANDO"
+            cur["total_epochs"] = effective_target_epochs
+            cur["timestamp"] = time.strftime("%H:%M:%S")
+            try:
+                write_status_file(status_file, cur)
+            except Exception:
+                pass
 
             LAST_START_TIME = time.time()
             train_env = os.environ.copy()
@@ -2292,7 +2309,7 @@ class SpriteStudioHandler(SimpleHTTPRequestHandler):
                 [python_exe, str(train_script), "--epochs", str(epochs), "--batch_size", str(batch_size), "--mode", "resume"],
                 train_env,
             )
-            self.send_json({"status": "resumed", "message": f"Entrenamiento de {msg_title} reanudado desde el checkpoint seguro disponible."})
+            self.send_json({"status": "resumed", "message": f"Entrenamiento de {msg_title} reanudado hacia la meta de {effective_target_epochs} épocas."})
             return
 
         elif parsed.path == "/api/train/stop":

@@ -1102,8 +1102,8 @@
                 </select>
               </div>
               <div style="display:flex; align-items:center; gap:6px;">
-                <label for="trainEpochsSelect" style="font-size:11px; color:var(--dim); font-weight:600; margin:0;">Épocas adicionales:</label>
-                <select id="trainEpochsSelect" style="background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:5px 8px; font-size:11px;">
+                <label for="trainEpochsSelect" style="font-size:11px; color:var(--dim); font-weight:600; margin:0;">Meta de Épocas:</label>
+                <select id="trainEpochsSelect" onchange="window.__userTouchedEpochs = true;" style="background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:5px 8px; font-size:11px;">
                   <option value="25">25 Épocas (~8 min)</option>
                   <option value="50" selected>50 Épocas (~15 min)</option>
                   <option value="100">100 Épocas (~30 min)</option>
@@ -4707,6 +4707,18 @@
       const ep = info.epoch || '--';
       const totEp = info.total_epochs || 50;
       chartTotalEpochs = totEp;
+      window.__serverTotalEpochs = totEp;
+
+      const epSelect = document.getElementById('trainEpochsSelect');
+      if (epSelect && document.activeElement !== epSelect && !window.__userTouchedEpochs) {
+        const strTot = String(totEp);
+        for (let i = 0; i < epSelect.options.length; i++) {
+          if (epSelect.options[i].value === strTot) {
+            epSelect.value = strTot;
+            break;
+          }
+        }
+      }
 
       // 1. Época & Barra de Progreso
       const numEp = typeof ep === 'number' ? ep : parseInt(ep, 10) || 0;
@@ -5112,10 +5124,11 @@
           setFeedback('⏸️ ' + data.message);
         } else if (action === 'resume') {
           setFeedback('⏳ Solicitando reanudación...');
+          const effectiveResumeEpochs = window.__userTouchedEpochs ? epochs : Math.max(epochs, window.__serverTotalEpochs || 0);
           const res = await fetch('/api/train/resume', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ epochs: epochs, engine: targetEngine })
+            body: JSON.stringify({ epochs: effectiveResumeEpochs, engine: targetEngine })
           });
           const data = await res.json();
           if (res.status === 409) {

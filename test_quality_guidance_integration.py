@@ -691,10 +691,13 @@ def test_cpu_smoke_training_completes_and_resumes_with_guidance(monkeypatch, tmp
 
     checkpoint_dir = tmp_path / "checkpoints"
     snapshots_dir = checkpoint_dir / "snapshots"
+    sessions_dir = checkpoint_dir / "sessions"
     checkpoint_dir.mkdir()
     snapshots_dir.mkdir()
+    sessions_dir.mkdir()
     monkeypatch.setattr(train_supervised, "CHECKPOINT_DIR", checkpoint_dir)
     monkeypatch.setattr(train_supervised, "SNAPSHOTS_DIR", snapshots_dir)
+    monkeypatch.setattr(train_supervised, "SESSIONS_DIR", sessions_dir)
     monkeypatch.setattr(train_supervised, "STATUS_FILE", tmp_path / "training_status.json")
     monkeypatch.setattr(train_supervised, "STOP_FLAG_FILE", tmp_path / "stop.flag")
     monkeypatch.setattr(train_supervised, "PAUSE_FLAG_FILE", tmp_path / "pause.flag")

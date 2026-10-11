@@ -13,6 +13,7 @@ from pixel_ai_engine.training_recovery import (
     init_session,
     load_session_manifest,
     record_session_checkpoint,
+    resolve_target_epochs,
     retain_checkpoint_atomic,
     write_status_file,
 )
@@ -416,6 +417,71 @@ def test_activate_recovery_status_resets_intervention_streak():
     assert intervention_state["rollback_count"] == 0
     assert intervention_state["consecutive_interventions"] == 0
     assert repaired["guidance_state"]["intervention_count"] == 0
+
+
+def test_resolve_target_epochs_start_mode():
+    target = resolve_target_epochs(1500, start_epoch=1, mode="start")
+    assert target == 1500
+
+    target_default = resolve_target_epochs(None, start_epoch=1, mode="start")
+    assert target_default == 150
+
+
+def test_resolve_target_epochs_preserves_session_goal_on_resume():
+    # User had goal 1500, but resumes with default 50 from epoch 211:
+    target = resolve_target_epochs(
+        requested_epochs=50,
+        start_epoch=211,
+        mode="resume",
+        status_data={"total_epochs": 1500},
+    )
+    assert target == 1500
+
+
+def test_resolve_target_epochs_explicit_higher_goal():
+    # User explicitly sets a new goal higher than current epoch:
+    target = resolve_target_epochs(
+        requested_epochs=2000,
+        start_epoch=211,
+        mode="resume",
+        status_data={"total_epochs": 1500},
+    )
+    assert target == 2000
+
+
+def test_resolve_target_epochs_recovers_goal_from_sessions_dir(tmp_path: Path):
+    sessions_dir = tmp_path / "sessions"
+    sdir = sessions_dir / "session_20261010_191711"
+    sdir.mkdir(parents=True)
+    manifest = {
+        "session_id": "session_20261010_191711",
+        "start_epoch": 1,
+        "target_epochs": 1500,
+    }
+    with open(sdir / "session.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f)
+
+    # Status data was damaged or truncated to 260 by the bug:
+    target = resolve_target_epochs(
+        requested_epochs=50,
+        start_epoch=211,
+        mode="resume",
+        status_data={"total_epochs": 260},
+        sessions_dir=sessions_dir,
+    )
+    assert target == 1500
+
+
+def test_resolve_target_epochs_extends_when_prior_goal_reached():
+    # When start_epoch has reached or exceeded prior goal, requested_epochs adds on:
+    target = resolve_target_epochs(
+        requested_epochs=50,
+        start_epoch=1501,
+        mode="resume",
+        status_data={"total_epochs": 1500},
+    )
+    assert target == 1550
+
 
 
 

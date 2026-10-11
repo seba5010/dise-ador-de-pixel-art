@@ -189,6 +189,57 @@ def save_session_manifest(session_dir: Path, data: Dict[str, Any]) -> None:
                 pass
 
 
+def resolve_target_epochs(
+    requested_epochs: Optional[int],
+    start_epoch: int,
+    mode: str = "resume",
+    status_data: Optional[Dict[str, Any]] = None,
+    checkpoint_data: Optional[Dict[str, Any]] = None,
+    sessions_dir: Optional[Path] = None,
+) -> int:
+    """
+    Determina la meta total de épocas (total_target_epochs), protegiendo
+    rigurosamente la meta original de la sesión (ej. 1500 épocas) ante
+    pausas, reinicios o reanudaciones.
+    """
+    req = int(requested_epochs) if (requested_epochs is not None and requested_epochs > 0) else None
+
+    if mode == "start":
+        return req if req is not None else 150
+
+    saved_target = None
+    if isinstance(status_data, dict):
+        st_val = status_data.get("total_epochs")
+        if isinstance(st_val, int) and st_val > start_epoch:
+            saved_target = st_val
+
+    if (saved_target is None or saved_target <= start_epoch) and isinstance(checkpoint_data, dict):
+        ckpt_val = checkpoint_data.get("total_target_epochs", checkpoint_data.get("total_epochs"))
+        if isinstance(ckpt_val, int) and ckpt_val > start_epoch:
+            saved_target = ckpt_val
+
+    if sessions_dir and Path(sessions_dir).exists():
+        try:
+            for sdir in sorted(Path(sessions_dir).iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if sdir.is_dir() and (sdir / "session.json").exists():
+                    with open(sdir / "session.json", "r", encoding="utf-8") as sf:
+                        sm = json.load(sf)
+                        st_cand = sm.get("target_epochs")
+                        if isinstance(st_cand, int) and st_cand > start_epoch:
+                            if saved_target is None or st_cand > saved_target:
+                                saved_target = st_cand
+        except Exception:
+            pass
+
+    if req is not None and req > start_epoch:
+        return max(req, saved_target) if saved_target else req
+    elif saved_target is not None and saved_target > start_epoch:
+        return saved_target
+    else:
+        add_ep = req if req is not None else 50
+        return (start_epoch - 1) + add_ep
+
+
 def init_session(
     session_dir: Path,
     session_id: str,
@@ -202,6 +253,9 @@ def init_session(
     session_dir.mkdir(parents=True, exist_ok=True)
     existing = load_session_manifest(session_dir)
     if existing and existing.get("session_id") == session_id:
+        if target_epochs is not None and target_epochs > int(existing.get("target_epochs", 0)):
+            existing["target_epochs"] = int(target_epochs)
+            save_session_manifest(session_dir, existing)
         return existing
     manifest = {
         "session_id": session_id,

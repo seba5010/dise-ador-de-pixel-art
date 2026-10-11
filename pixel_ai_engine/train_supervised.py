@@ -79,6 +79,7 @@ from pixel_ai_engine.training_recovery import (
     load_session_manifest,
     load_status_file,
     record_session_checkpoint,
+    resolve_target_epochs,
     retain_checkpoint_atomic,
     write_status_file,
     atomic_torch_save,
@@ -1355,7 +1356,8 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
                     sched_g: Any = None, sched_d: Any = None, is_best_model: bool = False,
                     guidance_state: Optional[Dict[str, Any]] = None,
                     session_id: Optional[str] = None, session_epoch: Optional[int] = None,
-                    source_checkpoint: Optional[str] = None, qc_result: Optional[Dict[str, Any]] = None):
+                    source_checkpoint: Optional[str] = None, qc_result: Optional[Dict[str, Any]] = None,
+                    total_target_epochs: Optional[int] = None):
     """Guarda un checkpoint completo con formato unificado y preservacion estricta de metricas y estados."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     f_loss = float(loss) if (loss is not None and math.isfinite(float(loss))) else None
@@ -1363,6 +1365,11 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
     if guidance_state is None:
         stored_state = load_status_file(STATUS_FILE).get("guidance_state")
         guidance_state = stored_state if isinstance(stored_state, dict) else {}
+    if total_target_epochs is None:
+        try:
+            total_target_epochs = load_status_file(STATUS_FILE).get("total_epochs")
+        except Exception:
+            pass
     if is_best_model or file_path.name == "best_generator.pt":
         # Modelo ligero de inferencia (< 65MB, compatible con limites de GitHub y warm-start)
         state = {
@@ -1373,6 +1380,8 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
             "guidance_state": guidance_state,
             "session_id": session_id,
             "session_epoch": session_epoch,
+            "total_target_epochs": int(total_target_epochs) if total_target_epochs else None,
+            "total_epochs": int(total_target_epochs) if total_target_epochs else None,
         }
         atomic_torch_save(state, file_path)
         return
@@ -1395,6 +1404,8 @@ def save_checkpoint(file_path: Path, epoch: int, loss: float, best_loss: float,
         "session_epoch": session_epoch,
         "source_checkpoint": source_checkpoint,
         "qc_result": qc_result,
+        "total_target_epochs": int(total_target_epochs) if total_target_epochs else None,
+        "total_epochs": int(total_target_epochs) if total_target_epochs else None,
     }
     atomic_torch_save(state, file_path)
 
@@ -2111,6 +2122,15 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     # -------------------------------------------------------------
     # GESTION AISLADA DE SESION (Checkpoints por carpeta de sesion)
     # -------------------------------------------------------------
+    total_target_epochs = resolve_target_epochs(
+        requested_epochs=epochs,
+        start_epoch=start_epoch,
+        mode=mode,
+        status_data=status_at_start,
+        checkpoint_data=loaded_ckpt if isinstance(loaded_ckpt, dict) else None,
+        sessions_dir=CHECKPOINT_DIR / "sessions",
+    )
+
     current_session_id = None
     current_session_dir = None
     session_start_epoch = start_epoch
@@ -2127,13 +2147,15 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             current_session_dir,
             current_session_id,
             start_epoch=1,
-            target_epochs=epochs,
+            target_epochs=total_target_epochs,
             mode="start",
             source_checkpoint=warm_ckpt_str,
         )
-        print(f"[SESIÓN] Nueva sesión iniciada: {current_session_id} en {current_session_dir.name}")
+        print(f"[SESIÓN] Nueva sesión iniciada: {current_session_id} en {current_session_dir.name} (Meta: {total_target_epochs} épocas)")
     elif mode == "resume":
         prev_session_id = status_at_start.get("session_id")
+        if not prev_session_id and isinstance(loaded_ckpt, dict):
+            prev_session_id = loaded_ckpt.get("session_id")
         if (
             prev_session_id
             and get_session_dir(prev_session_id, CHECKPOINT_DIR).exists()
@@ -2142,7 +2164,14 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
         ):
             current_session_id = prev_session_id
             current_session_dir = get_session_dir(current_session_id, CHECKPOINT_DIR)
-            session_start_epoch = int(status_at_start.get("session_start_epoch", start_epoch))
+            session_start_epoch = int(status_at_start.get("session_start_epoch") or start_epoch)
+            init_session(
+                current_session_dir,
+                current_session_id,
+                start_epoch=session_start_epoch,
+                target_epochs=total_target_epochs,
+                mode="resume",
+            )
         else:
             current_session_id = generate_session_id()
             current_session_dir = get_session_dir(current_session_id, CHECKPOINT_DIR)
@@ -2159,11 +2188,11 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
                 current_session_dir,
                 current_session_id,
                 start_epoch=start_epoch,
-                target_epochs=epochs,
+                target_epochs=total_target_epochs,
                 mode="resume",
                 source_checkpoint=source_ckpt_str,
             )
-        print(f"[SESIÓN] Sesión activa: {current_session_id} (Época inicial: {start_epoch})")
+        print(f"[SESIÓN] Sesión activa: {current_session_id} (Época inicial: {start_epoch} | Meta: {total_target_epochs} épocas)")
 
     # Old checkpoints remain valid. If a modern checkpoint carries observational
     # history and the status file does not, restore only that metadata.
@@ -2215,7 +2244,6 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     if best_loss is None or not math.isfinite(best_loss) or best_loss <= 0.0:
         best_loss = 999.0
 
-    total_target_epochs = (start_epoch - 1) + epochs if mode == "resume" and respawn_epoch is None else (start_epoch - 1 + epochs if respawn_epoch else epochs)
     effective_lr = float(lr)
     if automatic_recovery:
         effective_lr = min(effective_lr, float(automatic_recovery.get("preferred_lr") or effective_lr))
@@ -2335,9 +2363,19 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
     skipped_amp_g = 0
     skipped_amp_d = 0
     pause_requested = False
-    last_completed_epoch = start_epoch - 1
-
-    for epoch in range(start_epoch, total_target_epochs + 1):
+    epoch = start_epoch
+    while epoch <= total_target_epochs:
+        # Sincronización dinámica de meta de épocas desde STATUS_FILE en cada frontera de época
+        try:
+            if STATUS_FILE.exists():
+                with open(STATUS_FILE, "r", encoding="utf-8") as sf:
+                    live_status = json.load(sf)
+                    live_target = live_status.get("total_epochs")
+                    if isinstance(live_target, int) and live_target > total_target_epochs:
+                        print(f"[META] Meta de entrenamiento ampliada dinámicamente: {total_target_epochs} -> {live_target} épocas.")
+                        total_target_epochs = live_target
+        except Exception:
+            pass
         epoch_start_time = time.time()
         previous_epoch_metrics = (avg_g, avg_d, avg_l1, avg_edge)
         current_lr = float(opt_g.param_groups[0].get("lr", effective_lr))
@@ -2897,6 +2935,9 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
             update_status(epoch, total_target_epochs, "PAUSADO", avg_g, avg_d, avg_l1, avg_edge, start_time, current_lr, skipped_amp=skipped_amp_g + skipped_amp_d, epoch_duration=epoch_duration, reevaluate_guidance=False)
             return
 
+        last_completed_epoch = epoch
+        epoch += 1
+
     if math.isfinite(avg_g) and math.isfinite(avg_d) and avg_g > 0.0:
         if PAUSE_FLAG_FILE.exists():
             try: PAUSE_FLAG_FILE.unlink()
@@ -2938,7 +2979,7 @@ def train_supervised_model(epochs: int = 150, batch_size: int = 4, lr: float = 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--epochs", type=int, default=None, help="Meta total de épocas o épocas a entrenar")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1.5e-4)
     parser.add_argument("--mode", type=str, default="resume", choices=["start", "resume"])
